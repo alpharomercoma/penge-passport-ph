@@ -83,7 +83,7 @@ All times are Manila time; the server's clock is UTC.
 
 | What | When | Notes |
 |---|---|---|
-| Every office's dates, for one person | A scan starts at :02, :07, :12… (up to a minute later) and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker rests 10 minutes after a scan the site struggled with |
+| Every office's dates, for one person | A scan starts at :02, :07, :12… and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker rests 10 minutes after a scan the site struggled with |
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
@@ -95,7 +95,7 @@ All times are Manila time; the server's clock is UTC.
 | Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later |
 | Subscriber backup to R2 | Once a day, on the first scan after midnight | |
 | Valkey to disk | Continuously | Append-only file, flushed every second |
-| Logs | Rotated daily | Journal kept 14 days; the mail log keeps 3 old days plus today |
+| Logs | Rotated daily | Journal kept 14 days; the mail log and root's mailbox keep 3 old days plus today |
 | Canary | Every 6 hours, and on pushes that change either package | A few read-only requests through both packages, and a walk of the booking pages; opens an issue when the site changes |
 | Fuzzing | Mondays | |
 | Deploy | After CI passes on a push to `main` | Needs the `production` environment's secrets (below) |
@@ -201,8 +201,8 @@ the signature covers both List-Unsubscribe headers, which Gmail and Yahoo requir
 When a receiving server refuses an email while Postfix is delivering it (the usual case), the bounce lands
 in `/var/mail/root` (`less /var/mail/root`). Bounces a provider sends back later, by email, are lost: the
 subdomain receives no mail. Postfix gives up on a message after a day, since an older alert is useless.
-Postfix's delivery log (`/var/log/postfix/mail.log`) names recipients, so it is kept 3 days; bounces about
-two weeks.
+Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name recipients, so each is
+rotated daily and kept 3 days.
 
 Optional: add `rua=mailto:<an inbox you read>` to the DMARC record to receive daily reports; once a week of
 them looks clean, tighten the record to `p=quarantine`.
@@ -236,23 +236,34 @@ mail is switched on again.
 
 ## Where a subscriber's address goes
 
-What the email field on the site promises ("We encrypt your address before storing it, and use it only
-for these alerts. Unsubscribing deletes it."), checked on 27 September 2026:
+What the email field on the site promises ("Our database and backups keep your address encrypted, and we
+use it only for these alerts. Unsubscribing deletes it; the last copies, in backups and mail-server logs,
+are gone within 14 days."), checked on 27 September 2026:
 
-| Where | What is there | Encrypted |
-|---|---|---|
-| Browser to server | The form, over HTTPS (TLS 1.3); plain HTTP is redirected, and HSTS is set for a year | Yes |
-| Valkey | AES-256-GCM, a fresh nonce each time (`crypto.ts`); lookups use a keyed hash, never the address | Yes |
-| Daily backups in R2 | The records exactly as stored; copies older than 14 days are deleted | Yes |
-| API, checker and Caddy logs | No address: the code never logs one (a test checks), and Caddy keeps no access log | Nothing to encrypt |
-| Confirmation links | Random tokens, stored only as a hash | Nothing to encrypt |
-| Postfix, while sending | The message, with its recipient, waits in the queue until delivered (at most a day) | **No** (root and postfix only) |
-| Postfix's delivery log | One line per delivery, with the recipient, kept about 4 days (`/var/log/postfix/mail.log`, root only) | **No** |
-| Server to the recipient's mail server | TLS is used when offered (`smtp_tls_security_level = may`), without checking the certificate. Every delivery so far used TLS 1.3 | Usually |
-| The recipient's inbox | The email itself, as with any email | Their provider's |
+| Where | What is there | Encrypted | Gone after unsubscribing |
+|---|---|---|---|
+| Browser to server | The form, over HTTPS: TLS 1.2 or 1.3 (Caddy's default; 1.3 when we checked); plain HTTP is redirected, and HSTS is set for a year | Yes | Not stored |
+| Valkey | AES-256-GCM, a fresh nonce each time (`crypto.ts`); lookups use a keyed hash, never the address | Yes | At once |
+| Unconfirmed sign-ups | The same encrypted record, waiting for its link to be clicked | Yes | At once (unsubscribing cancels them); otherwise after 48 hours |
+| Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day's scan deletes every copy older than that |
+| API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
+| Confirmation and unsubscribe links | Random tokens, stored only as a hash | Nothing to encrypt | Not an address |
+| Postfix, while sending | The message, with its recipient, waits in the queue until delivered (at most a day; root and postfix only) | **No** | Within a day |
+| Postfix's delivery log | One line per delivery, with the recipient (`/var/log/postfix/mail.log`, root only, rotated daily, 3 kept) | **No** | Within 4 days |
+| Root's mailbox | Bounces: the refused message and its recipient (`/var/mail/root`, 0600, rotated daily, 3 kept) | **No** | Within 4 days |
+| Server to the recipient's mail server | TLS when offered (`smtp_tls_security_level = may`), without checking the certificate. All 5 deliveries so far used TLS 1.3 | Usually | Not stored |
+| The recipient's inbox | The email itself, as with any email | Their provider's | Theirs to delete |
 
 The key that decrypts the addresses is in `/etc/penge/server.env` on the same server, so encryption
 protects copies of the database and its backups, not a server that is itself compromised.
+
+The journal (kept 14 days) holds two recipient lines from the first test sends on 26 September, before
+Postfix had its own log; they age out by 10 October.
+
+**Visitors' network addresses.** No access log is kept. The API counts requests per address to limit
+them, under a keyed hash of the address (never the address itself), and the counters expire after about
+two hours. Caddy's error log (in the journal, 14 days) does record the visitor's address when a request
+fails, for example a dropped HTTP/3 connection.
 
 ## Keys and backups
 

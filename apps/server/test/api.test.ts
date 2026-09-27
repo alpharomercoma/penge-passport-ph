@@ -190,6 +190,15 @@ describe('abuse limits', () => {
     expect((await post('/api/subscribe', { email: 'p10@b.co', siteIds: [10] })).status).toBe(202);
   });
 
+  it('keeps its per-address counters without storing any IP address', async () => {
+    const { kv, post, setIp } = await setup();
+    setIp('198.51.100.77');
+    await post('/api/subscribe', { email: 'ana@b.co', siteIds: [10] });
+    const rateKeys = kv.keys().filter((k) => k.startsWith('pp:rate:'));
+    expect(rateKeys.length).toBeGreaterThan(0);
+    expect(kv.dump()).not.toContain('198.51.100.77');
+  });
+
   it('sends at most 3 confirmations a day to one address, without saying so', async () => {
     const { mailer, post, setIp } = await setup();
     for (let i = 0; i < 5; i++) {

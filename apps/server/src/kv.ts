@@ -9,7 +9,8 @@ export type WriteOp =
   | { op: 'hSet'; key: string; fields: Record<string, string> }
   | { op: 'sAdd'; key: string; members: string[] }
   | { op: 'sRem'; key: string; members: string[] }
-  | { op: 'rPush'; key: string; values: string[] };
+  | { op: 'rPush'; key: string; values: string[] }
+  | { op: 'expire'; key: string; ttlSeconds: number };
 
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -80,6 +81,9 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
             break;
           case 'rPush':
             if (op.values.length) multi.rPush(op.key, op.values);
+            break;
+          case 'expire':
+            multi.expire(op.key, op.ttlSeconds);
             break;
         }
       }
@@ -217,6 +221,11 @@ export class MemoryKv implements Kv {
           const list = this.typed(op.key, () => [] as string[], Array.isArray);
           list.push(...op.values);
           this.tidy(op.key);
+          break;
+        }
+        case 'expire': {
+          const entry = this.entry(op.key);
+          if (entry) entry.expiresAt = this.now() + op.ttlSeconds * 1000;
           break;
         }
       }

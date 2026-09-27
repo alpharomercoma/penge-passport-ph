@@ -8,7 +8,9 @@ describe('what the server asks of passport.gov.ph', () => {
   it('fits every scan the timer starts into the scans\' own budget', () => {
     const timer = readFileSync(new URL('../../../deploy/systemd/penge-check.timer', import.meta.url), 'utf8');
     const every = Number(/^OnCalendar=\*:\d+\/(\d+)$/m.exec(timer)?.[1]);
-    expect(60 / every).toBe(SCANS_PER_HOUR);
+    // A random delay would let two starts come closer than `every`, and one more fit in an hour.
+    const jitter = Number(/^RandomizedDelaySec=(\d+)/m.exec(timer)?.[1] ?? 0);
+    expect(60 / every + (jitter > 0 ? 1 : 0)).toBe(SCANS_PER_HOUR);
     // 43 offices, a session and the office list, the retries, and the group checks.
     const worstScan = 45 + RETRY_CAP + GROUP_QUERY_CAP;
     expect(SCANS_PER_HOUR * worstScan).toBeLessThanOrEqual(SCAN_REQUESTS_PER_HOUR);

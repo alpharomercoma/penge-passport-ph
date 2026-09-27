@@ -69,7 +69,8 @@ Every request goes through a `HostGate`, one per host:
    fail with `RateLimitError` and a `retryAfterMs`.
 4. **Backing off.** A failure (any non-2xx, an unreadable body, a timeout, a network error, a rejected
    session) pauses the gate for 5 s, doubling to 10 minutes, or for the server's `Retry-After` if longer
-   (up to an hour). Five failures in a row open the circuit for 15 minutes (`CircuitOpenError`).
+   (up to an hour). Five failures in a row, or one `Retry-After` longer than an hour, open the circuit
+   (`CircuitOpenError`) for 15 minutes, or for the `Retry-After` if longer, up to an hour.
 5. **Bounded.** A call that has waited `maxWaitMs` in the queue is refused instead of sent late.
 
 The gate's state lives in `~/.local/state/penge-passport-ph/<host>.json` (see

@@ -43,7 +43,12 @@ export async function createPending(kv: Kv, keys: Keys, request: SubscribeReques
     applicants: request.applicants,
     requestedAt: new Date(now).toISOString(),
   };
-  await kv.set(K.pending(hashToken(token)), JSON.stringify(pending), { ttlSeconds: PENDING_TTL_SECONDS });
+  const hash = hashToken(token);
+  await kv.write([
+    { op: 'set', key: K.pending(hash), value: JSON.stringify(pending), ttlSeconds: PENDING_TTL_SECONDS },
+    { op: 'sAdd', key: K.pendingFor(pending.index), members: [hash] },
+    { op: 'expire', key: K.pendingFor(pending.index), ttlSeconds: PENDING_TTL_SECONDS },
+  ]);
   return token;
 }
 
@@ -82,8 +87,12 @@ export async function confirm(kv: Kv, token: string, now: number): Promise<Confi
   return withAddressLock(kv, (JSON.parse(peek) as Pending).index, async () => {
     const raw = await kv.get(key);
     if (!raw) return { status: 'invalid' };
-    const result = await upsert(kv, JSON.parse(raw) as Pending, now);
-    await kv.write([{ op: 'del', key }]);
+    const pending = JSON.parse(raw) as Pending;
+    const result = await upsert(kv, pending, now);
+    await kv.write([
+      { op: 'del', key },
+      { op: 'sRem', key: K.pendingFor(pending.index), members: [key.slice(K.pending('').length)] },
+    ]);
     return result;
   });
 }
@@ -128,11 +137,15 @@ export async function unsubscribe(kv: Kv, keys: Keys, token: string): Promise<bo
   return withAddressLock(kv, found.index, async () => {
     const subscriber = await load(kv, id);
     if (!subscriber) return false;
+    // Confirmation links not yet used would bring the subscription back: they go too.
+    const waiting = await kv.sMembers(K.pendingFor(subscriber.index));
     await kv.write([
-    ...subscriber.siteIds.map((siteId): WriteOp => ({ op: 'sRem', key: K.siteSubscribers(siteId), members: [id] })),
+      ...subscriber.siteIds.map((siteId): WriteOp => ({ op: 'sRem', key: K.siteSubscribers(siteId), members: [id] })),
       { op: 'del', key: K.subscriber(id) },
       { op: 'del', key: K.emailIndex(subscriber.index) },
       { op: 'sRem', key: K.allSubscribers, members: [id] },
+      ...waiting.map((hash): WriteOp => ({ op: 'del', key: K.pending(hash) })),
+      { op: 'del', key: K.pendingFor(subscriber.index) },
     ]);
     return true;
   });

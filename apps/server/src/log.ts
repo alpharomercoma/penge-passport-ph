@@ -8,11 +8,21 @@ export interface Logger {
   error(msg: string, fields?: Fields): void;
 }
 
-function write(level: string, msg: string, fields: Fields = {}) {
+/**
+ * Anything shaped like an email address, wherever it is: an error from the
+ * mail server can quote the recipient, whatever the caller passed.
+ */
+const ADDRESS = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+
+export function line(level: string, msg: string, fields: Fields = {}): string {
   const extra = Object.fromEntries(
     Object.entries(fields).map(([k, v]) => [k, v instanceof Error ? `${v.name}: ${v.message}` : v]),
   );
-  process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), level, msg, ...extra })}\n`);
+  return JSON.stringify({ t: new Date().toISOString(), level, msg, ...extra }).replace(ADDRESS, '<address>');
+}
+
+function write(level: string, msg: string, fields: Fields = {}) {
+  process.stdout.write(`${line(level, msg, fields)}\n`);
 }
 
 export const log: Logger = {

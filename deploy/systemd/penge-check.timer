@@ -7,7 +7,8 @@ Description=Run the PengePassportPH checker every 5 minutes
 # this line). A scan still running when the next is due makes systemd skip it,
 # and after a scan the site struggled with the checker rests (COOLDOWN_SECONDS).
 OnCalendar=*:02/5
-RandomizedDelaySec=60
+# No random delay: with one, two starts could come 4 minutes apart and an hour
+# could hold 13 scans instead of the 12 the budget allows for.
 AccuracySec=1s
 Persistent=false
 

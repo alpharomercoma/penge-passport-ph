@@ -18,8 +18,8 @@ export function Unsubscribe({ api }: { api: Api }) {
             <CheckIcon />
             <h1>You are unsubscribed</h1>
             <p>
-              Your address is deleted, and no more emails will come. Our encrypted daily backups drop it within 14
-              days.
+              Your address is deleted, and no more emails will come. The last copies, in our encrypted backups and
+              our mail server's logs, are gone within 14 days.
             </p>
             <p>
               <a className="btn btn-secondary" href={BASE}>

@@ -198,7 +198,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
                 placeholder="juan@example.com"
               />
               <p className="hint" id={`${id}-email-note`}>
-                We encrypt your address before storing it, and use it only for these alerts. Unsubscribing deletes it.
+                Our database and backups keep your address encrypted, and we use it only for these alerts. Unsubscribing deletes it; the last copies, in backups and mail-server logs, are gone within 14 days.
               </p>
               {errors.email && (
                 <p className="error" id={`${id}-email-error`}>

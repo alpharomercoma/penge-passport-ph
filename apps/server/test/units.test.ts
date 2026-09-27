@@ -14,7 +14,7 @@ import {
   verifyUnsubscribe,
 } from '../src/crypto.ts';
 import { hit } from '../src/limits.ts';
-import { silentLog } from '../src/log.ts';
+import { line, silentLog } from '../src/log.ts';
 import { wasRefused } from '../src/mailer.ts';
 import { r2Sink, scanKey } from '../src/r2.ts';
 import { assessHealth, newlyOpened, parseDates, type Scan } from '../src/snapshot.ts';
@@ -263,6 +263,23 @@ describe('R2 sink', () => {
     }
   });
 
+  it('lists every key under a prefix, page by page', async () => {
+    const spoolDir = await mkdtemp(join(tmpdir(), 'penge-spool-'));
+    const urls: string[] = [];
+    const fetch = (async (req: Request) => {
+      urls.push(req.url);
+      const second = new URL(req.url).searchParams.get('continuation-token') === 'next';
+      const body = second
+        ? '<ListBucketResult><Contents><Key>backups/b.json.gz</Key></Contents><IsTruncated>false</IsTruncated></ListBucketResult>'
+        : '<ListBucketResult><Contents><Key>backups/a.json.gz</Key></Contents><IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken></ListBucketResult>';
+      return new Response(body, { status: 200 });
+    }) as typeof globalThis.fetch;
+    const sink = r2Sink({ endpoint: 'https://acct.r2.example', bucket: 'b', accessKeyId: 'AK', secretAccessKey: 'SK', spoolDir, log: silentLog, fetch });
+    expect(await sink.listObjects!('backups/')).toEqual(['backups/a.json.gz', 'backups/b.json.gz']);
+    expect(new URL(urls[0]!).searchParams.get('prefix')).toBe('backups/');
+    expect(urls).toHaveLength(2);
+  });
+
   it('signs uploads, spools them when R2 is down, and catches up later', async () => {
     const spoolDir = await mkdtemp(join(tmpdir(), 'penge-spool-'));
     const puts: { url: string; auth: string | null; body: Buffer }[] = [];
@@ -335,5 +352,14 @@ describe('telling a refused email from one that may have gone out', () => {
     ['anything else', new Error('boom'), false],
   ])('%s', (_what, err, refused) => {
     expect(wasRefused(err)).toBe(refused);
+  });
+});
+
+describe('log lines', () => {
+  it('never carry an email address, even one quoted by the mail server', () => {
+    const smtp = Object.assign(new Error('Recipient command failed: 550 5.1.1 <ana.cruz+alerts@example.com.ph>: Recipient address rejected'), { code: 'EENVELOPE' });
+    const text = line('error', 'alert email refused', { err: smtp, nested: { to: 'juan@example.com' }, list: ['x@y.co'] });
+    expect(text).not.toMatch(/@/);
+    expect(JSON.parse(text)).toMatchObject({ level: 'error', msg: 'alert email refused', err: expect.stringContaining('<address>'), nested: { to: '<address>' } });
   });
 });

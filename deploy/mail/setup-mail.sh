@@ -101,8 +101,10 @@ cat >/etc/logrotate.d/penge-mail <<'ROTATE'
   copytruncate
 }
 /var/mail/root {
-  weekly
-  rotate 1
+  # /var/mail is group-writable (mail), which logrotate refuses without this.
+  su root mail
+  daily
+  rotate 3
   missingok
   notifempty
   copytruncate

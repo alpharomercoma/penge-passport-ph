@@ -4,6 +4,8 @@ const P = 'pp:';
 
 export const K = {
   pending: (tokenHash: string) => `${P}pending:${tokenHash}`,
+  /** The confirmation links still waiting for an address (token hashes), so unsubscribing can cancel them. */
+  pendingFor: (index: string) => `${P}pending-idx:${index}`,
   subscriber: (id: string) => `${P}sub:${id}`,
   emailIndex: (index: string) => `${P}idx:${index}`,
   /** Held while one address's subscription is being changed. */

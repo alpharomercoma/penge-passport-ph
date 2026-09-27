@@ -13,6 +13,7 @@ import {
   type SubscribeResponse,
   validateSubscribe,
 } from '@penge/contracts';
+import { createHmac } from 'node:crypto';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -87,7 +88,10 @@ export function createApi(deps: ApiDeps) {
   const fail = (c: Context, status: 400 | 403 | 404 | 413 | 415 | 429 | 500 | 503, error: string, fields?: ApiError['fields']) =>
     c.json<ApiError>(fields ? { error, fields } : { error }, status);
 
-  const limited = async (c: Context, limit: Limit) => !(await hit(kv, limit, ipOf(c), now()));
+  // Counters are kept per network address, under a keyed hash of it: Redis
+  // never holds a visitor's IP address.
+  const visitor = (c: Context) => createHmac('sha256', keys.index).update(`ip:${ipOf(c)}`).digest('base64url').slice(0, 22);
+  const limited = async (c: Context, limit: Limit) => !(await hit(kv, limit, visitor(c), now()));
 
   const TOO_MANY = 'Too many requests from your network. Try again in an hour.';
 

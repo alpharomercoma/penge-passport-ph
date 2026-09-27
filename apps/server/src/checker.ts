@@ -207,9 +207,9 @@ export const BACKUP_KEEP_DAYS = 14;
 const backupKey = (day: string) => `backups/subscribers/date=${day}/subscribers.json.gz`;
 
 /**
- * The day's copy of every subscriber (still encrypted) goes to R2, and copies
- * past BACKUP_KEEP_DAYS are deleted, a week of missed days included. A failure
- * retries on the next run.
+ * The day's copy of every subscriber (still encrypted) goes to R2, and every
+ * copy BACKUP_KEEP_DAYS old or older is deleted, however long the checker was
+ * away. A failure retries on the next run.
  */
 async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: string) {
   const { kv, log, sink } = deps;
@@ -222,9 +222,11 @@ async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: strin
     const backup = await exportSubscribers(kv, siteIds, now());
     await sink.putObject(backupKey(day), gzipSync(JSON.stringify(backup)), 'application/gzip');
     log.info('subscriber backup stored', { day, subscribers: backup.subscribers.length });
-    if (sink.deleteObject) {
-      for (let age = BACKUP_KEEP_DAYS; age < BACKUP_KEEP_DAYS + 7; age++) {
-        await sink.deleteObject(backupKey(manilaDay(now() - age * 86_400_000)));
+    if (sink.listObjects && sink.deleteObject) {
+      const oldest = manilaDay(now() - (BACKUP_KEEP_DAYS - 1) * 86_400_000); // the oldest day kept
+      for (const key of await sink.listObjects('backups/subscribers/')) {
+        const kept = /date=(\d{4}-\d{2}-\d{2})\//.exec(key)?.[1];
+        if (kept && kept < oldest) await sink.deleteObject(key);
       }
     }
   } catch (err) {

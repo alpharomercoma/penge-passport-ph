@@ -108,7 +108,8 @@ subclass `CircuitOpenError`. Invalid arguments raise `ValueError`.
 The limiter's state lives in `~/.local/state/penge-passport-ph/` (override with `state_dir` or
 `PENGE_PASSPORT_PH_STATE_DIR`), in the same file and format as the Node.js package, behind the same lock.
 Any non-2xx response, unreadable body, timeout or network error pauses the client, doubling up to
-10 minutes; it honours `Retry-After`, and after 5 failures in a row it rests for 15 minutes. If the state
+10 minutes; it honours `Retry-After` up to an hour. After 5 failures in a row, or one `Retry-After` longer
+than an hour, it rests for 15 minutes, or as long as `Retry-After` asks, up to an hour. If the state
 file can't be written, it issues a `StateSharingWarning` and limits the current process only.
 
 Please don't run it on many machines, don't use it to resell or broker appointments, and don't build

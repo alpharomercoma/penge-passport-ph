@@ -11,12 +11,17 @@ says so rather than guessing.
 - It never selects, holds, books or sells a time slot. It never touches reCAPTCHA, which guards only the
   step that holds a slot, and it logs in nowhere.
 - It is free: no fees, no ads, no donations.
-- Every request says who is asking. The User-Agent names the software, links to the project's live
-  website, and carries the operator's contact.
-- It stores no personal data from the DFA. The only personal data it holds is its own subscribers' email
-  addresses, which it encrypts, confirms by double opt-in, and deletes on unsubscribe (encrypted daily
-  backups drop them within 14 days). The runbook lists
-  [every place an address exists](../../deploy/README.md#where-a-subscribers-address-goes).
+- Every request says who is asking. The User-Agent names the software and links to the project's live
+  website, whose footer links to the source code. The library lets its user add a contact of their own;
+  this deployment adds only the site's address again, not an email address (see open item 3).
+- It stores no personal data from the DFA. The personal data it holds is its own:
+  - subscribers' email addresses, which it encrypts, confirms by double opt-in, and deletes on
+    unsubscribe. The last copies, in encrypted daily backups and the mail server's logs, are gone within
+    14 days. The runbook lists
+    [every place an address exists](../../deploy/README.md#where-a-subscribers-address-goes).
+  - visitors' network addresses, briefly. Rate-limit counters are kept under a keyed hash of the address,
+    never the address itself, and expire after about two hours. The web server keeps no access log, but
+    its error log (kept 14 days) records the address of a request that fails.
 
 ## What the DFA says
 
@@ -217,10 +222,10 @@ We don't assume its servers are old or weak. What the record shows:
 | Visitors' lookups | At most 1,000 requests in any rolling hour, on a separate rate limiter; each answer shared for 3 minutes |
 | Spacing | At least 3 seconds between requests on each limiter |
 | Worst case | 1,720 requests an hour if both budgets were ever used up (one every 2.1 s on average); scans alone are about 540 |
-| Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour; after 5 failures in a row, a 15-minute pause |
+| Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour. After 5 failures in a row, or a single `Retry-After` longer than an hour, the limiter stops for 15 minutes, or for as long as `Retry-After` asks, up to an hour |
 | When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 10 minutes; a scan still running when the next is due is skipped |
 | Hard ceiling | The library refuses more than 1,200 requests an hour on any one limiter |
-| Identity | User-Agent: `penge-passport-ph/<version> (+https://alphaexperimental.org/pengepassportph/; read-only availability checker; <contact>)` |
+| Identity | User-Agent: `penge-passport-ph/<version> (+https://alphaexperimental.org/pengepassportph/; read-only availability checker; https://alphaexperimental.org/pengepassportph)`. The last part is the library's optional `contact`, which this deployment sets to its own address |
 
 **Why these numbers.** On 27 September 2026 the maintainer moved from 15-minute scans and 300 requests an
 hour in total to the settings above.
@@ -237,8 +242,10 @@ hour in total to the settings above.
 - Never get past reCAPTCHA, a Cloudflare challenge, or any other barrier the DFA puts up.
 - Never hide who is asking.
 - If the DFA or APO asks us to slow down or stop, we do it at once, then talk.
-  - `systemctl disable --now penge-check.timer` stops the scans.
-  - `systemctl stop penge-api` stops visitors' lookups too, and the website with them.
+  - `systemctl disable --now penge-check.timer && systemctl stop penge-check.service` stops the scans,
+    including one already running (the timer alone would let it finish).
+  - `systemctl stop penge-api` stops visitors' lookups. The pages themselves stay up, served by Caddy,
+    but show no dates without the API.
 
 ## Open items
 
@@ -249,7 +256,7 @@ hour in total to the settings above.
 2. **Ask a lawyer** two questions: whether a free alert service is "assistance" under RA 11983 Section
    22(d)(3), and how RA 12254 Section 23 applies to reading public pages.
 3. **Consider sending a `From` header** with a monitored address, as RFC 9110 recommends. Today the
-   contact is in the User-Agent only.
+   User-Agent carries only the website's address, and the website offers no email contact.
 
 ## References
 

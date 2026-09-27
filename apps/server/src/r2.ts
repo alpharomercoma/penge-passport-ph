@@ -16,6 +16,8 @@ export interface SnapshotSink {
   putObject?(key: string, body: Uint8Array, contentType: string): Promise<void>;
   /** Remove an object; one that is not there counts as removed. */
   deleteObject?(key: string): Promise<void>;
+  /** Every key under a prefix. */
+  listObjects?(prefix: string): Promise<string[]>;
 }
 
 /** Spooled scans kept at most (~5.5 KB each, ~27 MB): about 17 days of scans every 5 minutes. */
@@ -70,6 +72,21 @@ export function r2Sink(options: R2Options): SnapshotSink {
   async function remove(key: string) {
     const res = await send(await aws.sign(urlOf(key), { method: 'DELETE' }), { signal: AbortSignal.timeout(30_000) });
     if (!res.ok && res.status !== 404) throw new Error(`R2 DELETE ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+
+  async function list(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let token: string | null = null;
+    do {
+      const query = new URLSearchParams({ 'list-type': '2', prefix });
+      if (token) query.set('continuation-token', token);
+      const res = await send(await aws.sign(`${base}?${query}`, { method: 'GET' }), { signal: AbortSignal.timeout(30_000) });
+      const xml = await res.text();
+      if (!res.ok) throw new Error(`R2 LIST ${res.status}: ${xml.slice(0, 200)}`);
+      for (const m of xml.matchAll(/<Key>([^<]*)<\/Key>/g)) keys.push(m[1]!);
+      token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? (/<NextContinuationToken>([^<]*)</.exec(xml)?.[1] ?? null) : null;
+    } while (token);
+    return keys;
   }
 
   async function upload(key: string, body: Uint8Array, contentType = 'application/gzip') {
@@ -133,5 +150,6 @@ export function r2Sink(options: R2Options): SnapshotSink {
     },
     putObject: (key, body, contentType) => upload(key, body, contentType),
     deleteObject: remove,
+    listObjects: list,
   };
 }

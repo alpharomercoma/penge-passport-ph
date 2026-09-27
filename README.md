@@ -209,7 +209,8 @@ and cannot be switched off:
   `~/.local/state/penge-passport-ph/`, so two terminals running `watch`, in Node.js or Python, share one budget
   instead of doubling the load.
 - **Backs off.** Any non-2xx response, unreadable body, timeout or network error pauses the client for 5 s,
-  doubling up to 10 minutes. It honours `Retry-After`, and after 5 failures in a row it stops for 15 minutes.
+  doubling up to 10 minutes. It honours `Retry-After` up to an hour. After 5 failures in a row, or one
+  `Retry-After` longer than an hour, it stops for 15 minutes, or as long as `Retry-After` asks, up to an hour.
 - **Refuses rather than piles up.** A call that has waited `maxWaitMs` (default 60 s) in the queue fails with
   `RateLimitError`. Identical concurrent calls share one request.
 - **Identifies itself.** Every request carries

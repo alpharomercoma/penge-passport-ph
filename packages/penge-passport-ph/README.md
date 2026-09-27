@@ -176,7 +176,9 @@ person or a group, and an email when a date opens at the offices you can get to.
   anywhere, an office list suddenly cut short) sends nothing and changes nothing; the first look is never news; a flickering date is
   announced once; at most 3 alerts a day.
 - **Private.** Addresses are stored encrypted (AES-256-GCM), confirmed by double opt-in, and deleted on
-  unsubscribe; every alert has a one-click unsubscribe (RFC 8058). No trackers.
+  unsubscribe (daily backups, also encrypted, drop them within 14 days); every alert has a one-click
+  unsubscribe (RFC 8058). No trackers. [Where an address goes](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#where-a-subscribers-address-goes)
+  lists every place it exists, including the two where it is not encrypted.
 - **Self-hosted, free to run.** One small server: Caddy, Node.js, Valkey (Redis), and its own Postfix
   with DKIM.
 
@@ -207,7 +209,8 @@ and cannot be switched off:
   `~/.local/state/penge-passport-ph/`, so two terminals running `watch`, in Node.js or Python, share one budget
   instead of doubling the load.
 - **Backs off.** Any non-2xx response, unreadable body, timeout or network error pauses the client for 5 s,
-  doubling up to 10 minutes. It honours `Retry-After`, and after 5 failures in a row it stops for 15 minutes.
+  doubling up to 10 minutes. It honours `Retry-After` up to an hour. After 5 failures in a row, or one
+  `Retry-After` longer than an hour, it stops for 15 minutes, or as long as `Retry-After` asks, up to an hour.
 - **Refuses rather than piles up.** A call that has waited `maxWaitMs` (default 60 s) in the queue fails with
   `RateLimitError`. Identical concurrent calls share one request.
 - **Identifies itself.** Every request carries

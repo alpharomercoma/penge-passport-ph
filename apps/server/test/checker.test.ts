@@ -5,7 +5,8 @@ import { exportSubscribers, importSubscribers } from '../src/backup.ts';
 import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob } from '../src/checker.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
-import { confirm, createPending } from '../src/subscribers.ts';
+import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
+import { signUnsubscribe } from '../src/crypto.ts';
 import { formatDate } from '../src/templates.ts';
 import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, PUBLISHED } from './helpers.ts';
 
@@ -358,6 +359,17 @@ describe('checker, found by adversarial review', () => {
     expect(w.kv.keys().filter((k) => k.startsWith('pp:sub:'))).toHaveLength(1);
   });
 
+  it('cancels confirmation links still waiting when the address unsubscribes', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486]);
+    // Ana asks to change her offices, then unsubscribes from an older alert before confirming.
+    const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1 }, w.t.now());
+    expect(await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token))).toBe(true);
+    expect((await confirm(w.kv, update, w.t.now())).status).toBe('invalid'); // no way back in by an old link
+    expect(w.kv.keys().filter((k) => k.startsWith('pp:pending'))).toEqual([]);
+    expect(w.kv.keys().filter((k) => k.startsWith('pp:sub'))).toEqual([]);
+  });
+
   it('keeps a confirmation link working when the address is busy, and single-use once it works', async () => {
     const w = await world();
     const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1 }, w.t.now());
@@ -564,14 +576,14 @@ describe('outbox integrity and backups', () => {
     w.sink.putObject = async (key, body) => void puts.push({ key, body });
     const deleted: string[] = [];
     w.sink.deleteObject = async (key) => void deleted.push(key);
+    const stored = ['2026-07-01', '2026-09-12', '2026-09-13', '2026-09-14', '2026-09-26'].map((d) => `backups/subscribers/date=${d}/subscribers.json.gz`);
+    w.sink.listObjects = async (prefix) => (prefix === 'backups/subscribers/' ? stored : []);
     const id = await w.subscribe('ana@example.com', [486, 693], 2);
     await w.run();
     await w.run();
     expect(puts.map((p) => p.key)).toEqual(['backups/subscribers/date=2026-09-27/subscribers.json.gz']);
-    // Copies older than BACKUP_KEEP_DAYS go, so an unsubscribed address leaves the backups too.
-    expect(deleted[0]).toBe('backups/subscribers/date=2026-09-13/subscribers.json.gz');
-    expect(deleted).toHaveLength(7);
-    expect(deleted.every((k) => k < 'backups/subscribers/date=2026-09-14')).toBe(true);
+    // Every copy 14 days old or older goes, however old, so an unsubscribed address leaves the backups too.
+    expect(deleted).toEqual(stored.slice(0, 3)); // 1 Jul, 12 Sep and 13 Sep; 14 Sep (13 days old) stays
     const backup = JSON.parse(gunzipSync(puts[0]!.body).toString());
     expect(backup.subscribers.map((s: { id: string }) => s.id)).toEqual([id]);
     expect(JSON.stringify(backup)).not.toContain('ana@example.com');
