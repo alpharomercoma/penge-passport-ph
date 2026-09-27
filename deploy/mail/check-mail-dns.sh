@@ -15,6 +15,12 @@ DOMAIN=${1:-${MAIL_DOMAIN:?usage: check-mail-dns.sh <domain>}}
 MAILHOST=${MAILHOST:-mail.$DOMAIN}
 SELECTOR=${SELECTOR:-penge}
 IP=${PUBLIC_IP:-$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')}
+# Behind 1:1 NAT (Huawei, AWS, Google…) the interface holds a private address,
+# not the one the world sees: then PUBLIC_IP must say which that is.
+if [[ $IP =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; then
+  echo "!! $IP is a private address: run again with PUBLIC_IP=<this server's public IPv4>" >&2
+  exit 2
+fi
 KEYFILE=/etc/opendkim/keys/$DOMAIN/$SELECTOR.txt
 command -v dig >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bind9-dnsutils >/dev/null 2>&1
 # One line per record; a record split into several strings is joined back.

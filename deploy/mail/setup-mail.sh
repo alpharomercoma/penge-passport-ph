@@ -17,7 +17,15 @@ MAILHOST=${MAILHOST:-mail.$DOMAIN}
 # Where DMARC aggregate reports go (optional): an inbox you read, e.g. you@yourdomain.com.
 DMARC_RUA=${DMARC_RUA:-}
 SELECTOR=${SELECTOR:-penge}
+# A re-run keeps the public address given the first time.
+[[ -z ${PUBLIC_IP:-} && -r /etc/penge/mail.conf ]] && PUBLIC_IP=$(sed -n 's/^PUBLIC_IP=//p' /etc/penge/mail.conf)
 IP=${PUBLIC_IP:-$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')}
+# Behind 1:1 NAT (Huawei, AWS, Google…) the interface holds a private address,
+# not the one the world sees: then PUBLIC_IP must say which that is.
+if [[ $IP =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; then
+  echo "!! $IP is a private address: run again with PUBLIC_IP=<this server's public IPv4>" >&2
+  exit 2
+fi
 KEYDIR=/etc/opendkim/keys/$DOMAIN
 
 have_systemd() { [[ -d /run/systemd/system ]]; }
@@ -112,7 +120,7 @@ cat >/etc/logrotate.d/penge-mail <<'ROTATE'
 ROTATE
 # Remembered for check-mail-dns.sh. (provision.sh owns /etc/penge and its 0750 mode.)
 [[ -d /etc/penge ]] || install -d -m 0755 /etc/penge
-printf 'MAIL_DOMAIN=%s\nMAILHOST=%s\nSELECTOR=%s\n' "$DOMAIN" "$MAILHOST" "$SELECTOR" >/etc/penge/mail.conf
+printf 'MAIL_DOMAIN=%s\nMAILHOST=%s\nSELECTOR=%s\nPUBLIC_IP=%s\n' "$DOMAIN" "$MAILHOST" "$SELECTOR" "$IP" >/etc/penge/mail.conf
 
 # Bounces and postmaster mail come back to this machine and land in
 # /var/mail/root, so failed deliveries can be read (see deploy/README.md).

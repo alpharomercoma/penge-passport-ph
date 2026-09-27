@@ -136,12 +136,25 @@ encrypted and queued alerts are signed; the checker copies the subscribers to R2
 ## Moving to another server
 
 **Check first that the new server can reach passport.gov.ph**: `curl -4 -m 15 -sS -o /dev/null -w '%{http_code}\n'
-https://passport.gov.ph/` must print a status, not time out. On 27 September 2026 a move to WebHorizon's
-Singapore server (160.191.77.75) was rolled back after its first scan for exactly this reason: traffic from
-it reaches Globe's network in Manila (Innove, 222.127.98.30) and goes no further, while the US server is
-answered. That server stays set up (mail, DKIM, certificates, a release; no data, timer off), and its Caddy
-forwards anything that still reaches it to the live server. `penge` keeps an A record for it, because
-WebHorizon drops its reverse DNS when the name stops pointing there.
+https://passport.gov.ph/` must print a status, not time out, and keep doing so for a while. The site's
+server lets some networks in and silently drops others, sometimes only part of the time, so a looking
+glass cannot tell (it only pings and traces, which the site ignores from everyone). On 27 September 2026:
+
+- WebHorizon Singapore (160.191.77.75) never got an answer; that move was rolled back after one scan.
+- Huawei Cloud FlexusL Manila (213.250.173.234, 2 vCPU, 1 GiB) answers in about 50 ms, and the service
+  moved there from RackNerd (107.172.159.170). RackNerd forwards stale visitors there until it is retired.
+
+Huawei's Debian image needed more than the usual steps:
+- It ships Debian 11 with `base-files` held: upgrade in place to 12 and then 13 (`apt-mark unhold
+  base-files`), from Debian's own mirror. Huawei's cloud-init no longer runs after that (it was not
+  installed as a package), and nothing needs it: `touch /etc/cloud/cloud-init.disabled`.
+- Its internal DNS server (100.125.1.250) does not answer: public resolvers go in
+  `/etc/resolvconf/resolv.conf.d/head`, plus `supersede domain-name-servers` in `dhclient.conf`.
+- The security group lets nothing in: allow TCP 22, 80, 443 and UDP 443.
+- The server only sees its private address (1:1 NAT), so the mail scripts need
+  `PUBLIC_IP=213.250.173.234` once; `setup-mail.sh` remembers it.
+- The clock starts on Asia/Shanghai: `timedatectl set-timezone UTC`. Set a hostname in `/etc/hosts`,
+  or sudo complains.
 
 The procedure, with scans and email paused for about five minutes:
 
@@ -173,7 +186,7 @@ secrets, under Settings → Secrets and variables → Actions:
 
 | Secret | Value |
 |---|---|
-| `DEPLOY_HOST` | `107.172.159.170` |
+| `DEPLOY_HOST` | `213.250.173.234` |
 | `DEPLOY_SSH_KEY` | the contents of `.secrets/deploy_key` |
 | `DEPLOY_KNOWN_HOSTS` | the contents of `.secrets/deploy_known_hosts` (the server's pinned host key) |
 
@@ -182,7 +195,7 @@ branch. The workflow builds in one job with no secrets, then a second job downlo
 ships them, so `npm ci` never runs next to the key. By hand, with an `~/.ssh/config` entry for the deploy user:
 
 ```sh
-npm ci && deploy/release.sh penge-deploy@107.172.159.170
+npm ci && deploy/release.sh penge-deploy@213.250.173.234
 ```
 
 Each release is uploaded as `releases/<id>.partial` (a tar stream over SSH, so it works the same from macOS
@@ -208,7 +221,7 @@ both set in `deploy/site.conf`).
 | 2. DNS records it printed (A, SPF, DKIM `penge._domainkey.penge`, DMARC `_dmarc.penge`), added with `vercel dns add` | done |
 | 3. Website at `alphaexperimental.org/pengepassportph` (`deploy/site.conf`; `PUBLIC_BASE_URL` follows it) | done |
 | 4. `MAIL_FROM=alerts@penge.alphaexperimental.org` in `/etc/penge/server.env` | done |
-| 5. Reverse DNS of the server's IPv4 address: `penge.alphaexperimental.org` (RackNerd panel → Network → Reverse DNS → Edit; WebHorizon's panel refuses until `penge` already points at the IP). IPv6 needs none: Postfix sends over IPv4 only | done |
+| 5. Reverse DNS of the server's IPv4 address: `penge.alphaexperimental.org`. On Huawei Cloud: Domain Name Service console → PTR Records → Create (the FlexusL "Domain" page is a forward binding, not this). IPv6 needs none: Postfix sends over IPv4 only | done |
 | 6. `bash /root/penge-deploy/mail/check-mail-dns.sh`: every line `ok` | done |
 | 7. Test messages to your own inbox; "Show original" in Gmail should say SPF, DKIM and DMARC: PASS, and land in the inbox | done: after reverse DNS, a real alert landed in the inbox at Gmail (SPF, DKIM, DMARC pass) and Proton; the one test before reverse DNS went to spam. Again from the WebHorizon server on 27 September: inbox at both |
 | 8. `MAIL_MODE=live` in `server.env`, then `systemctl restart penge-api`; the website's form switches on by itself | done (27 September 2026) |
