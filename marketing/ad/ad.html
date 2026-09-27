@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PengePassportPH ad</title>
+<style>
+  :root {
+    --ink: #17201b; --ink-2: #4f5b55; --bg: #ffffff; --surface: #f5f7f6; --line: #dfe5e2;
+    --open: #0a7a43; --open-soft: #e4f3ea; --glow: #3fbf7a; --full: #eceeed; --full-ink: #5f6a64;
+    --night: #101713;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+  body { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  #stage { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
+  .scene { position: absolute; inset: 0; overflow: hidden; visibility: hidden; }
+  .abs { position: absolute; left: 0; top: 0; will-change: transform, opacity; }
+  .dark { background: radial-gradient(1200px 800px at 30% 40%, #1d2a23 0%, var(--night) 70%); color: #fff; }
+  .light { background: var(--surface); }
+  .white { background: #fff; }
+  .h1 { font-weight: 800; letter-spacing: -0.045em; line-height: 0.95; }
+  .mask { overflow: hidden; display: block; white-space: nowrap; padding-bottom: 0.08em; }
+  .mask > span { display: block; will-change: transform; }
+  .label { font-weight: 700; font-size: 30px; letter-spacing: -0.01em; }
+  .muted { color: rgba(255,255,255,0.55); }
+
+  /* phone */
+  .phone { position: absolute; border-radius: 68px; background: #0b0f0d; padding: 14px; box-shadow: 0 50px 120px rgba(0,0,0,0.28), 0 0 0 2px #2b332f inset; }
+  .phone .screen { position: relative; overflow: hidden; border-radius: 55px; background: #fff; }
+  .phone .screen img { position: absolute; left: 0; top: 0; width: 100%; display: block; }
+  .phone .status { position: absolute; left: 0; top: 0; right: 0; height: 51px; background: #fff; z-index: 4; font: 700 19px -apple-system, sans-serif; color: #111; padding: 17px 0 0 46px; }
+  .phone .island { position: absolute; left: 50%; top: 26px; width: 118px; height: 34px; margin-left: -59px; background: #0b0f0d; border-radius: 20px; z-index: 5; }
+
+  /* bits */
+  .chip { position: absolute; display: inline-flex; align-items: center; gap: 12px; height: 70px; padding: 0 30px; border-radius: 999px; font-weight: 700; font-size: 32px; white-space: nowrap; }
+  .chip.ink { background: var(--ink); color: #fff; }
+  .chip.line { background: #fff; color: var(--ink); box-shadow: 0 0 0 2px var(--line) inset; }
+  .chip.green { background: var(--open); color: #fff; }
+  .chip.glass { background: rgba(255,255,255,0.1); color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.18) inset; }
+  .cal { position: absolute; display: grid; grid-template-columns: repeat(7, 96px); gap: 12px; }
+  .cell { width: 96px; height: 96px; border-radius: 18px; background: var(--full); color: var(--full-ink); display: grid; place-items: center; font-weight: 700; font-size: 30px; line-height: 1; text-align: center; }
+  .cell small { display: block; font-size: 17px; font-weight: 700; margin-top: 4px; }
+  .cell.dim { background: transparent; color: rgba(255,255,255,0.35); }
+  .cursor { position: absolute; width: 64px; height: 64px; z-index: 50; }
+  .ripple { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; border: 6px solid var(--open); z-index: 49; }
+  .ring { position: absolute; border-radius: 16px; border: 6px solid var(--open); box-shadow: 0 0 0 10px rgba(10,122,67,0.15); z-index: 20; }
+  .stat { position: absolute; }
+  .stat b { display: block; font-size: 150px; font-weight: 800; letter-spacing: -0.05em; line-height: 0.9; font-variant-numeric: tabular-nums; }
+  .stat span { display: block; font-size: 32px; font-weight: 600; margin-top: 12px; }
+  .notif { position: absolute; width: 400px; border-radius: 30px; padding: 20px 22px; background: rgba(246,248,247,0.96); box-shadow: 0 18px 40px rgba(0,0,0,0.25); z-index: 30; display: grid; grid-template-columns: 52px 1fr; gap: 14px; font-size: 18px; line-height: 1.3; }
+  .notif .icon { width: 52px; height: 52px; border-radius: 13px; background: #fff; display: grid; place-items: center; box-shadow: 0 0 0 1px var(--line) inset; }
+  .notif .top { display: flex; justify-content: space-between; color: var(--ink-2); font-size: 16px; font-weight: 600; }
+  .notif .title { font-weight: 700; }
+  .mail { position: absolute; width: 720px; transform-origin: 0 0; background: #fff; border-radius: 26px; box-shadow: 0 40px 90px rgba(0,0,0,0.22); overflow: hidden; }
+  .mail .head { padding: 24px 32px 18px; border-bottom: 1px solid var(--line); font-size: 21px; line-height: 1.5; color: var(--ink-2); }
+  .mail .head b { color: var(--ink); font-weight: 700; }
+  .mail .head .subj { color: var(--ink); font-size: 26px; font-weight: 800; letter-spacing: -0.01em; margin-top: 6px; }
+  .mail img { display: block; width: 100%; }
+  .term { position: absolute; width: 1100px; border-radius: 22px; background: #0c110e; box-shadow: 0 30px 80px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset; overflow: hidden; }
+  .term .bar { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 20px; background: #151c18; }
+  .term .bar i { width: 14px; height: 14px; border-radius: 50%; background: #3a443f; display: block; }
+  .term pre { padding: 30px 36px 36px; font: 600 30px/1.7 "SF Mono", Menlo, monospace; color: #e8eee9; white-space: pre; min-height: 280px; }
+  .term .p { color: var(--glow); }
+  .term .o { color: rgba(255,255,255,0.45); }
+  .wipe { position: absolute; inset: 0; z-index: 90; pointer-events: none; }
+  .flash { position: absolute; inset: 0; background: #fff; z-index: 95; opacity: 0; }
+  .black { position: absolute; inset: 0; background: #000; z-index: 96; opacity: 0; }
+  .globe { position: absolute; }
+  .urlpill { position: absolute; display: inline-flex; align-items: center; height: 96px; padding: 0 44px; border-radius: 999px; background: var(--ink); color: #fff; font-weight: 700; font-size: 44px; letter-spacing: -0.01em; white-space: nowrap; }
+  .qrcard { position: absolute; width: 360px; padding: 34px; border-radius: 34px; background: #fff; box-shadow: 0 30px 70px rgba(0,0,0,0.12), 0 0 0 2px var(--line) inset; text-align: center; }
+  .qrcard img { width: 292px; height: 292px; display: block; }
+  .qrcard p { margin-top: 20px; font-size: 26px; font-weight: 700; }
+  .fine { position: absolute; font-size: 22px; color: var(--ink-2); font-weight: 500; }
+  .typed { position: absolute; font-size: 16px; color: var(--ink); white-space: pre; }
+  .caret { display: inline-block; width: 2px; height: 20px; background: var(--ink); vertical-align: -4px; margin-left: 1px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script src="assets/boxes.js"></script>
+<script src="assets/email.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Time: 128 BPM, cuts on bar lines (music.py writes the same grid).
+const BEAT = 60 / 128, BAR = 4 * BEAT, bar = (n, beat = 0) => (n * 4 + beat) * BEAT;
+const LENGTH = 49.08;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, x) => a + (b - a) * x;
+const E = {
+  outExpo: (x) => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x)),
+  outCubic: (x) => 1 - Math.pow(1 - x, 3),
+  inCubic: (x) => x * x * x,
+  inOutCubic: (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  outBack: (x) => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); },
+  outElastic: (x) => (x === 0 || x === 1 ? x : Math.pow(2, -10 * x) * Math.sin((x * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1),
+};
+// Deterministic shake.
+const shake = (t, amp) => ({ x: amp * (Math.sin(t * 91.7) * 0.6 + Math.sin(t * 57.3 + 1.3) * 0.4), y: amp * (Math.sin(t * 73.1 + 2.1) * 0.6 + Math.sin(t * 43.9) * 0.4) });
+// Pulse on every beat after `from` (1 at the beat, decaying).
+const kickPulse = (t, from) => (t < from ? 0 : Math.exp(-((t - from) % BEAT) * 9));
+
+function el(tag, cls, parent, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  (parent || stage).appendChild(e);
+  return e;
+}
+function put(e, { x = 0, y = 0, s = 1, sx, sy, r = 0, o = 1, blur = 0, rx = 0, ry = 0 } = {}) {
+  e.style.transform = `translate(${x}px, ${y}px) perspective(1400px) rotateX(${rx}deg) rotateY(${ry}deg) rotate(${r}deg) scale(${sx ?? s}, ${sy ?? s})`;
+  e.style.opacity = o;
+  e.style.filter = blur > 0.05 ? `blur(${blur}px)` : 'none';
+}
+// A line of text revealed from below through a mask.
+function line(parent, text, cls, x, y, size, extra = '') {
+  const m = el('div', 'abs mask', parent);
+  m.style.left = x + 'px'; m.style.top = y + 'px';
+  m.style.paddingBottom = Math.round(size * 0.2) + 'px';
+  const s = el('span', cls, m, text);
+  s.style.fontSize = size + 'px';
+  if (extra) s.style.cssText += extra;
+  return { m, s };
+}
+function reveal(ln, t, t0, dur = 0.45, out = null) {
+  const p = E.outExpo(prog(t, t0, t0 + dur));
+  let y = (1 - p) * 135, o = p > 0 ? 1 : 0;
+  if (out) { const q = E.inCubic(prog(t, out, out + 0.3)); y -= q * 135; }
+  ln.s.style.transform = `translateY(${y}%)`;
+  ln.m.style.opacity = o;
+}
+
+const LOGO = (size, openScale = 1) => `<svg width="${size}" height="${size}" viewBox="8 6 78 82"><rect x="12" y="18" width="70" height="66" rx="11" fill="#fff" stroke="#17201b" stroke-width="4"/><path d="M12 34h70" stroke="#17201b" stroke-width="4"/><rect x="29.5" y="10" width="6" height="14" rx="3" fill="#17201b"/><rect x="58.5" y="10" width="6" height="14" rx="3" fill="#17201b"/><g fill="#c5cec9"><rect x="22" y="38" width="9" height="8" rx="2.2"/><rect x="34.5" y="38" width="9" height="8" rx="2.2"/><rect x="47" y="38" width="9" height="8" rx="2.2"/><rect x="59.5" y="38" width="9" height="8" rx="2.2"/><rect x="22" y="49.5" width="9" height="8" rx="2.2"/><rect x="34.5" y="49.5" width="9" height="8" rx="2.2"/><rect x="59.5" y="49.5" width="9" height="8" rx="2.2"/><rect x="22" y="61" width="9" height="8" rx="2.2"/><rect x="34.5" y="61" width="9" height="8" rx="2.2"/><rect x="47" y="61" width="9" height="8" rx="2.2"/><rect x="59.5" y="61" width="9" height="8" rx="2.2"/></g><rect class="open-day" x="47" y="49.5" width="9" height="8" rx="2.2" fill="#0a7a43" style="transform-box: fill-box; transform-origin: center; transform: scale(${openScale})"/></svg>`;
+const CURSOR = `<svg viewBox="0 0 24 24" width="64" height="64"><path d="M5 3l14 8.5-6.2 1.3L9.6 19z" fill="#fff" stroke="#17201b" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+const CHECK = `<svg width="30" height="30" viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const REFRESH = `<svg width="54" height="54" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+const STATUS = 47, PHONE_S = 1.08, SCREEN_W = 390 * PHONE_S, SCREEN_H = 844 * PHONE_S;
+function phone(parent) {
+  const p = el('div', 'phone abs', parent);
+  const sc = el('div', 'screen', p);
+  sc.style.width = SCREEN_W + 'px'; sc.style.height = SCREEN_H + 'px';
+  el('div', 'status', sc, '12:00');
+  el('div', 'island', p);
+  return { p, sc, imgs: {} };
+}
+function screenImg(ph, name) {
+  const i = el('img', '', ph.sc); i.src = `assets/${name}.png`; ph.imgs[name] = i; return i;
+}
+// Show one screenshot, scrolled by `scroll` CSS px (in the 390-wide page), with opacity.
+function showImg(ph, name, scroll = 0, o = 1, y = 0) {
+  const i = ph.imgs[name];
+  i.style.transform = `translateY(${(STATUS - scroll) * PHONE_S + y}px)`;
+  i.style.opacity = o;
+}
+// A point on the phone screen (390-wide CSS px) in the phone element's own coordinates.
+const onScreen = (x, y) => ({ x: 14 + x * PHONE_S, y: 14 + (y + STATUS) * PHONE_S });
+
+const stage = document.getElementById('stage');
+const scenes = [];
+function scene(start, end, cls, build, render, enter = 'cut') {
+  const root = el('div', `scene ${cls}`);
+  const ctx = build(root);
+  scenes.push({ start, end, root, ctx, render, enter });
+}
+// Where the ad taps, rings and types on the captured screens (capture.cjs, email-shot.cjs).
+const BOX = window.BOXES, MAIL = window.MAIL;
+
+// ---------------------------------------------------------------------------
+// 1. Refresh, refresh, refresh: nothing but "Full".
+scene(0, bar(2), 'dark', (r) => {
+  const card = el('div', 'abs', r);
+  card.style.cssText += 'left:150px;top:150px;width:840px;height:780px;border-radius:40px;background:rgba(255,255,255,0.06);box-shadow:0 0 0 2px rgba(255,255,255,0.1) inset;';
+  const title = el('div', 'abs', card, 'October');
+  title.style.cssText += 'left:56px;top:48px;font-size:52px;font-weight:800;letter-spacing:-0.03em;color:#fff;';
+  const btn = el('div', 'abs', card, REFRESH);
+  btn.style.cssText += 'left:716px;top:40px;width:84px;height:84px;border-radius:50%;display:grid;place-items:center;color:#fff;background:rgba(255,255,255,0.1);';
+  const cal = el('div', 'cal', card); cal.style.left = '56px'; cal.style.top = '170px'; cal.style.gridTemplateColumns = 'repeat(7, 98px)'; cal.style.gap = '12px';
+  const cells = [];
+  for (let i = 0; i < 35; i++) {
+    const d = i - 3;
+    const c = el('div', 'cell' + (d < 1 || d > 31 || i % 7 === 0 || i % 7 === 6 ? ' dim' : ''), cal, d >= 1 && d <= 31 ? `${d}${i % 7 === 0 || i % 7 === 6 ? '' : '<small>Full</small>'}` : '');
+    c.style.width = c.style.height = '98px';
+    cells.push(c);
+  }
+  const cur = el('div', 'cursor abs', r, CURSOR);
+  const rip = el('div', 'ripple abs', r);
+  const words = [0, 1, 2].map((k) => line(r, 'Refresh.', 'h1', 1090, 250 + k * 170, 150, 'color:#fff'));
+  const big = line(r, 'Full na naman?!', 'h1', 1090, 430, 112, 'color:#fff');
+  const sub = line(r, 'Fully booked. Again.', 'label muted', 1096, 570, 40);
+  return { card, btn, cells, cur, rip, words, big, sub, cal };
+}, (t, c) => {
+  const beatNo = Math.floor(t / BEAT);
+  const inBeat = (t % BEAT) / BEAT;
+  // The refresh button spins on each of the first 4 beats; the page "reloads".
+  const spin = beatNo < 4 ? beatNo * 360 + E.outCubic(clamp(inBeat * 1.6)) * 360 : 4 * 360;
+  c.btn.style.transform = `rotate(${spin}deg)`;
+  const reload = beatNo < 4 ? 0.55 + 0.45 * E.outCubic(clamp(inBeat * 2)) : 1;
+  c.cal.style.opacity = reload;
+  // Cursor rests on the button and clicks on the beat.
+  const bx = 150 + 716 + 42, by = 150 + 40 + 42;
+  const arrive = E.outExpo(prog(t, 0, 0.35));
+  put(c.cur, { x: lerp(1500, bx - 8, arrive), y: lerp(900, by - 6, arrive), s: beatNo < 4 ? 1 - 0.15 * Math.exp(-inBeat * 10) : 1 });
+  const rp = beatNo < 4 ? inBeat : 1;
+  put(c.rip, { x: bx, y: by, s: 0.3 + rp * 1.2, o: beatNo < 4 ? 1 - rp : 0 });
+  c.words.forEach((w, k) => reveal(w, t, k * BEAT, 0.3, bar(1) - 0.15));
+  reveal(c.big, t, bar(1), 0.4);
+  reveal(c.sub, t, bar(1, 2), 0.4);
+  // "Full na naman" lands with a jolt.
+  const sh = shake(t, 10 * Math.exp(-Math.max(0, t - bar(1)) * 6) * (t > bar(1) ? 1 : 0));
+  put(c.card, { x: sh.x, y: sh.y, s: 1 - 0.02 * E.outCubic(prog(t, bar(1), bar(2))) });
+});
+
+// 2. When slots drop, and how fast they go.
+scene(bar(2), bar(4), 'dark', (r) => {
+  const lab = line(r, 'New slots drop at', 'label muted', 170, 150, 44);
+  const a = line(r, '12:00 NN', 'h1', 160, 220, 190, 'color:#fff');
+  const b = line(r, '<span style="color:rgba(255,255,255,0.35)">&amp;</span> 9:00 PM', 'h1', 160, 400, 190, 'color:#fff');
+  const row = el('div', 'cal', r); row.style.left = '170px'; row.style.top = '680px'; row.style.gridTemplateColumns = 'repeat(7, 120px)'; row.style.gap = '14px';
+  const cells = Array.from({ length: 7 }, (_, i) => { const c = el('div', 'cell', row, `${12 + i}<small>Full</small>`); c.style.width = c.style.height = '120px'; return c; });
+  const gone = line(r, 'Ubos agad.', 'h1', 1230, 660, 110, 'color:#fff');
+  const gone2 = line(r, 'Gone in minutes.', 'label muted', 1236, 790, 38);
+  return { lab, a, b, row, cells, gone, gone2, r };
+}, (t, c) => {
+  const t0 = bar(2);
+  reveal(c.lab, t, t0, 0.35);
+  reveal(c.a, t, t0 + 0.05, 0.4);
+  reveal(c.b, t, t0 + BEAT * 2, 0.4);
+  // At the next bar, days open green one by one... and go grey again just as fast.
+  const t1 = bar(3);
+  c.cells.forEach((cell, i) => {
+    const on = t1 + i * BEAT / 3;
+    const green = t >= on && t < on + BEAT * 1.1;
+    cell.style.background = green ? 'var(--open)' : 'var(--full)';
+    cell.style.color = green ? '#fff' : 'var(--full-ink)';
+    cell.querySelector('small').textContent = green ? 'Open' : 'Full';
+    const p = E.outBack(prog(t, t0 + BEAT * 3 + i * 0.04, t0 + BEAT * 3 + 0.35 + i * 0.04));
+    cell.style.transform = `translateY(${(1 - p) * 60}px) scale(${green ? 1.08 : 1})`;
+    cell.style.opacity = clamp(p);
+  });
+  reveal(c.gone, t, t1 + BEAT * 2, 0.35);
+  reveal(c.gone2, t, t1 + BEAT * 2.5, 0.35);
+  // The riser: a slow push-in that shakes harder towards the drop.
+  const push = E.inCubic(prog(t, t0, bar(4)));
+  const sh = shake(t, 14 * push * push);
+  put(c.r, { x: sh.x, y: sh.y, s: 1 + 0.08 * push });
+});
+
+// 3. The drop: the logo.
+scene(bar(4), bar(6), 'white', (r) => {
+  const glow = el('div', 'abs', r);
+  glow.style.cssText += 'left:560px;top:140px;width:800px;height:800px;border-radius:50%;background:radial-gradient(circle, rgba(10,122,67,0.14), rgba(10,122,67,0) 65%);';
+  const burst = el('div', 'abs', r);
+  burst.style.cssText += 'left:960px;top:430px;width:400px;height:400px;margin:-200px 0 0 -200px;border-radius:50%;border:10px solid var(--open);';
+  const logo = el('div', 'abs', r);
+  logo.style.cssText += 'left:810px;top:180px;width:300px;height:300px;';
+  const word = line(r, 'PengePassport<span style="color:var(--ink-2)">PH</span>', 'h1', 0, 540, 150);
+  word.m.style.left = '0'; word.m.style.width = '1920px'; word.s.style.textAlign = 'center';
+  const tag = line(r, 'Free email alerts for DFA passport appointments.', 'label', 0, 720, 44, 'font-weight:600;color:var(--ink-2)');
+  tag.m.style.width = '1920px'; tag.s.style.textAlign = 'center';
+  const pills = ['Free', 'Open source', 'Not a fixer'].map((w) => el('div', 'chip green abs', r, CHECK + w));
+  return { glow, burst, logo, word, tag, pills };
+}, (t, c) => {
+  const t0 = bar(4);
+  const p = E.outBack(prog(t, t0, t0 + 0.5));
+  const open = E.outElastic(prog(t, t0 + 0.25, t0 + 1.1));
+  c.logo.innerHTML = LOGO(300, Math.max(0, open));
+  const pulse = kickPulse(t, t0);
+  put(c.logo, { s: Math.max(0.001, p) * (1 + 0.03 * pulse), y: (1 - p) * 40 });
+  const b = prog(t, t0, t0 + 0.8);
+  put(c.burst, { s: 0.2 + E.outCubic(b) * 2.4, o: (1 - b) * 0.9 });
+  put(c.glow, { s: 1 + 0.06 * pulse });
+  reveal(c.word, t, t0 + 0.2, 0.5);
+  reveal(c.tag, t, bar(5), 0.5);
+  const xs = [540, 780, 1135];
+  c.pills.forEach((pl, i) => {
+    const q = E.outBack(prog(t, bar(5, 1 + i * 0.75), bar(5, 1 + i * 0.75) + 0.35));
+    put(pl, { x: xs[i], y: 830 + (1 - q) * 40, s: Math.max(0.001, q), o: q > 0 ? 1 : 0 });
+  });
+});
+
+// 4. Every office at home, on the live site.
+scene(bar(6), bar(9), 'light', (r) => {
+  const kick = line(r, 'In the Philippines', 'label', 150, 180, 36, 'color:var(--open)');
+  const h = line(r, 'Every DFA office.', 'h1', 140, 250, 120);
+  const h2 = line(r, 'One list.', 'h1', 140, 370, 120);
+  const s1 = el('div', 'stat abs', r, '<b>0</b><span>offices, all in one place</span>');
+  const s2 = el('div', 'stat abs', r, '<b>15<small style="font-size:60px;letter-spacing:-0.02em"> min</small></b><span>between checks</span>');
+  const chips = ['NCR', 'Luzon', 'Visayas', 'Mindanao'].map((w) => el('div', 'chip line abs', r, w));
+  const ph = phone(r); screenImg(ph, 'ph-full');
+  return { kick, h, h2, s1, s2, chips, ph };
+}, (t, c) => {
+  const t0 = bar(6);
+  reveal(c.kick, t, t0 + 0.05, 0.4);
+  reveal(c.h, t, t0 + 0.1, 0.45);
+  reveal(c.h2, t, t0 + 0.25, 0.45);
+  const n = Math.round(43 * E.outCubic(prog(t, bar(7), bar(7) + 1.1)));
+  c.s1.querySelector('b').textContent = String(n);
+  const q1 = E.outExpo(prog(t, bar(7), bar(7) + 0.5));
+  put(c.s1, { x: 150, y: 540 + (1 - q1) * 40, o: q1 });
+  const q2 = E.outExpo(prog(t, bar(7, 2), bar(7, 2) + 0.5));
+  put(c.s2, { x: 560, y: 540 + (1 - q2) * 40, o: q2 });
+  let x = 150;
+  c.chips.forEach((ch, i) => {
+    const q = E.outBack(prog(t, bar(8, i), bar(8, i) + 0.35));
+    put(ch, { x, y: 820 + (1 - q) * 30, s: Math.max(0.001, q), o: q > 0 ? 1 : 0 });
+    x += [140, 176, 190, 220][i];
+  });
+  // The phone swings in, then the list scrolls.
+  const pin = E.outExpo(prog(t, t0, t0 + 0.8));
+  const scroll = 1500 * E.inOutCubic(prog(t, bar(7, 1), bar(8, 3)));
+  const float = Math.sin(t * 1.4) * 8;
+  put(c.ph.p, { x: 1180 + (1 - pin) * 700, y: 70 + float, ry: -8 * (1 - pin) - 4, o: 1 });
+  showImg(c.ph, 'ph-full', scroll);
+});
+
+// 5. Abroad.
+scene(bar(9), bar(12), 'dark', (r) => {
+  const globe = el('div', 'globe abs', r);
+  const q = line(r, 'Kabayan, nasa abroad ka?', 'h1', 0, 380, 140, 'color:#fff');
+  q.m.style.width = '1920px'; q.s.style.textAlign = 'center';
+  const qs = line(r, 'For Filipinos overseas, too.', 'label muted', 0, 550, 44);
+  qs.m.style.width = '1920px'; qs.s.style.textAlign = 'center';
+  const kick = line(r, 'Abroad', 'label', 150, 170, 36, 'color:var(--glow)');
+  const s1 = el('div', 'stat abs', r, '<b style="color:#fff">0</b><span class="muted">embassies, consulates<br>and outreach posts</span>');
+  const s2 = el('div', 'stat abs', r, '<b style="color:#fff">0</b><span class="muted">countries</span>');
+  const chips = ['Asia Pacific', 'Europe', 'North America', 'South America', 'Middle East/Africa'].map((w) => el('div', 'chip glass abs', r, w));
+  const ph = phone(r); screenImg(ph, 'ph-top'); screenImg(ph, 'abroad-top'); screenImg(ph, 'abroad-mea-full');
+  const cur = el('div', 'cursor abs', ph.p, CURSOR);
+  const rip = el('div', 'ripple abs', ph.p);
+  return { globe, q, qs, kick, s1, s2, chips, ph, cur, rip };
+}, (t, c) => {
+  const t0 = bar(9);
+  // A dotted globe, turning: centre stage for the question, then behind the phone.
+  const rot = t * 22;
+  let dots = '';
+  for (let lat = -75; lat <= 75; lat += 15) {
+    for (let lon = 0; lon < 360; lon += 10) {
+      const a = ((lon + rot) * Math.PI) / 180, b = (lat * Math.PI) / 180;
+      const z = Math.cos(b) * Math.cos(a);
+      if (z < 0) continue;
+      const x = 380 + 360 * Math.cos(b) * Math.sin(a), y = 380 - 360 * Math.sin(b);
+      dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(3 + 4 * z).toFixed(1)}" fill="rgba(63,191,122,${(0.12 + 0.55 * z).toFixed(2)})"/>`;
+    }
+  }
+  c.globe.innerHTML = `<svg width="760" height="760">${dots}</svg>`;
+  const mv = E.inOutCubic(prog(t, bar(10) - 0.3, bar(10) + 0.4));
+  put(c.globe, { x: lerp(580, 1090, mv), y: lerp(160, 170, mv), s: lerp(1, 1.05, mv) * (1 + 0.02 * kickPulse(t, t0)), o: lerp(0.9, 0.6, mv) });
+  // The question, then it steps aside for the numbers.
+  reveal(c.q, t, t0 + 0.05, 0.45, bar(10) - 0.35);
+  reveal(c.qs, t, t0 + BEAT * 2, 0.4, bar(10) - 0.35);
+  reveal(c.kick, t, bar(10), 0.4);
+  const n1 = Math.round(133 * E.outCubic(prog(t, bar(10), bar(10) + 1.2)));
+  const n2 = Math.round(67 * E.outCubic(prog(t, bar(10, 1), bar(10, 1) + 1.1)));
+  c.s1.querySelector('b').textContent = n1; c.s2.querySelector('b').textContent = n2;
+  const a1 = E.outExpo(prog(t, bar(10), bar(10) + 0.5)), a2 = E.outExpo(prog(t, bar(10, 1), bar(10, 1) + 0.5));
+  put(c.s1, { x: 150, y: 250 + (1 - a1) * 40, o: a1 });
+  put(c.s2, { x: 650, y: 250 + (1 - a2) * 40, o: a2 });
+  const pos = [[150, 640], [415, 640], [615, 640], [150, 730], [460, 730]];
+  c.chips.forEach((ch, i) => {
+    const q = E.outBack(prog(t, bar(11, i * 0.3), bar(11, i * 0.3) + 0.35));
+    const lit = i === 4 && t >= bar(11, 1.5);
+    ch.className = 'chip abs ' + (lit ? 'green' : 'glass');
+    put(ch, { x: pos[i][0], y: pos[i][1] + (1 - q) * 30, s: Math.max(0.001, q), o: q > 0 ? 1 : 0 });
+  });
+  // The phone rises on the home list; a tap on Abroad, then on Middle East/Africa, and the list scrolls.
+  const pin = E.outExpo(prog(t, bar(10), bar(10) + 0.8));
+  put(c.ph.p, { x: 1240, y: 80 + (1 - pin) * 1100 + Math.sin(t * 1.3) * 8, ry: -6, o: pin > 0 ? 1 : 0 });
+  const tap1 = bar(10, 2), tap2 = bar(11, 1.5);
+  const s1 = prog(t, tap1 + 0.06, tap1 + 0.12), s2 = prog(t, tap2 + 0.06, tap2 + 0.12);
+  showImg(c.ph, 'ph-top', 0, 1 - s1);
+  showImg(c.ph, 'abroad-top', 0, s1 * (1 - s2));
+  showImg(c.ph, 'abroad-mea-full', 760 * E.inOutCubic(prog(t, tap2 + 0.3, bar(12) - 0.05)), s2);
+  const A = BOX.abroad, M = BOX.mea;
+  const p1 = onScreen(A.x + A.w / 2, A.y + A.h / 2), p2 = onScreen(M.x + M.w / 2, M.y + M.h / 2);
+  let cx, cy, tapAt;
+  if (t < tap1 + 0.3) { const k = E.outExpo(prog(t, bar(10) + 0.5, tap1)); cx = lerp(560, p1.x, k); cy = lerp(1000, p1.y, k); tapAt = tap1; }
+  else { const k = E.inOutCubic(prog(t, bar(11), tap2)); cx = lerp(p1.x, p2.x, k); cy = lerp(p1.y, p2.y, k); tapAt = tap2; }
+  const since = t - tapAt;
+  put(c.cur, { x: cx - 8, y: cy - 6, o: t > bar(10) + 0.5 && t < tap2 + 0.6 ? 1 : 0, s: since > 0 ? 1 - 0.15 * Math.exp(-since * 12) : 1 });
+  const rp = clamp(since / 0.4);
+  put(c.rip, { x: cx, y: cy, s: 0.3 + rp, o: since > 0 && since < 0.4 ? 1 - rp : 0 });
+});
+
+// 6. A day's hours.
+scene(bar(12), bar(15), 'light', (r) => {
+  const h = line(r, 'Tap a day.', 'h1', 150, 300, 130);
+  const h2 = line(r, 'See the hours.', 'h1', 150, 430, 130);
+  const s = line(r, 'Live from passport.gov.ph, hour by hour.', 'label', 154, 600, 36, 'font-weight:600;color:var(--ink-2)');
+  const cam = el('div', 'abs', r);
+  cam.style.transformOrigin = '0 0';
+  const ph = phone(cam); screenImg(ph, 'baguio-cal-top'); screenImg(ph, 'baguio-hours-view');
+  const cur = el('div', 'cursor abs', ph.p, CURSOR);
+  const rip = el('div', 'ripple abs', ph.p);
+  const rings = BOX.hours.slice(0, 2).map(() => el('div', 'ring abs', ph.p));
+  return { h, h2, s, cam, ph, cur, rip, rings };
+}, (t, c) => {
+  const t0 = bar(12);
+  reveal(c.h, t, t0 + 0.05, 0.45);
+  reveal(c.h2, t, bar(13), 0.45);
+  reveal(c.s, t, bar(13, 2), 0.45);
+  const pin = E.outExpo(prog(t, t0, t0 + 0.7));
+  const zoom = E.inOutCubic(prog(t, bar(13), bar(13, 2)));
+  // Camera: from the whole phone to its hours, which end up centred on the right half.
+  put(c.cam, { x: lerp(1150 + (1 - pin) * 800, 1063, zoom), y: lerp(70, -143, zoom), s: lerp(1, 1.5, zoom) });
+  put(c.ph.p, { x: 0, y: Math.sin(t * 1.3) * 6, ry: -4 });
+  // One continuous scroll: the hours screenshot is the same page, further down.
+  const sy = BOX.hoursScroll * E.inOutCubic(prog(t, bar(13) - 0.1, bar(13) + 0.45));
+  showImg(c.ph, 'baguio-cal-top', sy, 1);
+  showImg(c.ph, 'baguio-hours-view', sy - BOX.hoursScroll, 1);
+  // The tap on Wed 7 Oct.
+  const tapT = bar(12, 2.5);
+  const d = BOX.day, target = onScreen(d.x + d.w / 2, d.y + d.h / 2);
+  const ca = E.outExpo(prog(t, t0 + 0.4, tapT));
+  put(c.cur, { x: lerp(700, target.x - 8, ca), y: lerp(1100, target.y - 6, ca), o: t < bar(13) - 0.1 ? 1 : 0, s: 1 - 0.15 * Math.exp(-Math.max(0, t - tapT) * 12) * (t > tapT ? 1 : 0) });
+  const rp = prog(t, tapT, tapT + 0.4);
+  put(c.rip, { x: target.x, y: target.y, s: 0.3 + rp, o: t > tapT && t < bar(13) - 0.1 ? 1 - rp : 0 });
+  // Rings on the hours with room, on the beat.
+  BOX.hours.slice(0, 2).forEach((b, i) => {
+    const on = bar(13, 2 + i * 2);
+    const q = E.outBack(prog(t, on, on + 0.35));
+    const ring = c.rings[i], pos = onScreen(b.x - 6, b.y - 6);
+    ring.style.width = (b.w + 12) * PHONE_S + 'px'; ring.style.height = (b.h + 12) * PHONE_S + 'px';
+    put(ring, { x: pos.x, y: pos.y, s: Math.max(0.001, 0.9 + 0.1 * q) * (1 + 0.02 * kickPulse(t, on)), o: q > 0 ? 1 : 0 });
+  });
+});
+
+// 7. The email alert.
+const EMAIL = 'juan@example.com';
+const MAIL_K = 720 / MAIL.width; // email-card.png is shown 720 wide
+const MAIL_ROWS = MAIL.rows.slice(0, 4);
+scene(bar(15), bar(19), 'light', (r) => {
+  const h = line(r, 'Pick your offices.', 'h1', 150, 300, 110);
+  const h2 = line(r, 'Add your email.', 'h1', 150, 410, 110);
+  const h3 = line(r, 'A date opens?', 'h1', 150, 300, 120);
+  const h4 = line(r, 'You get the email.', 'h1', 150, 420, 120, 'color:var(--open)');
+  const s = line(r, 'Then book it yourself on passport.gov.ph, for free.', 'label', 154, 580, 36, 'font-weight:600;color:var(--ink-2)');
+  const ph = phone(r); screenImg(ph, 'alert-sheet-empty');
+  const cover = el('div', 'abs', ph.p);
+  const ib = BOX.email, ip = onScreen(ib.x + 2, ib.y + 2);
+  cover.style.cssText += `width:${(ib.w - 4) * PHONE_S}px;height:${(ib.h - 4) * PHONE_S}px;background:#fff;border-radius:6px;`;
+  put(cover, { x: ip.x, y: ip.y });
+  const typed = el('div', 'typed abs', ph.p);
+  const cur = el('div', 'cursor abs', ph.p, CURSOR);
+  const rip = el('div', 'ripple abs', ph.p);
+  const notif = el('div', 'notif abs', ph.p, `<div class="icon">${LOGO(40)}</div><div><div class="top"><span>PengePassportPH</span><span>now</span></div><div class="title">${MAIL.subject}</div><div>New appointment dates opened for 1 person…</div></div>`);
+  const mail = el('div', 'mail abs', r, `<div class="head"><div><b>PengePassportPH</b> &lt;alerts@penge.alphaexperiments.com&gt;</div><div>To: ${EMAIL}</div><div class="subj">${MAIL.subject}</div></div><div class="mbody" style="position:relative"><img src="assets/email-card.png"></div>`);
+  const hl = MAIL_ROWS.map(() => el('div', 'abs', mail.querySelector('.mbody')));
+  hl.forEach((x) => (x.style.cssText += 'border-radius:6px;background:rgba(10,122,67,0.18);'));
+  return { h, h2, h3, h4, s, ph, cover, typed, cur, rip, notif, mail, hl };
+}, (t, c) => {
+  const t0 = bar(15);
+  reveal(c.h, t, t0 + 0.05, 0.45, bar(17) - 0.35);
+  reveal(c.h2, t, t0 + BEAT * 2, 0.45, bar(17) - 0.35);
+  reveal(c.h3, t, bar(17), 0.4);
+  reveal(c.h4, t, bar(17, 1), 0.45);
+  reveal(c.s, t, bar(18, 2), 0.45);
+  // The phone; when the email arrives it drops away and the email takes its place.
+  const pin = E.outExpo(prog(t, t0, t0 + 0.7));
+  const away = E.inCubic(prog(t, bar(18) - 0.25, bar(18) + 0.2));
+  put(c.ph.p, { x: 1230 + (1 - pin) * 800, y: 70 + Math.sin(t * 1.3) * 6 + away * 500, ry: -4, s: 1 - away * 0.1, o: 1 - away });
+  showImg(c.ph, 'alert-sheet-empty', 0, 1);
+  // Typing, a character at a time, into the real field (its placeholder hidden once typing starts).
+  const n = Math.floor(clamp((t - (t0 + 0.4)) / 0.09, 0, EMAIL.length));
+  c.cover.style.opacity = t > t0 + 0.4 ? 1 : 0;
+  const field = onScreen(BOX.email.x + 13, BOX.email.y + 13);
+  c.typed.style.fontSize = 16 * PHONE_S + 'px';
+  c.typed.innerHTML = EMAIL.slice(0, n) + (t < bar(16) && Math.floor(t * 3) % 2 === 0 ? '<span class="caret"></span>' : '');
+  put(c.typed, { x: field.x, y: field.y });
+  // The tap on "Send confirmation email".
+  const tapT = bar(16, 1);
+  const sb = BOX.send, target = onScreen(sb.x + sb.w / 2, sb.y + sb.h / 2);
+  const ca = E.outExpo(prog(t, bar(16) - 0.3, tapT));
+  put(c.cur, { x: lerp(560, target.x - 8, ca), y: lerp(1100, target.y - 6, ca), o: t > bar(16) - 0.3 && t < bar(17) ? 1 : 0, s: 1 - 0.15 * Math.exp(-Math.max(0, t - tapT) * 12) * (t > tapT ? 1 : 0) });
+  const rp = prog(t, tapT, tapT + 0.4);
+  put(c.rip, { x: target.x, y: target.y, s: 0.3 + rp, o: t > tapT && t < bar(17) ? 1 - rp : 0 });
+  // The chime: a notification drops onto the screen.
+  const nq = E.outBack(prog(t, bar(17), bar(17) + 0.45));
+  put(c.notif, { x: 14 + 10, y: lerp(-200, 70, nq), o: t > bar(17) ? 1 : 0 });
+  // The email itself rises into the phone's place.
+  const mq = E.outExpo(prog(t, bar(18) - 0.05, bar(18) + 0.7));
+  put(c.mail, { x: 1030, y: lerp(1100, 130, mq) + Math.sin(t * 1.2) * 6, ry: -5, s: 1.06, o: mq > 0 ? 1 : 0 });
+  // Its dates light up, one per half beat.
+  c.hl.forEach((h, i) => {
+    const q = E.outCubic(prog(t, bar(18, 1 + i * 0.5), bar(18, 1 + i * 0.5) + 0.3));
+    h.style.left = 40 * MAIL_K + 'px'; h.style.top = (MAIL_ROWS[i] - 1) * MAIL_K + 'px';
+    h.style.height = 26 * MAIL_K + 'px'; h.style.width = q * 150 * MAIL_K + 'px';
+  });
+});
+
+// 8. What it is, and what it is not.
+scene(bar(19), bar(21), 'dark', (r) => {
+  const items = [
+    ['Read-only.', 'It only reads the public calendar.'],
+    ['Never books.', 'It won’t hold or sell a slot.'],
+    ['Not a fixer.', 'Not the DFA, and not affiliated.'],
+    ['Free.', 'Walang bayad. Open source.'],
+  ].map(([a, b]) => ({ a: line(r, a, 'h1', 0, 0, 104, 'color:#fff'), b: line(r, b, 'label muted', 0, 0, 36), check: el('div', 'abs', r, CHECK.replace('width="30" height="30"', 'width="72" height="72"')) }));
+  return { items };
+}, (t, c) => {
+  c.items.forEach((l, i) => {
+    const on = bar(19, i * 2);
+    const x = i % 2 ? 1060 : 230, y = i < 2 ? 260 : 610;
+    l.a.m.style.left = x + 'px'; l.a.m.style.top = y + 'px';
+    l.b.m.style.left = x + 4 + 'px'; l.b.m.style.top = y + 124 + 'px';
+    reveal(l.a, t, on, 0.4); reveal(l.b, t, on + 0.12, 0.4);
+    const q = E.outBack(prog(t, on, on + 0.35));
+    l.check.style.color = 'var(--glow)';
+    put(l.check, { x: x - 100, y: y + 20, s: Math.max(0.001, q), o: q > 0 ? 1 : 0 });
+  });
+});
+
+// 9. Open source.
+scene(bar(21), bar(22), 'dark', (r) => {
+  const h = line(r, 'Open source. Build on it.', 'h1', 0, 150, 96, 'color:#fff');
+  h.m.style.width = '1920px'; h.s.style.textAlign = 'center';
+  const term = el('div', 'term abs', r, '<div class="bar"><i></i><i></i><i></i></div><pre></pre>');
+  const s = line(r, 'MIT license. On npm and PyPI.', 'label muted', 0, 880, 36);
+  s.m.style.width = '1920px'; s.s.style.textAlign = 'center';
+  return { h, term, s };
+}, (t, c) => {
+  const t0 = bar(21);
+  reveal(c.h, t, t0, 0.4);
+  reveal(c.s, t, t0 + BEAT * 2, 0.4);
+  const q = E.outExpo(prog(t, t0 + 0.05, t0 + 0.5));
+  put(c.term, { x: 410, y: 320 + (1 - q) * 60, o: q });
+  // The two installs, with the lines npm and pip really print.
+  const cmd1 = 'npm i penge-passport-ph', cmd2 = 'pip install penge-passport-ph';
+  const n1 = Math.floor(clamp((t - t0 - 0.2) / 0.02, 0, cmd1.length));
+  const n2 = Math.floor(clamp((t - t0 - 0.95) / 0.02, 0, cmd2.length));
+  let out = `<span class="p">$</span> ${cmd1.slice(0, n1)}`;
+  if (t > t0 + 0.75) out += `\n<span class="o">added 1 package, and audited 2 packages in 954ms</span>`;
+  if (t > t0 + 0.9) out += `\n<span class="p">$</span> ${cmd2.slice(0, n2)}`;
+  if (t > t0 + 1.62) out += `\n<span class="o">Successfully installed penge-passport-ph-0.1.1</span>`;
+  c.term.querySelector('pre').innerHTML = out;
+});
+
+// 10. End card.
+scene(bar(22), LENGTH, 'white', (r) => {
+  const logo = el('div', 'abs', r);
+  logo.style.cssText += 'left:150px;top:230px;width:170px;height:170px;';
+  const word = line(r, 'PengePassport<span style="color:var(--ink-2)">PH</span>', 'h1', 150, 430, 130);
+  const tag = line(r, 'Free passport appointment alerts,<br>in the Philippines and abroad.', 'label', 154, 590, 44, 'font-weight:600;color:var(--ink-2);line-height:1.25');
+  const url = el('div', 'urlpill abs', r, 'alphaexperiments.com/pengepassportph');
+  const qr = el('div', 'qrcard abs', r, '<img src="assets/qr.svg"><p>Scan to get alerts</p>');
+  const fine = el('div', 'fine abs', r, 'Unofficial. Not run by or affiliated with the Department of Foreign Affairs. Open source: github.com/alpharomercoma/penge-passport-ph');
+  return { logo, word, tag, url, qr, fine, r };
+}, (t, c) => {
+  const t0 = bar(22);
+  // A slow push-in holds the end card alive.
+  put(c.r, { s: 1 + 0.035 * E.outCubic(prog(t, t0, LENGTH)) });
+  const p = E.outBack(prog(t, t0, t0 + 0.5));
+  const open = E.outElastic(prog(t, t0 + 0.2, t0 + 1.0));
+  const final = kickPulse(t, bar(25)) * (t > bar(25) ? 1 : 0);
+  c.logo.innerHTML = LOGO(170, Math.max(0, open) * (1 + 0.5 * Math.exp(-Math.max(0, t - bar(25)) * 5) * (t > bar(25) ? 1 : 0)));
+  put(c.logo, { s: Math.max(0.001, p) * (1 + 0.04 * final) });
+  reveal(c.word, t, t0 + 0.15, 0.5);
+  reveal(c.tag, t, t0 + BEAT * 2, 0.5);
+  const u = E.outExpo(prog(t, bar(23), bar(23) + 0.6));
+  put(c.url, { x: 150, y: 760 + (1 - u) * 50, o: u });
+  const q = E.outBack(prog(t, bar(23, 2), bar(23, 2) + 0.5));
+  put(c.qr, { x: 1410, y: 290 + (1 - q) * 60, s: Math.max(0.001, 0.9 + 0.1 * q), o: q > 0 ? 1 : 0 });
+  const f = prog(t, bar(24), bar(24) + 0.6);
+  put(c.fine, { x: 150, y: 960, o: f });
+});
+
+// ---------------------------------------------------------------------------
+// Cuts: two panels (green, then ink) sweep right to left, covering the old scene
+// exactly on the bar line and uncovering the new one, whose animation starts under them.
+const flash = el('div', 'flash'), black = el('div', 'black');
+const WIPES = [bar(6), bar(9), bar(12), bar(15), bar(19), bar(21)];
+const panels = [el('div', 'wipe'), el('div', 'wipe')];
+panels[0].style.background = 'var(--open)'; panels[1].style.background = 'var(--ink)';
+const HALF = 0.28;
+function sweep(panel, t, W, lag) {
+  const a = prog(t, W - HALF + lag, W + lag), b = prog(t, W + lag, W + HALF + lag);
+  if (a <= 0 || b >= 1) return false;
+  // Leading edge comes in from the right; then the trailing edge follows it out to the left.
+  const lead = lerp(112, -12, E.inCubic(a));
+  const trail = lerp(112, -12, E.outCubic(b));
+  panel.style.clipPath = `polygon(${lead}% 0, ${b > 0 ? trail + 10 : 140}% 0, ${b > 0 ? trail : 130}% 100%, ${lead - 10}% 100%)`;
+  return true;
+}
+
+window.renderAt = function (t) {
+  for (const sc of scenes) {
+    const visible = t >= sc.start && t < sc.end;
+    sc.root.style.visibility = visible ? 'visible' : 'hidden';
+    if (visible) sc.render(t, sc.ctx);
+  }
+  panels.forEach((pn, k) => {
+    const on = WIPES.some((W) => sweep(pn, t, W, k ? 0.05 : -0.05));
+    pn.style.visibility = on ? 'visible' : 'hidden';
+  });
+  // The silence before the drop, then a white flash on it.
+  black.style.opacity = t > bar(4) - BEAT * 0.5 && t < bar(4) ? 1 : 0;
+  const fl = t >= bar(4) ? Math.exp(-(t - bar(4)) * 7) : 0;
+  const fl2 = t >= bar(22) ? Math.exp(-(t - bar(22)) * 8) * 0.8 : 0;
+  flash.style.opacity = Math.max(fl, fl2);
+};
+
+window.ready = Promise.all([...document.images].map((i) => (i.complete ? Promise.resolve() : new Promise((res) => { i.onload = i.onerror = res; }))))
+  .then(() => document.fonts.ready)
+  .then(() => true);
+const q = new URLSearchParams(location.search);
+window.renderAt(Number(q.get('t') ?? 0));
+</script>
+</body>
+</html>

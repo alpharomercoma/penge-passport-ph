@@ -23,6 +23,7 @@ Thanks for helping. Three ground rules come before everything else:
 | `apps/web/` | The website: React, built to static files |
 | `deploy/` | Server provisioning, systemd units, Caddy, releases, mail ([runbook](deploy/README.md)) |
 | `scripts/canary/` | The canary that watches passport.gov.ph for changes |
+| `marketing/` | The launch video, built from code ([how](marketing/ad/README.md)), and the launch post |
 
 ## Development
 
