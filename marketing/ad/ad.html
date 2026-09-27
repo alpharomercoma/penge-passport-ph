@@ -432,8 +432,8 @@ const MAIL_ROWS = MAIL.rows.slice(0, 4);
 scene(bar(15), bar(19), 'light', (r) => {
   const h = line(r, 'Pick your offices.', 'h1', 150, 300, 110);
   const h2 = line(r, 'Add your email.', 'h1', 150, 410, 110);
-  const h3 = line(r, 'A date opens?', 'h1', 150, 300, 120);
-  const h4 = line(r, 'You get the email.', 'h1', 150, 420, 120, 'color:var(--open)');
+  const h3 = line(r, 'A date opens?', 'h1', 150, 300, 112);
+  const h4 = line(r, 'You get the email.', 'h1', 150, 415, 112, 'color:var(--open)');
   const s = line(r, 'Then book it yourself on passport.gov.ph, for free.', 'label', 154, 580, 36, 'font-weight:600;color:var(--ink-2)');
   const ph = phone(r); screenImg(ph, 'alert-sheet-empty');
   const cover = el('div', 'abs', ph.p);
@@ -479,7 +479,7 @@ scene(bar(15), bar(19), 'light', (r) => {
   put(c.notif, { x: 14 + 10, y: lerp(-200, 70, nq), o: t > bar(17) ? 1 : 0 });
   // The email itself rises into the phone's place.
   const mq = E.outExpo(prog(t, bar(18) - 0.05, bar(18) + 0.7));
-  put(c.mail, { x: 1030, y: lerp(1100, 130, mq) + Math.sin(t * 1.2) * 6, ry: -5, s: 1.06, o: mq > 0 ? 1 : 0 });
+  put(c.mail, { x: 1085, y: lerp(1100, 150, mq) + Math.sin(t * 1.2) * 6, ry: -5, s: 1.02, o: mq > 0 ? 1 : 0 });
   // Its dates light up, one per half beat.
   c.hl.forEach((h, i) => {
     const q = E.outCubic(prog(t, bar(18, 1 + i * 0.5), bar(18, 1 + i * 0.5) + 0.3));
