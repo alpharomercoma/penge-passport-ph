@@ -36,8 +36,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "penge-passport-ph": "./dist/cli.js",
-    "penge": "./dist/cli.js"
+    "penge-passport-ph": "dist/cli.js",
+    "penge": "dist/cli.js"
   },
   "files": [
     "dist",

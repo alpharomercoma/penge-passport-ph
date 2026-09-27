@@ -18,7 +18,7 @@ describe('package identity', () => {
   it('matches package.json everywhere it is repeated', () => {
     expect(NAME).toBe(pkg.name);
     expect(VERSION).toBe(pkg.version);
-    expect(pkg.bin).toEqual({ [NAME]: './dist/cli.js', [CLI_ALIAS]: './dist/cli.js' });
+    expect(pkg.bin).toEqual({ [NAME]: 'dist/cli.js', [CLI_ALIAS]: 'dist/cli.js' });
     expect(NAME).toBe(DISPLAY_NAME.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase());
     expect(pkg.homepage).toBe(HOMEPAGE);
     expect(pkg.repository.url).toBe(`git+${REPOSITORY}.git`);
