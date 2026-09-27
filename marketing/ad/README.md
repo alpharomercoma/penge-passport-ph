@@ -2,7 +2,11 @@
 
 A 49-second, 1920×1080 ad for PengePassportPH, built entirely from code: screens of the live site
 captured with Playwright, one HTML page that animates them frame by frame, and an original track
-synthesised in Python. `out/` and `frames/` are generated and not committed.
+synthesised in Python.
+
+The finished video is [`out/pengepassportph-ad-16x9.mp4`](out/pengepassportph-ad-16x9.mp4) (60 fps,
+H.264 and AAC, -14 LUFS), with a cover image in [`out/thumbnail.png`](out/thumbnail.png). The rest of
+`out/` and all of `frames/` are generated and not committed.
 
 ## Build it
 
@@ -10,6 +14,8 @@ synthesised in Python. `out/` and `frames/` are generated and not committed.
 cd marketing/ad
 ./build.sh   # out/pengepassportph-ad-16x9.mp4 and out/thumbnail.png
 ```
+
+A rebuild rewrites the committed video and thumbnail; commit them again with the change that made them.
 
 Needs Node 22+ with the repo's `npm ci` (for Playwright), [uv](https://docs.astral.sh/uv/) and
 ffmpeg. About 3 minutes on an M5.

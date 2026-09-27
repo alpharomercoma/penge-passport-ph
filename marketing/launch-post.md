@@ -1,6 +1,7 @@
 # Launch post
 
-The LinkedIn caption that goes with [the launch video](ad/README.md) (2026-09-28). The same rules
+The LinkedIn caption that goes with [the launch video](ad/out/pengepassportph-ad-16x9.mp4) ([how it's
+built](ad/README.md)) (2026-09-28). The same rules
 apply: every claim checked against the live site and the code, no real addresses.
 
 ```text
