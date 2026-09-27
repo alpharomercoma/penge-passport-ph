@@ -2,6 +2,7 @@ import { gunzipSync } from 'node:zlib';
 import type { Site } from 'penge-passport-ph';
 import { describe, expect, it } from 'vitest';
 import {
+  ABROAD_DEADLINE_MS,
   ABROAD_POSTS_PER_RUN,
   ABROAD_REQUESTS_PER_RUN,
   ACTIVE_EVERY_MINUTES,
@@ -125,14 +126,14 @@ describe('posts abroad', () => {
     const w = await world();
     w.abroad.countryList.set(
       2,
-      Array.from({ length: 20 }, (_, i) => ({ id: 100 + i, name: `Country ${i}` })),
+      Array.from({ length: 50 }, (_, i) => ({ id: 100 + i, name: `Country ${i}` })),
     );
-    // 2 regions + 21 countries = 23 steps. The first reading takes a run's whole
+    // 2 regions + 51 countries = 53 steps. The first reading takes a run's whole
     // allowance (and checks no posts meanwhile); the posts follow once it is done.
     const first = (await w.run()).abroad!;
     expect(first).toMatchObject({ catalogSteps: ABROAD_REQUESTS_PER_RUN, checked: 0 });
     const second = (await w.run()).abroad!;
-    expect(second.catalogSteps).toBe(23 - ABROAD_REQUESTS_PER_RUN);
+    expect(second.catalogSteps).toBe(53 - ABROAD_REQUESTS_PER_RUN);
     // The rest of the allowance checks posts: here only Japan's two (the new countries list none).
     expect(second.checked).toBe(2);
     expect(await w.kv.get(K.abroadCatalogAt)).not.toBeNull();
@@ -149,15 +150,25 @@ describe('posts abroad', () => {
     expect(countries).toEqual(new Set(['Japan']));
   });
 
-  it('checks the most overdue posts, a dozen per run, and each again about hourly', async () => {
+  it('checks the most overdue posts, a few dozen per run, and each again about hourly', async () => {
     const w = await world();
-    w.abroad.posts.set(62, Array.from({ length: 30 }, (_, i) => post(500 + i, `PE Post ${i}`)));
+    w.abroad.posts.set(62, Array.from({ length: 2 * ABROAD_POSTS_PER_RUN + 6 }, (_, i) => post(500 + i, `PE Post ${i}`)));
     const checked: number[] = [];
     for (let i = 0; i < 4; i++) checked.push((await w.run()).abroad!.checked);
-    // 32 posts: 12, 12, 8, then nothing due until the hour is up.
+    // 2 x ABROAD_POSTS_PER_RUN + 8 posts: two full runs, 8, then nothing due until the hour is up.
     expect(checked).toEqual([ABROAD_POSTS_PER_RUN, ABROAD_POSTS_PER_RUN, 8, 0]);
     w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
     expect((await w.run()).abroad!.checked).toBe(ABROAD_POSTS_PER_RUN);
+  });
+
+  it('checks every post in one run when swept by hand, due or not', async () => {
+    const w = await world();
+    w.abroad.posts.set(62, Array.from({ length: 2 * ABROAD_POSTS_PER_RUN + 6 }, (_, i) => post(500 + i, `PE Post ${i}`)));
+    await w.run(); // reads the list and checks the first posts
+    const report = await runCheck({ ...w.deps, abroadSweep: true, runId: 'sweep' });
+    expect(report.abroad!.checked).toBe(2 * ABROAD_POSTS_PER_RUN + 8);
+    // Afterwards the rotation carries on: nothing is due again for an hour.
+    expect((await w.run()).abroad!.checked).toBe(0);
   });
 
   it('asks a post that publishes nothing less often, unless someone follows it', async () => {
@@ -227,10 +238,10 @@ describe('posts abroad', () => {
 
   it('leaves posts for the next run when the run is getting long', async () => {
     const w = await world();
-    // Each post takes 2.5 minutes: past the 4-minute mark the rest wait, due still.
+    // Each post takes 60% of the time a run has for them: the third waits for the next run, due still.
     const slow = w.abroad.availability.bind(w.abroad);
     w.abroad.availability = async (q) => {
-      w.t.advance(150_000);
+      w.t.advance(ABROAD_DEADLINE_MS * 0.6);
       return slow(q);
     };
     const report = await w.run();

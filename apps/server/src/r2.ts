@@ -20,7 +20,7 @@ export interface SnapshotSink {
   listObjects?(prefix: string): Promise<string[]>;
 }
 
-/** Spooled scans kept at most (~5.5 KB each, ~27 MB): about 17 days of scans every 5 minutes. */
+/** Spooled scans kept at most (~5.5 KB each, ~27 MB): about 52 days of scans every 15 minutes. */
 export const MAX_SPOOL_FILES = 5000;
 
 export interface R2Options {

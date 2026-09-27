@@ -64,6 +64,8 @@ export interface CheckDeps {
   upstream: Upstream;
   /** Posts abroad, on their own rate limiter (abroad.ts); without it only the Philippines is scanned. */
   abroad?: AbroadUpstream;
+  /** Check every post abroad this run, due or not: a sweep started by hand (PENGE_ABROAD_SWEEP=1). */
+  abroadSweep?: boolean;
   sink: SnapshotSink;
   mailer: Mailer;
   keys: Keys;
@@ -86,10 +88,11 @@ export const RETRY_CAP = 3;
 /**
  * A scan that still has this many offices answering with errors (after the
  * retries), or that the rate limiter paused, makes the next scans wait
- * COOLDOWN_SECONDS: a struggling site is asked every 15 minutes, not every 5.
+ * COOLDOWN_SECONDS: the next run is skipped, so a struggling site is asked
+ * every 30 minutes, not every 15.
  */
 export const COOLDOWN_ERRORS = 3;
-export const COOLDOWN_SECONDS = 10 * 60;
+export const COOLDOWN_SECONDS = 20 * 60;
 export const LOCK_TTL_SECONDS = 20 * 60;
 /** More offices than this and the list itself is suspect (there are 43 in 2026). */
 export const MAX_SITES = 150;
@@ -445,7 +448,7 @@ async function abroadPass(
   const firstReading = (await kv.get(K.abroadCatalogAt)) === null;
   const catalog = await stepCatalog(kv, upstream, now, more, log, firstReading ? ABROAD_REQUESTS_PER_RUN : CATALOG_STEPS_PER_RUN);
   const maxPosts = Math.min(ABROAD_POSTS_PER_RUN, ABROAD_REQUESTS_PER_RUN - catalog.steps);
-  const { observations, circuitOpen } = await scanAbroad({ kv, upstream, now, more, holdLock, maxPosts });
+  const { observations, circuitOpen } = await scanAbroad({ kv, upstream, now, more, holdLock, maxPosts, all: deps.abroadSweep === true });
   const followed = new Set<number>();
   for (const o of observations) if ((await kv.sMembers(K.siteSubscribers(o.id))).length > 0) followed.add(o.id);
   await writeAbroadStatus(kv, observations, now(), (id) => followed.has(id));

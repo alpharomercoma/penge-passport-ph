@@ -1,7 +1,7 @@
 // Posts abroad: the embassies and consulates, and their outreach missions,
 // that book passport appointments on passport.gov.ph too. There are about 130,
-// three times the offices at home, so they are not all asked every 5 minutes.
-// Each run checks the dozen that are most overdue, on their own rate limiter
+// three times the offices at home, so they are not all asked on every run.
+// Each run checks the 36 that are most overdue, on their own rate limiter
 // (budget.ts): a post that publishes dates, or that someone follows, about
 // once an hour; one that publishes none every few hours. The list of posts is
 // itself read again once a week, a few countries per run.
@@ -19,8 +19,8 @@ export interface AbroadUpstream {
   availability(query: { siteId: number; applicants: number }): Promise<Availability>;
 }
 
-/** Posts checked in one run. 12 runs an hour x 12 covers every post about hourly. */
-export const ABROAD_POSTS_PER_RUN = 12;
+/** Posts checked in one run. 4 runs an hour x 36 covers every post about hourly. */
+export const ABROAD_POSTS_PER_RUN = 36;
 /** Steps of the weekly reading of the list (one region or one country each) in one run. */
 export const CATALOG_STEPS_PER_RUN = 6;
 /**
@@ -34,8 +34,11 @@ export const ABROAD_GROUP_CAP = 4;
 export const ACTIVE_EVERY_MINUTES = 60;
 export const QUIET_EVERY_MINUTES = 6 * 60;
 export const CATALOG_MAX_AGE_MS = 7 * 24 * 3600_000;
-/** Posts abroad are left for the next run once a run is this old, so it ends before the next starts. */
-export const ABROAD_DEADLINE_MS = 4 * 60_000;
+/**
+ * Posts abroad are left for the next run once a run is this old, so it ends
+ * before the next starts (runs are 15 minutes apart; systemd stops one at 15).
+ */
+export const ABROAD_DEADLINE_MS = 12 * 60_000;
 /** The Philippines is region 1, country 1 on passport.gov.ph: its offices are the main scan. */
 const HOME = { regionId: 1, countryId: 1 };
 
@@ -196,14 +199,16 @@ export async function scanAbroad(opts: {
   more: () => boolean;
   holdLock: () => Promise<void>;
   maxPosts?: number;
+  /** Every post, due or not: a sweep started by hand. */
+  all?: boolean;
 }): Promise<{ observations: AbroadObservation[]; circuitOpen: boolean }> {
   const { kv, upstream, now } = opts;
   const stored = await storedStatus(kv);
   const due = (await catalogPosts(kv))
     .map((post) => ({ post, dueAt: stored.get(post.id)?.dueAt ?? 0 }))
-    .filter((p) => p.dueAt <= now())
+    .filter((p) => opts.all || p.dueAt <= now())
     .sort((a, b) => a.dueAt - b.dueAt || a.post.id - b.post.id)
-    .slice(0, opts.maxPosts ?? ABROAD_POSTS_PER_RUN);
+    .slice(0, opts.all ? undefined : (opts.maxPosts ?? ABROAD_POSTS_PER_RUN));
 
   const observations: AbroadObservation[] = [];
   let circuitOpen = false;

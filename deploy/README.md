@@ -31,11 +31,11 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
 
 ## What the checker does, and when it refuses to email
 
-Every 5 minutes (a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
+Every 15 minutes (a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
 `penge-check.service` asks every office for its calendar for one person, looks up group sizes that
 subscribers asked for, and stores the scan in R2. Then, only if the scan passes its checks,
 it compares each office with its last good look and emails whoever was waiting for a date that just
-opened. After that, the same run checks the dozen most overdue of the ~130 posts abroad (below). The
+opened. After that, the same run checks the 36 most overdue of the ~130 posts abroad (below). The
 guardrails:
 
 1. One run at a time, enforced in Redis, so a laptop pointed at the same Redis cannot race the server.
@@ -56,8 +56,8 @@ guardrails:
    part-way through may already have gone out, so it stays charged and is never sent twice.
 9. A Redis flag pauses all delivery at once (below).
 10. **The checker rests when the site struggles.** If, after the retries, 3 or more offices still
-    answer with errors, or the rate limiter had to pause, the next scans wait 10 minutes: the site is
-    then asked every 15 minutes instead of every 5. A scan still running when the next is due is
+    answer with errors, or the rate limiter had to pause, the next scans wait 20 minutes: the next run
+    is skipped, so the site is asked every 30 minutes instead of every 15. A run still going when the next is due is
     skipped by systemd, so a slow site also slows the scans.
 
 Exit code 3 means the scan failed its checks and nothing was emailed; `systemctl --failed` shows it.
@@ -66,11 +66,11 @@ The API asks passport.gov.ph too, but only when someone opens an office or taps 
 for a group, and the hours of a day. Each answer is shared with everyone for 3 minutes.
 
 **Posts abroad** (`apps/server/src/abroad.ts`): the embassies, consulates and outreach missions that
-book on passport.gov.ph too, 133 in 68 countries in September 2026. They are not all asked every 5
-minutes. Each run, after the scan at home and its emails, checks the dozen most overdue on their own
+book on passport.gov.ph too, 133 in 67 countries in September 2026. They are not all asked on every
+run. Each run, after the scan at home and its emails, checks the 36 most overdue on their own
 rate limiter: a post that publishes dates, or that someone follows, about once an hour; one that
 publishes none, every 6 hours. The list of posts is read again once a week, a few countries per run
-(18 a run the first time, so a new server lists them within half an hour, checking none meanwhile).
+(all 42 of a run's requests the first time, so a new server lists them within half an hour, checking none meanwhile).
 Alerts follow the same rules as at home; a run where most of its posts failed sends nothing from them,
 and each post that failed keeps what was known. What each run saw goes to R2 under `scans-abroad/`.
 
@@ -78,8 +78,8 @@ and each post that failed keeps what was known. What each run saw goes to R2 und
 
 | | Rate limiter state | Most in any rolling hour | What fills it |
 |---|---|---|---|
-| Scans | `/var/lib/penge/limiter/scans` | 720 | 12 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 696 at most |
-| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 12 runs × (a session, 18 shared by 12 posts and 6 steps of reading the list, 4 group checks) = 276 at most; about 156 usually |
+| Scans | `/var/lib/penge/limiter/scans` | 300 | 4 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 232 at most, leaving room for one run by hand |
+| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 4 runs × (a session, 42 shared by 36 posts and 6 steps of reading the list, 4 group checks) = 188 at most, leaving room for a sweep by hand (about 135) |
 | Visitors' lookups | `/var/lib/penge/limiter/lookups` | 1000 | Fresh dates, group dates, hours of a day, and the API's own sessions |
 
 All are enforced by the library over an exact rolling hour, each request at least 3 seconds after
@@ -94,9 +94,9 @@ All times are Manila time; the server's clock is UTC.
 
 | What | When | Notes |
 |---|---|---|
-| Every office's dates, for one person | A scan starts at :02, :07, :12… and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker rests 10 minutes after a scan the site struggled with |
+| Every office's dates, for one person | A scan starts at :02, :17, :32 and :47 and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker skips a run after a scan the site struggled with |
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
-| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | A dozen posts each run, after the scan at home and its emails; alerts in the same run. The list of posts is read again weekly |
+| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | 36 posts each run, after the scan at home and its emails; alerts in the same run. The list of posts is read again weekly |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA; shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
@@ -280,6 +280,15 @@ journalctl -u penge-check -n 20 -o cat           # last scans: one JSON line eac
 journalctl -u penge-api -f -o cat                # API log (no addresses or tokens are ever logged)
 systemctl start penge-check                      # scan now
 curl -s https://alphaexperiments.com/pengepassportph/api/status | head -c 400
+```
+
+**Check every post abroad now** (a sweep, for testing; about 135 requests on their own limiter, so at
+most about once an hour). It is a normal run, under the same lock, with the posts abroad all checked
+whether due or not; the rotation then carries on from there:
+
+```sh
+systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env -E PENGE_ABROAD_SWEEP=1 \
+  /usr/local/bin/node /opt/penge/current/server/check.mjs
 ```
 
 **Pause every email at once** (alerts and confirmation emails; checked before every message; the outbox

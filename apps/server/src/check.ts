@@ -35,6 +35,8 @@ try {
     kv,
     upstream,
     abroad,
+    // Every post abroad in this run, due or not (deploy/README.md: a sweep by hand).
+    abroadSweep: process.env.PENGE_ABROAD_SWEEP === '1',
     sink: r2Sink({ ...r2, spoolDir: config.spoolDir, log }),
     mailer,
     keys: config.keys,

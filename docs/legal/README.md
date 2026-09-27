@@ -217,24 +217,25 @@ We don't assume its servers are old or weak. What the record shows:
 
 | | Setting |
 |---|---|
-| Scans | Every 5 minutes, about 45 requests each, taking about 2.5 minutes |
-| Scans' budget | At most 720 requests in any rolling hour, on their own rate limiter (a full hour of scans needs 696 at most) |
-| Posts abroad | About 130 embassies, consulates and outreach missions, each checked about hourly (every 6 hours while it publishes none and nobody follows it), a dozen per run; at most 300 requests in any rolling hour on a third rate limiter (276 at most needed, about 156 usually) |
+| Scans | Every 15 minutes, about 45 requests each, taking about 2.5 minutes |
+| Scans' budget | At most 300 requests in any rolling hour, on their own rate limiter (a full hour of scans needs 232 at most; the rest leaves room for one run by hand) |
+| Posts abroad | About 130 embassies, consulates and outreach missions, each checked about hourly (every 6 hours while it publishes none and nobody follows it), 36 per run; at most 300 requests in any rolling hour on a third rate limiter (188 at most for the scheduled runs, leaving room for one sweep of every post by hand; roughly 100 usually) |
 | Visitors' lookups | At most 1,000 requests in any rolling hour, on a separate rate limiter; each answer shared for 3 minutes |
 | Spacing | At least 3 seconds between requests on each limiter |
-| Worst case | 2,020 requests an hour if all three budgets were ever used up (one every 1.8 s on average); the scans at home are about 540, and the posts abroad about 156 more |
+| Worst case | 1,600 requests an hour if all three budgets were ever used up (one every 2.25 s on average); the scans at home are about 180, and the posts abroad roughly 100 more |
 | Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour. After 5 failures in a row, or a single `Retry-After` longer than an hour, the limiter stops for 15 minutes, or for as long as `Retry-After` asks, up to an hour |
-| When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 10 minutes; a scan still running when the next is due is skipped |
+| When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 20 minutes (the next run is skipped); a run still going when the next is due is skipped |
 | Hard ceiling | The library refuses more than 1,200 requests an hour on any one limiter |
 | Identity | User-Agent: `penge-passport-ph/<version> (+https://alphaexperiments.com/pengepassportph/; read-only availability checker; https://alphaexperiments.com/pengepassportph)`. The last part is the library's optional `contact`, which this deployment sets to its own address |
 
 **Why these numbers.** On 27 September 2026 the maintainer moved from 15-minute scans and 300 requests an
-hour in total to the settings above.
+hour in total to 5-minute scans with 720 an hour for them, and added the posts abroad. On 28 September
+the maintainer set the scans at home back to every 15 minutes, with the posts abroad still checked about
+hourly: the settings above.
 - **The case for.** Openings are short-lived: of the openings our scans saw on 26–27 September, 60% were
   gone by the next scan 15 minutes later. Scanning more often catches more of them, sooner.
-- **Posts abroad.** Added the same day. Asking all of them every 5 minutes would have tripled the load, so
-  each is asked about once an hour, a sixth of the rate at home, and a post that publishes nothing every
-  6 hours.
+- **Posts abroad.** Asking all of them on every scan would have tripled the load, so each is asked about
+  once an hour, and a post that publishes nothing every 6 hours.
 - **The case for caution.** Our requests reach the site's origin server directly. The law's line is "reckless
   hindering". The UK shows a government can ban scanners. The DFA does not yet know this service exists.
 - The rest of this page's open items follow from that.

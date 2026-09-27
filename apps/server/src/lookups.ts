@@ -24,11 +24,11 @@ const KEEP_SECONDS = 3600;
 
 /**
  * How recent an office's scan must be to answer for one person without asking
- * the DFA again. Scans start every 5 minutes and take about 2.5, so while they
- * keep up an office's scan is never older than this; asking anyway would only
- * hold up, behind the rate limiter's spacing, the hours the visitor taps next.
+ * the DFA again. Scans start every 15 minutes and take about 2.5, so while they
+ * keep up an office's scan is never older than this: its dates are shown with
+ * their age, and the DFA is asked only for the hours of the day tapped.
  */
-export const SCAN_RECENT_SECONDS = 8 * 60;
+export const SCAN_RECENT_SECONDS = 18 * 60;
 
 export class LookupUnavailable extends Error {
   override name = 'LookupUnavailable';

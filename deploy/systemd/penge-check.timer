@@ -1,14 +1,15 @@
 [Unit]
-Description=Run the PengePassportPH checker every 5 minutes
+Description=Run the PengePassportPH checker every 15 minutes
 
 [Timer]
-# A scan is ~45 requests, 3 s apart, and takes about 2.5 minutes: 12 an hour
-# stay inside the scans' own budget (apps/server/src/budget.ts; a test reads
-# this line). A scan still running when the next is due makes systemd skip it,
-# and after a scan the site struggled with the checker rests (COOLDOWN_SECONDS).
-OnCalendar=*:02/5
-# No random delay: with one, two starts could come 4 minutes apart and an hour
-# could hold 13 scans instead of the 12 the budget allows for.
+# A scan is ~45 requests, 3 s apart, and takes about 2.5 minutes, then a third
+# of the posts abroad: 4 runs an hour stay inside their budgets
+# (apps/server/src/budget.ts; a test reads this line). A run still going when
+# the next is due makes systemd skip it, and after a scan the site struggled
+# with the checker rests (COOLDOWN_SECONDS).
+OnCalendar=*:02/15
+# No random delay: with one, two starts could come closer than 15 minutes and
+# an hour could hold 5 runs instead of the 4 the budgets allow for.
 AccuracySec=1s
 Persistent=false
 
