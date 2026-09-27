@@ -66,9 +66,11 @@ def test_node_and_python_share_one_spacing(tmp_path: Path) -> None:
         [("node", t) for t in json.loads(node_out)] + [("python", t) for t in json.loads(py_out)],
         key=lambda d: d[1],
     )
-    gaps = [b[1] - a[1] for a, b in pairwise(dispatches)]
     assert len(dispatches) == 6
-    # Timestamps are taken inside each task, a moment after the dispatch decision,
-    # and the limiter spaces on the monotonic clock; allow a few ms of measurement slack.
-    assert min(gaps) >= 2000 - 5, dispatches
     assert {who for who, _ in dispatches} == {"node", "python"}
+    # Each language records its dispatch decisions in the shared file, and that record
+    # is what the spacing governs. (The tasks' own timestamps are taken a moment later,
+    # and on a busy machine that moment varies by tens of milliseconds.)
+    decided = sorted(json.loads(Path(state).read_text())["dispatched"])
+    assert len(decided) == 6
+    assert min(b - a for a, b in pairwise(decided)) >= 2000 - 1, decided
