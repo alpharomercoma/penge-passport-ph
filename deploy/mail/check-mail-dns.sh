@@ -23,11 +23,12 @@ failed=0
 pass() { echo "ok    $1"; }
 fail() { echo "FAIL  $1"; failed=1; }
 
-a=$(q A "$MAILHOST" | head -1)
-if [[ $a == "$IP" ]]; then pass "A $MAILHOST → $IP"; else fail "A $MAILHOST: got '${a:-nothing}', want $IP"; fi
+# Any of its addresses will do: while moving servers, the name points at both.
+a=$(q A "$MAILHOST" | sort | paste -sd ' ' -)
+if [[ " $a " == *" $IP "* ]]; then pass "A $MAILHOST → $IP"; else fail "A $MAILHOST: got '${a:-nothing}', want $IP"; fi
 
 ptr=$(q -x "$IP" | head -1)
-if [[ $ptr == "$MAILHOST." ]]; then pass "PTR $IP → $MAILHOST"; else fail "PTR $IP: got '${ptr:-nothing}', want $MAILHOST. (ask RackNerd)"; fi
+if [[ $ptr == "$MAILHOST." ]]; then pass "PTR $IP → $MAILHOST"; else fail "PTR $IP: got '${ptr:-nothing}', want $MAILHOST (set it in your provider's panel)"; fi
 
 spf=$(q TXT "$DOMAIN" | grep '^v=spf1' | head -1 || true)
 if [[ $spf == *"ip4:$IP"* && $spf == *"-all"* ]]; then pass "SPF allows $IP"; else fail "SPF: got '${spf:-nothing}'"; fi

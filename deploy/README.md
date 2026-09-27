@@ -102,7 +102,8 @@ All times are Manila time; the server's clock is UTC.
 
 ## First-time setup
 
-On your machine, with the secrets in `.secrets/server.env` (never committed):
+On your machine, with the secrets in `.secrets/server.env` (never committed). A minimal Debian image may
+lack rsync: `ssh root@SERVER apt-get install -y rsync` first.
 
 ```sh
 ssh-keygen -t ed25519 -N '' -C 'penge-deploy' -f .secrets/deploy_key   # the CI deploy key
@@ -131,6 +132,39 @@ keep it only in GitHub's `production` environment.
 `provision.sh`): it listens on 127.0.0.1 only, has a password as well, keeps an append-only file, and
 never evicts. The server refuses a Redis elsewhere unless it is `rediss://` (TLS). Addresses in it are
 encrypted and queued alerts are signed; the checker copies the subscribers to R2 every day.
+
+## Moving to another server
+
+**Check first that the new server can reach passport.gov.ph**: `curl -4 -m 15 -sS -o /dev/null -w '%{http_code}\n'
+https://passport.gov.ph/` must print a status, not time out. On 27 September 2026 a move to WebHorizon's
+Singapore server (160.191.77.75) was rolled back after its first scan for exactly this reason: traffic from
+it reaches Globe's network in Manila (Innove, 222.127.98.30) and goes no further, while the US server is
+answered. That server stays set up (mail, DKIM, certificates, a release; no data, timer off), and its Caddy
+forwards anything that still reaches it to the live server. `penge` keeps an A record for it, because
+WebHorizon drops its reverse DNS when the name stops pointing there.
+
+The procedure, with scans and email paused for about five minutes:
+
+1. On the new server: timezone UTC, `apt-get full-upgrade`, reboot. Add a second A record for `penge`
+   pointing at it and ask the provider for its reverse DNS; add its IP to `penge`'s SPF record.
+2. Copy Caddy's certificates (`/var/lib/caddy/.local/share/caddy/{acme,certificates}`, owned by a `caddy`
+   user created first), so Caddy never asks for a certificate the old server still answers for.
+3. `provision.sh` as in first-time setup, then **`systemctl disable --now penge-check.timer`** at once:
+   two servers scanning double the load on passport.gov.ph, and a reboot would start it.
+4. Copy `/etc/penge/server.env` as is, then run `setup-valkey.sh` (it repoints `REDIS_URL`). Copy the DKIM
+   key (`/etc/opendkim/keys/<domain>/penge.{private,txt}`) before `setup-mail.sh`, which then keeps it.
+   `check-mail-dns.sh` passes; send yourself a test.
+5. `deploy/release.sh` to the new server.
+6. On the old server, `systemctl disable --now` the timer (after the running scan: a running oneshot is
+   `activating`, not `active`), `penge-api` and `valkey-server`. Copy `/var/lib/valkey/{appendonlydir,dump.rdb}`
+   and `/var/lib/penge/limiter` across (the limiter file carries the rolling hour over), start Valkey and
+   the API, compare `DBSIZE`, and enable the timer on the new server. Watch its first scan.
+7. Point the old Caddy at the new server (`reverse_proxy https://NEW_IP` with `header_up Host {host}` and
+   `tls_server_name`), so visitors with stale DNS still reach it. Then move the apex A record, drop the old
+   IP from `penge`'s A and SPF records, and update `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`.
+
+Rolling back is the same steps the other way. Afterwards, wipe the data left on the server you leave:
+a copy there would survive an unsubscribe.
 
 ## Deploying
 
@@ -165,8 +199,8 @@ The server sends its own mail; nothing is paid for or rate-limited by a provider
 **Mail for this deployment comes from `alerts@penge.alphaexperimental.org`**, a subdomain that is also the
 server's mail host name (HELO and reverse DNS). The apex `alphaexperimental.org` keeps its Google Workspace
 mail untouched, and the alerts' sending reputation can never affect it. DNS is on Vercel. The website is at
-<https://alphaexperimental.org/pengepassportph/> (`/p3h`, `penge.alphaexperimental.org` and the earlier
-`107-172-159-170.sslip.io` redirect there; all set in `deploy/site.conf`).
+<https://alphaexperimental.org/pengepassportph/> (`/p3h` and `penge.alphaexperimental.org` redirect there;
+both set in `deploy/site.conf`).
 
 | Step | State |
 |---|---|
@@ -174,10 +208,10 @@ mail untouched, and the alerts' sending reputation can never affect it. DNS is o
 | 2. DNS records it printed (A, SPF, DKIM `penge._domainkey.penge`, DMARC `_dmarc.penge`), added with `vercel dns add` | done |
 | 3. Website at `alphaexperimental.org/pengepassportph` (`deploy/site.conf`; `PUBLIC_BASE_URL` follows it) | done |
 | 4. `MAIL_FROM=alerts@penge.alphaexperimental.org` in `/etc/penge/server.env` | done |
-| 5. Reverse DNS: RackNerd panel → Network → Reverse DNS → Edit → `penge.alphaexperimental.org` | done |
+| 5. Reverse DNS of the server's IPv4 address: `penge.alphaexperimental.org` (RackNerd panel → Network → Reverse DNS → Edit; WebHorizon's panel refuses until `penge` already points at the IP). IPv6 needs none: Postfix sends over IPv4 only | done |
 | 6. `bash /root/penge-deploy/mail/check-mail-dns.sh`: every line `ok` | done |
-| 7. Test messages to your own inbox; "Show original" in Gmail should say SPF, DKIM and DMARC: PASS, and land in the inbox | done: after reverse DNS, a real alert landed in the inbox at Gmail (SPF, DKIM, DMARC pass) and Proton; the one test before reverse DNS went to spam |
-| 8. `MAIL_MODE=live` in `server.env`, then `systemctl restart penge-api`; the website's form switches on by itself | after 7 |
+| 7. Test messages to your own inbox; "Show original" in Gmail should say SPF, DKIM and DMARC: PASS, and land in the inbox | done: after reverse DNS, a real alert landed in the inbox at Gmail (SPF, DKIM, DMARC pass) and Proton; the one test before reverse DNS went to spam. Again from the WebHorizon server on 27 September: inbox at both |
+| 8. `MAIL_MODE=live` in `server.env`, then `systemctl restart penge-api`; the website's form switches on by itself | done (27 September 2026) |
 
 A new domain on a new IP starts with no reputation, so the first messages often go to spam whatever the
 records say. Mark them "Not spam", and send little at first: `MAIL_DAILY_LIMIT` (300) keeps volume low

@@ -90,7 +90,7 @@ postconf -e \
 echo "$DOMAIN" >/etc/mailname
 
 # Delivery logs name recipients: keep them 3 days, in their own file, not the journal.
-# Bounces (in root's mailbox) quote them too: keep those about two weeks.
+# Bounces (in root's mailbox) quote them too: the same 3 days.
 install -d -m 0750 /var/log/postfix
 cat >/etc/logrotate.d/penge-mail <<'ROTATE'
 /var/log/postfix/mail.log {
@@ -110,8 +110,8 @@ cat >/etc/logrotate.d/penge-mail <<'ROTATE'
   copytruncate
 }
 ROTATE
-# Remembered for check-mail-dns.sh.
-install -d -m 0755 /etc/penge
+# Remembered for check-mail-dns.sh. (provision.sh owns /etc/penge and its 0750 mode.)
+[[ -d /etc/penge ]] || install -d -m 0755 /etc/penge
 printf 'MAIL_DOMAIN=%s\nMAILHOST=%s\nSELECTOR=%s\n' "$DOMAIN" "$MAILHOST" "$SELECTOR" >/etc/penge/mail.conf
 
 # Bounces and postmaster mail come back to this machine and land in
@@ -153,6 +153,6 @@ if [[ $MAILHOST != "$DOMAIN" ]]; then
 fi
 cat <<NEXT
 
-Then ask RackNerd (support ticket) to set the reverse DNS (PTR) of $IP to
-$MAILHOST. Check everything with: bash check-mail-dns.sh $DOMAIN
+Then set the reverse DNS (PTR) of $IP to $MAILHOST in your provider's panel
+(it may insist that $MAILHOST already points to $IP). Check everything with: bash check-mail-dns.sh $DOMAIN
 NEXT
