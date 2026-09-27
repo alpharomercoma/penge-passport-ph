@@ -5,8 +5,8 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiFailure, type Api } from '../src/api.ts';
 import { AlertSheet } from '../src/components/AlertSheet.tsx';
-import { toOffices } from '../src/office.ts';
-import { fakeApi, STATUS } from './helpers.tsx';
+import { toAbroadOffices, toOffices } from '../src/office.ts';
+import { ABROAD, fakeApi, STATUS } from './helpers.tsx';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 150);
 const OFFICES = toOffices(STATUS.sites);
@@ -35,6 +35,36 @@ function open(api = fakeApi(), initial: number[] = [], onClose = vi.fn()) {
 }
 
 describe('alert sheet', () => {
+  it('narrows the office picker by area, and abroad, as well as by search', async () => {
+    const offices = [...OFFICES, ...toAbroadOffices(ABROAD.posts)];
+    function Both() {
+      const [selected, setSelected] = useState<number[]>([]);
+      return <AlertSheet api={fakeApi()} offices={offices} selected={selected} onSelectedChange={setSelected} onClose={() => {}} />;
+    }
+    render(<Both />);
+    const sheet = screen.getByRole('dialog');
+    const places = () => [...sheet.querySelectorAll('.pick-place')].map((e) => e.textContent);
+    const chips = within(within(sheet).getByRole('group', { name: 'Area' })).getAllByRole('button');
+    expect(chips.map((c) => c.textContent)).toEqual(['NCR', 'Luzon', 'Visayas', 'Mindanao', 'Abroad']);
+    // Everything, home first, then posts abroad by country.
+    expect(places().at(-1)).toBe('Dubai');
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Mindanao' }));
+    expect(places()).toEqual(['Davao', 'Zamboanga']);
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Abroad' }));
+    expect(places()).toEqual(['Copenhagen', 'Okinawa 2026', 'Tokyo', 'Dubai']);
+    fireEvent.change(within(sheet).getByPlaceholderText(/Search a city/), { target: { value: 'japan' } });
+    expect(places()).toEqual(['Okinawa 2026', 'Tokyo']);
+    fireEvent.change(within(sheet).getByPlaceholderText(/Search a city/), { target: { value: 'cebu' } });
+    expect(within(sheet).getByText('No office matches “cebu” abroad.')).toBeTruthy();
+
+    // Tapping the chosen area again shows every office.
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Abroad' }));
+    expect(places()).toEqual(['Cebu']);
+  });
+
+
   it('sends a valid request and shows the server message', async () => {
     const s = open(fakeApi(), [486]);
     fireEvent.change(s.email, { target: { value: ' Juan@Example.com ' } });

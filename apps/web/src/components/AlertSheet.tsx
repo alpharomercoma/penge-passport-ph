@@ -1,6 +1,7 @@
 import { type Field, LIMITS, validateSubscribe } from '@penge/contracts';
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type Api, ApiFailure, errorText } from '../api.ts';
+import { AREAS } from '../areas.ts';
 import { matches, type Office, PARTY_SIZES, partyLabel } from '../office.ts';
 import { CheckIcon, CloseIcon, SearchIcon } from './Icons.tsx';
 
@@ -12,6 +13,10 @@ interface Props {
   onSelectedChange: (ids: number[]) => void;
   onClose: () => void;
 }
+
+/** The picker's chips: the four areas at home, and every post abroad. */
+const PICK_AREAS = [...AREAS, 'Abroad'] as const;
+const pickArea = (o: Office) => (o.country ? 'Abroad' : o.area);
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([tabindex="-1"]), select, [tabindex="0"]';
 
@@ -25,16 +30,23 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
   const [website, setWebsite] = useState('');
   const [picking, setPicking] = useState(selected.length === 0);
   const [query, setQuery] = useState('');
+  // No area chosen shows every office; tapping the chosen area again clears it.
+  const [area, setArea] = useState<string | null>(null);
   const [limitHit, setLimitHit] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<Field, string>>>({});
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
 
   const byId = useMemo(() => new Map(offices.map((o) => [o.id, o])), [offices]);
+  // Offices at home first, then posts abroad by country, each by place.
   const shown = useMemo(
-    () => [...offices].filter((o) => matches(o, query)).sort((a, b) => a.place.localeCompare(b.place)),
-    [offices, query],
+    () =>
+      offices
+        .filter((o) => (!area || pickArea(o) === area) && matches(o, query))
+        .sort((a, b) => (a.country ?? '').localeCompare(b.country ?? '') || a.place.localeCompare(b.place)),
+    [offices, query, area],
   );
+  const areas = PICK_AREAS.filter((a) => offices.some((o) => pickArea(o) === a));
 
   // Focus moves into the sheet, the page behind stops scrolling, and focus goes back on close.
   useEffect(() => {
@@ -159,8 +171,22 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
                       maxLength={60}
                     />
                   </label>
+                  {areas.length > 1 && (
+                    <div className="chips-row" role="group" aria-label="Area">
+                      {areas.map((a) => (
+                        <button key={a} type="button" className="filter-chip" aria-pressed={area === a} onClick={() => setArea(area === a ? null : a)}>
+                          {a}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <div className="picker-list" role="group" aria-label="Offices">
-                    {shown.length === 0 && <p className="hint">No office matches “{query}”.</p>}
+                    {shown.length === 0 && (
+                      <p className="hint">
+                        No office matches{query ? ` “${query}”` : ''}
+                        {area ? (area === 'Abroad' ? ' abroad' : ` in ${area}`) : ''}.
+                      </p>
+                    )}
                     {shown.map((o) => (
                       <label key={o.id} className="pick">
                         <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} />
