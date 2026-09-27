@@ -166,7 +166,7 @@ golden files, and share one rate-limit state file, so they can run side by side.
 
 ## Email alerts website
 
-`apps/` holds a website built on this package, live at <https://alphaexperimental.org/pengepassportph/>
+`apps/` holds a website built on this package, live at <https://alphaexperiments.com/pengepassportph/>
 (short link `/p3h`): every office's open dates at a glance, each office's calendar and hourly times for one
 person or a group, and an email when a date opens at the offices you can get to.
 
@@ -214,7 +214,7 @@ and cannot be switched off:
 - **Refuses rather than piles up.** A call that has waited `maxWaitMs` (default 60 s) in the queue fails with
   `RateLimitError`. Identical concurrent calls share one request.
 - **Identifies itself.** Every request carries
-  `penge-passport-ph/<version> (+https://alphaexperimental.org/pengepassportph/; read-only availability checker)`.
+  `penge-passport-ph/<version> (+https://alphaexperiments.com/pengepassportph/; read-only availability checker)`.
   Pass `contact` to add your email.
 
 Please don't run it on many machines, don't use it to resell or broker appointments, and don't build

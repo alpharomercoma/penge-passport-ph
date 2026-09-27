@@ -4,6 +4,13 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The website moved to https://alphaexperiments.com/pengepassportph/, so the User-Agent and the package
+  homepage now link there. The old address, alphaexperimental.org, no longer serves it.
+
 ## [0.1.0] - 2026-09-27
 
 First release, on npm and PyPI.
@@ -28,4 +35,5 @@ First release, on npm and PyPI.
 - A canary workflow that scrapes one real record (through both packages) and walks the booking UI
   every 6 hours, and opens an issue when the site changes.
 
+[Unreleased]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/alpharomercoma/penge-passport-ph/releases/tag/v0.1.0

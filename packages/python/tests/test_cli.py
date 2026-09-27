@@ -39,7 +39,7 @@ def test_help_text_matches_the_node_cli() -> None:
         .replace("${VERSION}", "0.1.0")
         .replace("${NAME}", "penge-passport-ph")
         .replace("${CLI_ALIAS}", "penge")
-        .replace("${HOMEPAGE}", "https://alphaexperimental.org/pengepassportph/")
+        .replace("${HOMEPAGE}", "https://alphaexperiments.com/pengepassportph/")
     )
     assert rendered == cli.HELP
 

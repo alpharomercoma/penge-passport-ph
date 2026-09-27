@@ -225,7 +225,7 @@ We don't assume its servers are old or weak. What the record shows:
 | Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour. After 5 failures in a row, or a single `Retry-After` longer than an hour, the limiter stops for 15 minutes, or for as long as `Retry-After` asks, up to an hour |
 | When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 10 minutes; a scan still running when the next is due is skipped |
 | Hard ceiling | The library refuses more than 1,200 requests an hour on any one limiter |
-| Identity | User-Agent: `penge-passport-ph/<version> (+https://alphaexperimental.org/pengepassportph/; read-only availability checker; https://alphaexperimental.org/pengepassportph)`. The last part is the library's optional `contact`, which this deployment sets to its own address |
+| Identity | User-Agent: `penge-passport-ph/<version> (+https://alphaexperiments.com/pengepassportph/; read-only availability checker; https://alphaexperiments.com/pengepassportph)`. The last part is the library's optional `contact`, which this deployment sets to its own address |
 
 **Why these numbers.** On 27 September 2026 the maintainer moved from 15-minute scans and 300 requests an
 hour in total to the settings above.

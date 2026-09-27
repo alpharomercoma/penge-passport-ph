@@ -45,6 +45,6 @@ def test_node_package_has_the_same_identity_and_version() -> None:
 def test_user_agent() -> None:
     assert pkg.user_agent() == (
         f"penge-passport-ph/{pkg.VERSION} "
-        "(+https://alphaexperimental.org/pengepassportph/; read-only availability checker)"
+        "(+https://alphaexperiments.com/pengepassportph/; read-only availability checker)"
     )
     assert pkg.user_agent("me@example.com").endswith("; me@example.com)")

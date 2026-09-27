@@ -11,7 +11,7 @@ export const NAME = 'penge-passport-ph';
 export const CLI_ALIAS = 'penge';
 export const VERSION = '0.1.0';
 /** A live page about the project: shown in the CLI help and the User-Agent, so the site's operators can see who is asking. */
-export const HOMEPAGE = 'https://alphaexperimental.org/pengepassportph/';
+export const HOMEPAGE = 'https://alphaexperiments.com/pengepassportph/';
 /** Source, issues and changelog. It must exist before a release is published (CONTRIBUTING.md). */
 export const REPOSITORY = 'https://github.com/alpharomercoma/penge-passport-ph';
 

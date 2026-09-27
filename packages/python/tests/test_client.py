@@ -40,7 +40,7 @@ def test_bootstraps_then_asks_for_availability_with_the_token(
     assert post.headers["__RequestVerificationToken"] == "T1"
     assert post.headers["User-Agent"] == (
         f"penge-passport-ph/{VERSION} "
-        "(+https://alphaexperimental.org/pengepassportph/; read-only availability checker)"
+        "(+https://alphaexperiments.com/pengepassportph/; read-only availability checker)"
     )
     assert post.at - site.calls[0].at >= 3
     assert (result.site_id, result.from_date, result.to_date, result.applicants) == (

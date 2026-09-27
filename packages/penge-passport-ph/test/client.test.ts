@@ -132,7 +132,7 @@ describe('PengePassportPH', () => {
     });
     expect(post.headers.get('__RequestVerificationToken')).toBe('T1');
     expect(post.headers.get('User-Agent')).toBe(
-      `penge-passport-ph/${VERSION} (+https://alphaexperimental.org/pengepassportph/; read-only availability checker)`,
+      `penge-passport-ph/${VERSION} (+https://alphaexperiments.com/pengepassportph/; read-only availability checker)`,
     );
     expect(post.at - site.calls[0]!.at).toBeGreaterThanOrEqual(3000);
 

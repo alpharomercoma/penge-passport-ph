@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// The path the site is served under, e.g. /pengepassportph/ at alphaexperimental.org.
+// The path the site is served under, e.g. /pengepassportph/ at alphaexperiments.com.
 // deploy/release.sh sets it from deploy/site.conf; it must end with a slash.
 const base = `/${(process.env.BASE_PATH ?? '').replace(/^\/+|\/+$/g, '')}/`.replace('//', '/');
 

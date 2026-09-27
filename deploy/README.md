@@ -209,19 +209,25 @@ The checker picks up the new release on its next run.
 The server sends its own mail; nothing is paid for or rate-limited by a provider. Mail stays in dry-run
 (every message is built, none is sent) until all of this is done.
 
-**Mail for this deployment comes from `alerts@penge.alphaexperimental.org`**, a subdomain that is also the
-server's mail host name (HELO and reverse DNS). The apex `alphaexperimental.org` keeps its Google Workspace
-mail untouched, and the alerts' sending reputation can never affect it. DNS is on Vercel. The website is at
-<https://alphaexperimental.org/pengepassportph/> (`/p3h` and `penge.alphaexperimental.org` redirect there;
+**Mail for this deployment comes from `alerts@penge.alphaexperiments.com`**, a subdomain that is also the
+server's mail host name (HELO and reverse DNS). The apex `alphaexperiments.com` stays free for other mail,
+and the alerts' sending reputation can never affect it. DNS is on Vercel. The website is at
+<https://alphaexperiments.com/pengepassportph/> (`/p3h` and `penge.alphaexperiments.com` redirect there;
 both set in `deploy/site.conf`).
+
+Until 27 September 2026 all of this was on `alphaexperimental.org` (mail from
+`alerts@penge.alphaexperimental.org`). That domain no longer serves the site or sends its mail: its
+records for the site and the `penge` subdomain were deleted, so links in emails sent before the move no
+longer work. Two records stay, so nobody else can send as the old address: `penge` has
+`v=spf1 -all`, and `_dmarc.penge` has `p=reject`.
 
 | Step | State |
 |---|---|
-| 1. Postfix + OpenDKIM on the server: `MAILHOST=penge.alphaexperimental.org bash /root/penge-deploy/mail/setup-mail.sh penge.alphaexperimental.org` | done |
+| 1. Postfix + OpenDKIM on the server: `MAILHOST=penge.alphaexperiments.com bash /root/penge-deploy/mail/setup-mail.sh penge.alphaexperiments.com` | done |
 | 2. DNS records it printed (A, SPF, DKIM `penge._domainkey.penge`, DMARC `_dmarc.penge`), added with `vercel dns add` | done |
-| 3. Website at `alphaexperimental.org/pengepassportph` (`deploy/site.conf`; `PUBLIC_BASE_URL` follows it) | done |
-| 4. `MAIL_FROM=alerts@penge.alphaexperimental.org` in `/etc/penge/server.env` | done |
-| 5. Reverse DNS of the server's IPv4 address: `penge.alphaexperimental.org`. On Huawei Cloud: Domain Name Service console → PTR Records → Create (the FlexusL "Domain" page is a forward binding, not this). IPv6 needs none: Postfix sends over IPv4 only | done |
+| 3. Website at `alphaexperiments.com/pengepassportph` (`deploy/site.conf`; `PUBLIC_BASE_URL` follows it) | done |
+| 4. `MAIL_FROM=alerts@penge.alphaexperiments.com` in `/etc/penge/server.env` | done |
+| 5. Reverse DNS of the server's IPv4 address: `penge.alphaexperiments.com`. On Huawei Cloud: Domain Name Service console → PTR Records → Create (the FlexusL "Domain" page is a forward binding, not this). IPv6 needs none: Postfix sends over IPv4 only | done |
 | 6. `bash /root/penge-deploy/mail/check-mail-dns.sh`: every line `ok` | done |
 | 7. Test messages to your own inbox; "Show original" in Gmail should say SPF, DKIM and DMARC: PASS, and land in the inbox | done: after reverse DNS, a real alert landed in the inbox at Gmail (SPF, DKIM, DMARC pass) and Proton; the one test before reverse DNS went to spam. Again from the WebHorizon server on 27 September: inbox at both |
 | 8. `MAIL_MODE=live` in `server.env`, then `systemctl restart penge-api`; the website's form switches on by itself | done (27 September 2026) |
@@ -234,7 +240,7 @@ record) shows how Gmail rates the domain once there is some volume.
 The test message, from the server:
 
 ```sh
-printf 'Subject: PengePassportPH test\n\nHello from the server.\n' | sendmail -f alerts@penge.alphaexperimental.org you@example.com
+printf 'Subject: PengePassportPH test\n\nHello from the server.\n' | sendmail -f alerts@penge.alphaexperiments.com you@example.com
 ```
 
 For another domain, the same steps apply: `setup-mail.sh <domain>` (with `MAILHOST=` when the mail
@@ -261,7 +267,7 @@ systemctl list-timers penge-check.timer          # when the next scan runs
 journalctl -u penge-check -n 20 -o cat           # last scans: one JSON line each
 journalctl -u penge-api -f -o cat                # API log (no addresses or tokens are ever logged)
 systemctl start penge-check                      # scan now
-curl -s https://alphaexperimental.org/pengepassportph/api/status | head -c 400
+curl -s https://alphaexperiments.com/pengepassportph/api/status | head -c 400
 ```
 
 **Pause every email at once** (alerts and confirmation emails; checked before every message; the outbox
