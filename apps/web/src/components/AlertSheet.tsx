@@ -194,9 +194,12 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 aria-invalid={errors.email ? true : undefined}
-                aria-describedby={errors.email ? `${id}-email-error` : undefined}
+                aria-describedby={errors.email ? `${id}-email-note ${id}-email-error` : `${id}-email-note`}
                 placeholder="juan@example.com"
               />
+              <p className="hint" id={`${id}-email-note`}>
+                We encrypt your address before storing it, and use it only for these alerts. Unsubscribing deletes it.
+              </p>
               {errors.email && (
                 <p className="error" id={`${id}-email-error`}>
                   {errors.email}

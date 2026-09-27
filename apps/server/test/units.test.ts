@@ -242,6 +242,27 @@ describe('R2 sink', () => {
     expect(left[0]).toContain('run2');
   });
 
+  it('deletes an object, and counts one that is not there as deleted', async () => {
+    const spoolDir = await mkdtemp(join(tmpdir(), 'penge-spool-'));
+    const seen: { method: string; url: string }[] = [];
+    let status = 204;
+    const fetch = (async (req: Request) => {
+      seen.push({ method: req.method, url: req.url });
+      return new Response(status === 204 ? null : '', { status });
+    }) as typeof globalThis.fetch;
+    const sink = r2Sink({ endpoint: 'https://acct.r2.example', bucket: 'b', accessKeyId: 'AK', secretAccessKey: 'SK', spoolDir, log: silentLog, fetch });
+    await sink.deleteObject!('backups/subscribers/date=2026-09-13/subscribers.json.gz');
+    expect(seen).toEqual([{ method: 'DELETE', url: 'https://acct.r2.example/b/backups/subscribers/date=2026-09-13/subscribers.json.gz' }]);
+    status = 404;
+    await sink.deleteObject!('backups/subscribers/date=2026-09-12/subscribers.json.gz');
+    status = 403;
+    await expect(sink.deleteObject!('backups/x.json.gz')).rejects.toThrow('R2 DELETE 403');
+    for (const key of ['../escape', 'backups/../../other-bucket/x', './x', '/x', 'a//b', 'a b']) {
+      await expect(sink.deleteObject!(key)).rejects.toThrow('unsafe object key');
+      await expect(sink.putObject!(key, new Uint8Array([1]), 'application/gzip')).rejects.toThrow('unsafe object key');
+    }
+  });
+
   it('signs uploads, spools them when R2 is down, and catches up later', async () => {
     const spoolDir = await mkdtemp(join(tmpdir(), 'penge-spool-'));
     const puts: { url: string; auth: string | null; body: Buffer }[] = [];

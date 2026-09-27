@@ -199,7 +199,18 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
   }
 }
 
-/** The day's copy of every subscriber (still encrypted) goes to R2; a failure retries on the next run. */
+/**
+ * Daily subscriber backups are kept this many days, so an address removed on
+ * unsubscribing is gone from the backups too (still encrypted until then).
+ */
+export const BACKUP_KEEP_DAYS = 14;
+const backupKey = (day: string) => `backups/subscribers/date=${day}/subscribers.json.gz`;
+
+/**
+ * The day's copy of every subscriber (still encrypted) goes to R2, and copies
+ * past BACKUP_KEEP_DAYS are deleted, a week of missed days included. A failure
+ * retries on the next run.
+ */
 async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: string) {
   const { kv, log, sink } = deps;
   if (!sink.putObject) return;
@@ -209,8 +220,13 @@ async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: strin
     const raw = await kv.get(K.sites);
     const siteIds = raw ? (JSON.parse(raw) as { id: number }[]).map((s) => s.id) : [];
     const backup = await exportSubscribers(kv, siteIds, now());
-    await sink.putObject(`backups/subscribers/date=${day}/subscribers.json.gz`, gzipSync(JSON.stringify(backup)), 'application/gzip');
+    await sink.putObject(backupKey(day), gzipSync(JSON.stringify(backup)), 'application/gzip');
     log.info('subscriber backup stored', { day, subscribers: backup.subscribers.length });
+    if (sink.deleteObject) {
+      for (let age = BACKUP_KEEP_DAYS; age < BACKUP_KEEP_DAYS + 7; age++) {
+        await sink.deleteObject(backupKey(manilaDay(now() - age * 86_400_000)));
+      }
+    }
   } catch (err) {
     await kv.write([{ op: 'del', key: K.backupDone(day) }]);
     log.error('subscriber backup failed; the next run retries', { err: err as Error });

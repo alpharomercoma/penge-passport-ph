@@ -44,6 +44,15 @@ describe('alert sheet', () => {
     expect(s.api.subscribe).toHaveBeenCalledWith({ email: 'juan@example.com', siteIds: [486], applicants: 3, website: '' });
   });
 
+  it('says, at the email field, how the address is kept', () => {
+    const s = open(fakeApi(), [486]);
+    const describedBy = () => (s.email.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent);
+    expect(describedBy()).toEqual(['We encrypt your address before storing it, and use it only for these alerts. Unsubscribing deletes it.']);
+    fireEvent.click(s.submit); // no address yet: the error is read out along with the notice
+    expect(describedBy()[0]).toMatch(/^We encrypt your address/);
+    expect(describedBy()[1]).toMatch(/Enter a valid email address/);
+  });
+
   it('opens the office picker when nothing is chosen yet, and focuses its search', () => {
     const s = open();
     expect(s.boxes()).toHaveLength(OFFICES.length);

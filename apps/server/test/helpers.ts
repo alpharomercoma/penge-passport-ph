@@ -38,6 +38,7 @@ export class FakeMailer implements Mailer {
 export class MemorySink implements SnapshotSink {
   scans: Scan[] = [];
   putObject?: (key: string, body: Uint8Array, contentType: string) => Promise<void>;
+  deleteObject?: (key: string) => Promise<void>;
   async put(scan: Scan) {
     this.scans.push(scan);
     return true;

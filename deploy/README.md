@@ -234,10 +234,32 @@ mail is switched on again.
 **Roll back**: `ln -sfn releases/<older> /opt/penge/current.new && mv -T /opt/penge/current.new
 /opt/penge/current && systemctl restart penge-api`, or run `penge-activate <older>` as `penge-deploy`.
 
+## Where a subscriber's address goes
+
+What the email field on the site promises ("We encrypt your address before storing it, and use it only
+for these alerts. Unsubscribing deletes it."), checked on 27 September 2026:
+
+| Where | What is there | Encrypted |
+|---|---|---|
+| Browser to server | The form, over HTTPS (TLS 1.3); plain HTTP is redirected, and HSTS is set for a year | Yes |
+| Valkey | AES-256-GCM, a fresh nonce each time (`crypto.ts`); lookups use a keyed hash, never the address | Yes |
+| Daily backups in R2 | The records exactly as stored; copies older than 14 days are deleted | Yes |
+| API, checker and Caddy logs | No address: the code never logs one (a test checks), and Caddy keeps no access log | Nothing to encrypt |
+| Confirmation links | Random tokens, stored only as a hash | Nothing to encrypt |
+| Postfix, while sending | The message, with its recipient, waits in the queue until delivered (at most a day) | **No** (root and postfix only) |
+| Postfix's delivery log | One line per delivery, with the recipient, kept about 4 days (`/var/log/postfix/mail.log`, root only) | **No** |
+| Server to the recipient's mail server | TLS is used when offered (`smtp_tls_security_level = may`), without checking the certificate. Every delivery so far used TLS 1.3 | Usually |
+| The recipient's inbox | The email itself, as with any email | Their provider's |
+
+The key that decrypts the addresses is in `/etc/penge/server.env` on the same server, so encryption
+protects copies of the database and its backups, not a server that is itself compromised.
+
 ## Keys and backups
 
 Subscribers live only in Redis. Once a day the checker copies them, as stored (addresses encrypted), to R2
-at `backups/subscribers/date=YYYY-MM-DD/subscribers.json.gz`. To restore, download one and run, on the server:
+at `backups/subscribers/date=YYYY-MM-DD/subscribers.json.gz`, and deletes the copies older than 14 days,
+so an address removed on unsubscribing leaves the backups too. To restore, download one and run, on the
+server:
 
 ```sh
 install -o penge -m 0600 subscribers.json.gz /var/lib/penge/restore.json.gz

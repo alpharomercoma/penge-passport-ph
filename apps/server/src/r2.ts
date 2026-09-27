@@ -14,6 +14,8 @@ export interface SnapshotSink {
   put(scan: Scan): Promise<boolean>;
   /** Store any other object (backups); throws on failure, nothing is spooled. */
   putObject?(key: string, body: Uint8Array, contentType: string): Promise<void>;
+  /** Remove an object; one that is not there counts as removed. */
+  deleteObject?(key: string): Promise<void>;
 }
 
 /** Spooled scans kept at most (~5.5 KB each, ~27 MB): about 17 days of scans every 5 minutes. */
@@ -55,10 +57,23 @@ export function r2Sink(options: R2Options): SnapshotSink {
   const base = `${options.endpoint.replace(/\/+$/, '')}/${encodeURIComponent(options.bucket)}`;
   const { log, spoolDir } = options;
 
+  // Keys use only [A-Za-z0-9._=/-], which need no escaping in a URL path, and
+  // no "." or ".." segment, which the URL would resolve outside the bucket.
+  const urlOf = (key: string) => {
+    const segments = key.split('/');
+    if (!/^[A-Za-z0-9._=/-]+$/.test(key) || segments.some((part) => part === '' || part === '.' || part === '..')) {
+      throw new Error(`unsafe object key: ${key}`);
+    }
+    return `${base}/${key}`;
+  };
+
+  async function remove(key: string) {
+    const res = await send(await aws.sign(urlOf(key), { method: 'DELETE' }), { signal: AbortSignal.timeout(30_000) });
+    if (!res.ok && res.status !== 404) throw new Error(`R2 DELETE ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+
   async function upload(key: string, body: Uint8Array, contentType = 'application/gzip') {
-    if (!/^[A-Za-z0-9._=/-]+$/.test(key)) throw new Error(`unsafe object key: ${key}`);
-    // Keys use only [A-Za-z0-9._=/-], which need no escaping in a URL path.
-    const url = `${base}/${key}`;
+    const url = urlOf(key);
     const signed = await aws.sign(url, {
       method: 'PUT',
       body,
@@ -117,5 +132,6 @@ export function r2Sink(options: R2Options): SnapshotSink {
       return true;
     },
     putObject: (key, body, contentType) => upload(key, body, contentType),
+    deleteObject: remove,
   };
 }

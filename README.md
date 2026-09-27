@@ -176,7 +176,9 @@ person or a group, and an email when a date opens at the offices you can get to.
   anywhere, an office list suddenly cut short) sends nothing and changes nothing; the first look is never news; a flickering date is
   announced once; at most 3 alerts a day.
 - **Private.** Addresses are stored encrypted (AES-256-GCM), confirmed by double opt-in, and deleted on
-  unsubscribe; every alert has a one-click unsubscribe (RFC 8058). No trackers.
+  unsubscribe (daily backups, also encrypted, drop them within 14 days); every alert has a one-click
+  unsubscribe (RFC 8058). No trackers. [Where an address goes](deploy/README.md#where-a-subscribers-address-goes)
+  lists every place it exists, including the two where it is not encrypted.
 - **Self-hosted, free to run.** One small server: Caddy, Node.js, Valkey (Redis), and its own Postfix
   with DKIM.
 

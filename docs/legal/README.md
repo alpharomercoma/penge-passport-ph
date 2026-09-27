@@ -14,7 +14,9 @@ says so rather than guessing.
 - Every request says who is asking. The User-Agent names the software, links to the project's live
   website, and carries the operator's contact.
 - It stores no personal data from the DFA. The only personal data it holds is its own subscribers' email
-  addresses, which it encrypts, confirms by double opt-in, and deletes on unsubscribe.
+  addresses, which it encrypts, confirms by double opt-in, and deletes on unsubscribe (encrypted daily
+  backups drop them within 14 days). The runbook lists
+  [every place an address exists](../../deploy/README.md#where-a-subscribers-address-goes).
 
 ## What the DFA says
 

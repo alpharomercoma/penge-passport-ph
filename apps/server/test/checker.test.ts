@@ -562,10 +562,16 @@ describe('outbox integrity and backups', () => {
     const puts: { key: string; body: Uint8Array }[] = [];
     const w = await world();
     w.sink.putObject = async (key, body) => void puts.push({ key, body });
+    const deleted: string[] = [];
+    w.sink.deleteObject = async (key) => void deleted.push(key);
     const id = await w.subscribe('ana@example.com', [486, 693], 2);
     await w.run();
     await w.run();
     expect(puts.map((p) => p.key)).toEqual(['backups/subscribers/date=2026-09-27/subscribers.json.gz']);
+    // Copies older than BACKUP_KEEP_DAYS go, so an unsubscribed address leaves the backups too.
+    expect(deleted[0]).toBe('backups/subscribers/date=2026-09-13/subscribers.json.gz');
+    expect(deleted).toHaveLength(7);
+    expect(deleted.every((k) => k < 'backups/subscribers/date=2026-09-14')).toBe(true);
     const backup = JSON.parse(gunzipSync(puts[0]!.body).toString());
     expect(backup.subscribers.map((s: { id: string }) => s.id)).toEqual([id]);
     expect(JSON.stringify(backup)).not.toContain('ana@example.com');
