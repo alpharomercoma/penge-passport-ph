@@ -1,0 +1,135 @@
+{
+  "$comment": "Tricky parser inputs shared by the TypeScript and Python suites. Expected outputs live in golden/parse-cases.json, generated from the TypeScript parsers with UPDATE_GOLDEN=1.",
+  "cases": [
+    {
+      "name": "time slot with an entity-encoded note and a single-digit hour",
+      "parser": "timeSlots",
+      "input": "<label class=\"col-xs-12\"><span class=\"col-xs-7\">\n<input id=\"TimeSlotID\" name=\"TimeSlotID\" type=\"radio\" value=\"1.0\" />\n<span class=\"hidden\">Senior citizens &amp; PWD&nbsp;only</span><span>7:30-8:30</span></span>\n<span class=\"col-xs-5 text-success\">Available  Slots: 12</span></label>"
+    },
+    {
+      "name": "time slot fragment that is empty (not published yet)",
+      "parser": "timeSlots",
+      "input": "\r\n\r\n"
+    },
+    {
+      "name": "label without a time is skipped",
+      "parser": "timeSlots",
+      "input": "<label><input type=\"radio\"/><span>Closed</span></label>"
+    },
+    {
+      "name": "token input with attributes in another order",
+      "parser": "bootstrap",
+      "input": "<input value=\"abc\" type=\"hidden\" name=\"__RequestVerificationToken\"> var currentDate = '2026-02-30'; var MAX_DATE = '2027-03-31';"
+    },
+    {
+      "name": "page without a token",
+      "parser": "bootstrap",
+      "input": "<html><body>Maintenance</body></html>"
+    },
+    {
+      "name": "sites: half-minute time zones round like Math.round, float ids accepted",
+      "parser": "sites",
+      "input": "{\"Sites\":[{\"Id\":10.0,\"Name\":\"  A  \",\"Timezone\":300000000,\"Address\":\"Line 1\\r\\nLine 2\",\"Url\":\"\",\"Timeslots\":null},{\"Id\":11,\"Name\":\"B\",\"Timezone\":-300000000},{\"Id\":12,\"Name\":null,\"Timezone\":\"x\"}]}"
+    },
+    {
+      "name": "sites: a string id is rejected",
+      "parser": "sites",
+      "input": "{\"Sites\":[{\"Id\":\"10\",\"Name\":\"A\"}]}"
+    },
+    {
+      "name": "sites: a boolean id is rejected",
+      "parser": "sites",
+      "input": "{\"Sites\":[{\"Id\":true,\"Name\":\"A\"}]}"
+    },
+    {
+      "name": "sites: wrong top-level shape",
+      "parser": "sites",
+      "input": "{\"Locations\":[]}"
+    },
+    {
+      "name": "countries: null name becomes empty",
+      "parser": "countries",
+      "input": "{\"Countries\":[{\"Id\":1,\"Name\":null},{\"Id\":2,\"Name\":\" Japan \"}]}"
+    },
+    {
+      "name": "availability: unsorted input comes back sorted",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":true,\"AppointmentDate\":1791244800000},{\"IsAvailable\":false,\"AppointmentDate\":1791158400000}]"
+    },
+    {
+      "name": "availability: not an array",
+      "parser": "availability",
+      "input": "{}"
+    },
+    {
+      "name": "availability: entry with a string flag",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":\"yes\",\"AppointmentDate\":1}]"
+    },
+    {
+      "name": "iso dates",
+      "parser": "isIsoDate",
+      "input": "[\"2026-10-05\",\"2026-02-30\",\"2026-1-5\",\"2024-02-29\",\"20261005\",\"2026-10-05T00:00\"]"
+    },
+    {
+      "name": "fuzz: impossible code points become U+FFFD; unknown named entities stay; decoding is one pass",
+      "parser": "timeSlots",
+      "input": "<label><input type=\"radio\"><span class=\"hidden\">a&#99999999;b&#x110000;c&#0;d&#xD800;e&copy;f&#38;lt;g</span><span>8:30-9:30</span></label>"
+    },
+    {
+      "name": "fuzz: '<labelx>' is not a label; upper-case tags and attributes are",
+      "parser": "timeSlots",
+      "input": "<labelx><input><span>8:30-9:30</span></labelx><LABEL CLASS=\"A\"><INPUT DISABLED><SPAN>10:00-11:00</SPAN><SPAN CLASS=\"col-xs-5\">Fully  Booked</SPAN></LABEL>"
+    },
+    {
+      "name": "fuzz: an unclosed label ends the scan",
+      "parser": "timeSlots",
+      "input": "<label><input><span>8:30-9:30</span></label><label><input><span>9:30-10:30</span>"
+    },
+    {
+      "name": "fuzz: time must be the whole content of a bare <span>",
+      "parser": "timeSlots",
+      "input": "<label><input><span class=\"x\">8:30-9:30</span><span>at 8:30-9:30</span><span> 8:30 - 9:30 </span></label>"
+    },
+    {
+      "name": "fuzz: non-ASCII right before a keyword is still a boundary",
+      "parser": "bootstrap",
+      "input": "<input name=\"__RequestVerificationToken\" value=\"t\">écurrentDate = '2026-01-02'"
+    },
+    {
+      "name": "fuzz: dates out of range fail cleanly",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":true,\"AppointmentDate\":1e20}]"
+    },
+    {
+      "name": "fuzz: year 10000 is out of range",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":true,\"AppointmentDate\":253402300800000}]"
+    },
+    {
+      "name": "fuzz: fractions truncate toward zero like JavaScript",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":true,\"AppointmentDate\":-0.5},{\"IsAvailable\":false,\"AppointmentDate\":1791158400000.9}]"
+    },
+    {
+      "name": "fuzz: NaN is not JSON in either language",
+      "parser": "availability",
+      "input": "[{\"IsAvailable\":true,\"AppointmentDate\":NaN}]"
+    },
+    {
+      "name": "fuzz: ids beyond 2^53 are rejected",
+      "parser": "sites",
+      "input": "{\"Sites\":[{\"Id\":9007199254740993,\"Name\":\"A\"}]}"
+    },
+    {
+      "name": "fuzz: offsets up to a day are kept, beyond it dropped (1440.5 rounds to 1441); -0 is 0; non-strings are empty names",
+      "parser": "sites",
+      "input": "{\"Sites\":[{\"Id\":-0,\"Name\":true,\"Timezone\":864000000000},{\"Id\":2,\"Name\":\"B\",\"Timezone\":864300000000},{\"Id\":3,\"Name\":\"C\",\"Timezone\":-100000000}]}"
+    },
+    {
+      "name": "fuzz: years 0001-9999 only",
+      "parser": "isIsoDate",
+      "input": "[\"0000-01-01\",\"0001-01-01\",\"9999-12-31\",\"1900-02-29\",\"2000-02-29\"]"
+    }
+  ]
+}

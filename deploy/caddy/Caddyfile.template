@@ -1,0 +1,67 @@
+# Rendered by deploy/provision.sh from deploy/site.conf. No access log is
+# configured, on purpose: visitors' addresses are not kept.
+{
+	# The admin API on a socket only the caddy user can open, not on a loopback port
+	# any local process could reach.
+	admin unix//run/caddy/admin.sock|0600
+}
+
+__SITE_ADDRESS__ {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+		-Via
+	}
+
+	# The app lives under its own path; other paths on this host stay free.
+	redir __BASE_PATH__ __BASE_PATH__/ 308
+__PATH_ALIASES__
+	handle_path __BASE_PATH__/* {
+		header {
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+			X-Frame-Options DENY
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+			Cross-Origin-Opener-Policy same-origin
+		}
+
+		handle /api/* {
+			request_body {
+				max_size 16KB
+			}
+			reverse_proxy 127.0.0.1:8787
+		}
+
+		handle {
+			root * /opt/penge/current/web
+			@assets path /assets/*
+			header @assets Cache-Control "public, max-age=31536000, immutable"
+			@pages not path /assets/*
+			header @pages Cache-Control "no-cache"
+			try_files {path} /index.html
+			file_server
+		}
+	}
+
+	handle /robots.txt {
+		respond <<ROBOTS
+			User-agent: *
+			Disallow: __BASE_PATH__/confirm
+			Disallow: __BASE_PATH__/unsubscribe
+			Disallow: __BASE_PATH__/api/
+			ROBOTS 200
+	}
+
+	# Nothing else is on this host yet: the bare domain shows the app.
+	handle / {
+		# `*`, or Caddy would read the path as a matcher and "302" as the target.
+		redir * __BASE_PATH__/ 302
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

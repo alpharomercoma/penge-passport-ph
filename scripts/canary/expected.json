@@ -1,0 +1,42 @@
+{
+  "$comment": "What PengePassportPH relies on. A change here must be a reviewed decision: update src/ first, then this file.",
+  "canarySiteId": 486,
+  "bootstrapPath": "/appointment",
+  "termsFormAction": "/appointment/terms",
+  "termsButtons": ["Start Individual Appointment", "Start Group Appointment"],
+  "endpointVars": {
+    "GetAvailableTimeSlotUrl": "/appointment/timeslot",
+    "SiteDisplayUrl": "/site/json",
+    "GetSitesUrl": "/sites",
+    "GetCountriesUrl": "/countries",
+    "GetMunicipalitiesUrl": "/Province/Municipality",
+    "GetNextAvailableTimeslotUrl": "/appointment/timeslot/available/next",
+    "GetAvailableSites": "/managed/sites",
+    "GetTimeslotAvailabilityUrl": "/appointment/timeslot/available"
+  },
+  "scripts": {
+    "/Scripts/site-timeslot.js": {
+      "pinned": "pinned/site-timeslot.js",
+      "mustContain": [
+        "GetTimeslotAvailabilityUrl",
+        "fromDate: requestDate, toDate: maxDate, siteId: siteId, requestedSlots: slots",
+        "GetAvailableTimeSlotUrl",
+        "preferredDate:",
+        "requiredSlots: requiredSlots",
+        "'__RequestVerificationToken': token",
+        "IsAvailable",
+        "AppointmentDate",
+        "RemoveDisabledButton",
+        "calendarCaptcha"
+      ]
+    },
+    "/Scripts/site-information.js": {
+      "pinned": "pinned/site-information.js",
+      "mustContain": [
+        "$.post(GetCountriesUrl, { regionId: value })",
+        "$.post(GetSitesUrl, { regionId: regionId, countryId: value, siteId: siteId })",
+        "data.Countries"
+      ]
+    }
+  }
+}

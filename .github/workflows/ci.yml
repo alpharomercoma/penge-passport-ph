@@ -1,0 +1,72 @@
+# PengePassportPH CI: every workspace (library, server, website), the Python
+# package and the deploy scripts; unit tests only (captured fixtures, no network).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package contents
+        run: npm pack --dry-run -w penge-passport-ph
+
+  deploy-scripts:
+    name: Deploy scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -x deploy/*.sh deploy/mail/*.sh
+
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    defaults:
+      run:
+        working-directory: packages/python
+    steps:
+      - uses: actions/checkout@v7
+      # The interop test runs the built Node package next to the Python one.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci && npm run build -w penge-passport-ph
+        working-directory: .
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check . ../../scripts/canary/python.py
+      - run: uv run ruff format --check . ../../scripts/canary/python.py
+      - run: uv run mypy
+      - run: uv run mypy --strict ../../scripts/canary/python.py
+      - run: uv run pytest
+      - name: Build wheel and sdist
+        run: uv build

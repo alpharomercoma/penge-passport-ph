@@ -1,0 +1,25 @@
+{
+  "name": "@penge/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PengePassportPH server: the scheduled checker and mailer, and the website's API. Runs on the VPS.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@penge/contracts": "*",
+    "aws4fetch": "^1.0.20",
+    "hono": "^4.13.9",
+    "nodemailer": "^10.0.10",
+    "penge-passport-ph": "*",
+    "@redis/client": "^6.2.1"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.2",
+    "esbuild": "^0.28.2"
+  }
+}

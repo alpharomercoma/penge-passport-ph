@@ -1,0 +1,17 @@
+{
+  "extends": "../../packages/penge-passport-ph/tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "paths": {
+      "penge-passport-ph": [
+        "../../packages/penge-passport-ph/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "test",
+    "vitest.config.ts"
+  ]
+}

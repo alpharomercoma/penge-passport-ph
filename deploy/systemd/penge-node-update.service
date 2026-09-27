@@ -1,0 +1,8 @@
+[Unit]
+Description=Update Node.js to the newest release of its major line (signature-verified)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/penge-node-install 24

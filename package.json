@@ -1,0 +1,28 @@
+{
+  "name": "penge-passport-ph-monorepo",
+  "private": true,
+  "description": "PengePassportPH: the Node.js and Python packages, the website, and the alert server.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/penge-passport-ph",
+    "packages/contracts",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "canary": "npm run build -w penge-passport-ph && node scripts/canary/api.mjs; a=$?; uv run --project packages/python python scripts/canary/python.py; p=$?; node scripts/canary/ui.mjs; u=$?; exit $((a || p || u))",
+    "canary:api": "npm run build -w penge-passport-ph && node scripts/canary/api.mjs",
+    "canary:python": "uv run --project packages/python python scripts/canary/python.py",
+    "canary:ui": "npm run build -w penge-passport-ph && node scripts/canary/ui.mjs",
+    "deploy": "deploy/release.sh"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

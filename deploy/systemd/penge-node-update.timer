@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for Node.js security releases weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 20:10:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

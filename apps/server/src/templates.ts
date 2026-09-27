@@ -1,0 +1,115 @@
+// Plain words, a text part and a matching HTML part, no images, no trackers,
+// no link shorteners: the things spam filters look at besides the DNS records.
+import { formatDate, shortName } from '@penge/contracts';
+import { DISPLAY_NAME } from 'penge-passport-ph';
+
+export { formatDate, shortName };
+
+export const BOOKING_URL = 'https://passport.gov.ph/appointment';
+
+export interface Rendered {
+  subject: string;
+  text: string;
+  html: string;
+}
+
+export interface SiteRef {
+  id: number;
+  name: string;
+}
+
+export interface Opening extends SiteRef {
+  dates: string[];
+}
+
+const esc = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+const people = (n: number) => (n === 1 ? '1 person' : `${n} people`);
+
+function listSubject(names: string[]): string {
+  const shown = names.slice(0, 3).join(', ');
+  return names.length > 3 ? `${shown} +${names.length - 3}` : shown;
+}
+
+function page(title: string, body: string, footer: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(title)}</title></head>
+<body style="margin:0;padding:24px 16px;background:#f5f7f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#17201b;line-height:1.5">
+<div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dfe5e2;border-radius:10px;padding:24px">
+<p style="margin:0 0 18px;font-weight:800;font-size:18px;letter-spacing:-0.3px">PengePassport<span style="color:#4f5b55">PH</span></p>
+${body}
+</div>
+<p style="max-width:560px;margin:16px auto 0;font-size:12px;color:#4f5b55">${footer}</p>
+</body></html>`;
+}
+
+const button = (href: string, label: string) =>
+  `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#17201b;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:10px;display:inline-block;font-weight:700">${esc(label)}</a></p>`;
+
+const UNOFFICIAL = `${DISPLAY_NAME} is a free, unofficial service, not run by or affiliated with the DFA.`;
+
+export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[]; applicants: number }): Rendered {
+  const names = input.sites.map((s) => s.name);
+  const text = [
+    `Someone, hopefully you, asked ${DISPLAY_NAME} to email this address when passport appointment dates open for ${people(input.applicants)} at:`,
+    '',
+    ...names.map((n) => `  - ${n}`),
+    '',
+    'To start the alerts, open this link and press Confirm:',
+    input.confirmUrl,
+    '',
+    'The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.',
+    '',
+    UNOFFICIAL,
+  ].join('\n');
+  const html = page(
+    'Confirm your alerts',
+    `<p style="margin:0 0 12px">Someone, hopefully you, asked us to email this address when passport appointment dates open for ${esc(people(input.applicants))} at:</p>
+<ul style="margin:0 0 12px;padding-left:20px">${names.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+${button(input.confirmUrl, 'Confirm alerts')}
+<p style="margin:0;font-size:14px;color:#4f5b55">The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.</p>`,
+    esc(UNOFFICIAL),
+  );
+  return { subject: `Confirm your ${DISPLAY_NAME} alerts`, text, html };
+}
+
+export function alertEmail(input: {
+  openings: Opening[];
+  applicants: number;
+  unsubscribeUrl: string;
+  manageUrl: string;
+  /** True when this is the last alert allowed today. */
+  lastToday: boolean;
+}): Rendered {
+  const names = input.openings.map((o) => shortName(o.name));
+  const subject = `Passport dates open: ${listSubject(names)}`;
+  const capNote = input.lastToday ? 'This is your last alert today; alerts resume tomorrow (Manila time).' : '';
+  const text = [
+    `New appointment dates opened for ${people(input.applicants)}:`,
+    '',
+    ...input.openings.flatMap((o) => [o.name, ...o.dates.map((d) => `  - ${formatDate(d)}`), '']),
+    `Book on the DFA site: ${BOOKING_URL}`,
+    'Dates go fast, and they may already be taken. We never book or hold a slot for you.',
+    ...(capNote ? ['', capNote] : []),
+    '',
+    '--',
+    `You asked ${DISPLAY_NAME} for these alerts. Change your offices: ${input.manageUrl}`,
+    `Stop all alerts: ${input.unsubscribeUrl}`,
+    UNOFFICIAL,
+  ].join('\n');
+  const html = page(
+    subject,
+    `<p style="margin:0 0 16px">New appointment dates opened for ${esc(people(input.applicants))}:</p>
+${input.openings
+  .map(
+    (o) => `<p style="margin:0 0 4px;font-weight:600">${esc(o.name)}</p>
+<ul style="margin:0 0 16px;padding-left:20px">${o.dates.map((d) => `<li>${esc(formatDate(d))}</li>`).join('')}</ul>`,
+  )
+  .join('\n')}
+${button(BOOKING_URL, 'Book on the DFA site')}
+<p style="margin:0;font-size:14px;color:#4f5b55">Dates go fast, and they may already be taken. We never book or hold a slot for you.</p>
+${capNote ? `<p style="margin:12px 0 0;font-size:14px;color:#4f5b55">${esc(capNote)}</p>` : ''}`,
+    `You asked ${esc(DISPLAY_NAME)} for these alerts. <a href="${esc(input.manageUrl)}" style="color:#4f5b55">Change your offices</a> · <a href="${esc(input.unsubscribeUrl)}" style="color:#4f5b55">Unsubscribe</a><br>${esc(UNOFFICIAL)}`,
+  );
+  return { subject, text, html };
+}

@@ -1,0 +1,45 @@
+[Unit]
+Description=PengePassportPH API
+Documentation=https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md
+After=network-online.target valkey-server.service
+Wants=network-online.target valkey-server.service
+
+[Service]
+Type=simple
+User=penge
+Group=penge
+EnvironmentFile=/etc/penge/server.env
+# The API never touches R2: keep those credentials out of the process.
+UnsetEnvironment=R2_ENDPOINT R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+ExecStart=/usr/local/bin/node --enable-source-maps /opt/penge/current/server/server.mjs
+Restart=on-failure
+RestartSec=5
+# Observed ~55 MB. The box has 464 MB and 512 MB swap; these leave room for Caddy and the rest.
+MemoryHigh=100M
+MemoryMax=150M
+
+# Sandboxing: the API reads its bundle and talks to Redis and local SMTP, nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+# The shared rate-limiter state for on-demand office lookups.
+ReadWritePaths=/var/lib/penge/limiter
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+# PengePassportPH deep fuzzing: the same fuzz suites CI runs on every push,
+# with far more inputs. Seeds are fixed, so a failure here reproduces locally
+# with the same FUZZ_* variables.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '43 3 * * 1' # Mondays
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Inputs per property (TypeScript and Python fuzzers)
+        default: '20000'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz (packages, differential, server, website)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FUZZ_RUNS: ${{ inputs.scale || '20000' }}
+      FUZZ_EXAMPLES: ${{ inputs.scale || '20000' }}
+      FUZZ_DIFF_N: '100000'
+      FUZZ_CLI_N: '600'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci && npm run build -w penge-passport-ph
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --project packages/python --locked
+      - name: TypeScript fuzzers
+        working-directory: packages/penge-passport-ph
+        run: npx vitest run test/fuzz.test.ts
+      - name: Python fuzzers
+        working-directory: packages/python
+        run: uv run pytest tests/test_fuzz.py
+      - name: Differential fuzzing (Node.js vs Python)
+        working-directory: packages/python
+        run: uv run pytest tests/test_differential.py
+      - name: Server and shared-rules fuzzers (API inputs, checker guardrails)
+        run: npm test -w @penge/contracts -w @penge/server
+      - name: Website fuzzers (form, rendering, API client)
+        # Rendering React is slower per input, so a tenth of the scale.
+        run: FUZZ_RUNS=$(( FUZZ_RUNS / 10 )) npm test -w @penge/web

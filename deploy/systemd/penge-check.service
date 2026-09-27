@@ -1,0 +1,40 @@
+[Unit]
+Description=PengePassportPH checker (one scan of passport.gov.ph, then alerts)
+Documentation=https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md
+After=network-online.target valkey-server.service
+Wants=network-online.target valkey-server.service
+
+[Service]
+Type=oneshot
+User=penge
+Group=penge
+EnvironmentFile=/etc/penge/server.env
+ExecStart=/usr/local/bin/node --enable-source-maps /opt/penge/current/server/check.mjs
+# Exit 3 means the scan failed its health checks and nothing was emailed:
+# systemd records it as a failure so `systemctl --failed` shows it.
+TimeoutStartSec=15min
+# Observed peak ~66 MB.
+MemoryHigh=130M
+MemoryMax=180M
+Nice=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/penge
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077

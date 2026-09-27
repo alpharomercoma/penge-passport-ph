@@ -1,0 +1,8 @@
+{
+  "extends": "../penge-passport-ph/tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src", "test"]
+}

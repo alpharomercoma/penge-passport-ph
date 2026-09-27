@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.playwright-mcp/
+*.log
+canary-results/
+.venv/
+packages/python/dist/
+.hypothesis/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.secrets/
+.env*
+.qa/

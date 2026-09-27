@@ -1,0 +1,105 @@
+# PengePassportPH canary.
+# Scrapes one real record from passport.gov.ph through the package and walks
+# the booking UI up to the calendar. Any drift in the UI, the process or the
+# endpoints turns a check ❌, fails the job and opens a GitHub issue.
+# Runbook: docs/canary.md
+name: Canary
+
+on:
+  schedule:
+    # Every 6 hours, at :17 to stay off the top of the hour.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      site_id:
+        description: Site id to scrape (default 486, Antipolo)
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - 'packages/penge-passport-ph/src/**'
+      - 'packages/python/src/**'
+      - 'scripts/canary/**'
+      - '.github/workflows/canary.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Canary (passport.gov.ph)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PENGE_PASSPORT_PH_SITE_ID: ${{ inputs.site_id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build -w penge-passport-ph
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Install the Python package
+        run: uv sync --project packages/python --locked
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: API contract (scrape one record)
+        id: api
+        continue-on-error: true
+        run: node scripts/canary/api.mjs
+
+      # Right after the API contract, so both scrape the same moment.
+      - name: Python package (same record, compared with Node)
+        id: py
+        continue-on-error: true
+        run: uv run --project packages/python --locked python scripts/canary/python.py
+
+      - name: UI flow (home → terms → site → calendar)
+        id: ui
+        continue-on-error: true
+        run: node scripts/canary/ui.mjs
+
+      - name: Upload screenshots and results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-results
+          path: canary-results/
+          retention-days: 30
+
+      # failure() also catches install, build and Chromium failures before the checks.
+      - name: Open or update the canary issue
+        if: ${{ failure() || steps.api.outcome != 'success' || steps.py.outcome != 'success' || steps.ui.outcome != 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/canary/issue.mjs fail
+
+      - name: Close the canary issue
+        if: ${{ success() && steps.api.outcome == 'success' && steps.py.outcome == 'success' && steps.ui.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/canary/issue.mjs pass
+
+      - name: Fail loudly
+        if: ${{ failure() || steps.api.outcome != 'success' || steps.py.outcome != 'success' || steps.ui.outcome != 'success' }}
+        run: |
+          echo "::error title=❌ PengePassportPH canary failed::API contract: ${{ steps.api.outcome || 'not run' }}, Python: ${{ steps.py.outcome || 'not run' }}, UI flow: ${{ steps.ui.outcome || 'not run' }}. See the job summary, the canary issue and docs/canary.md."
+          exit 1

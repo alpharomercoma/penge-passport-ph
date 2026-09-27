@@ -1,0 +1,261 @@
+[
+  {
+    "name": "time slot with an entity-encoded note and a single-digit hour",
+    "value": [
+      {
+        "start": "07:30",
+        "end": "08:30",
+        "available": true,
+        "remaining": 12,
+        "status": "Available Slots: 12",
+        "note": "Senior citizens & PWD only"
+      }
+    ]
+  },
+  {
+    "name": "time slot fragment that is empty (not published yet)",
+    "value": []
+  },
+  {
+    "name": "label without a time is skipped",
+    "value": []
+  },
+  {
+    "name": "token input with attributes in another order",
+    "value": {
+      "token": "abc",
+      "serverToday": null,
+      "maxDate": "2027-03-31"
+    }
+  },
+  {
+    "name": "page without a token",
+    "value": null
+  },
+  {
+    "name": "sites: half-minute time zones round like Math.round, float ids accepted",
+    "value": [
+      {
+        "id": 10,
+        "name": "A",
+        "description": null,
+        "address": "Line 1\nLine 2",
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": 1
+      },
+      {
+        "id": 11,
+        "name": "B",
+        "description": null,
+        "address": null,
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": 0
+      },
+      {
+        "id": 12,
+        "name": "",
+        "description": null,
+        "address": null,
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": null
+      }
+    ]
+  },
+  {
+    "name": "sites: a string id is rejected",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "sites: a boolean id is rejected",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "sites: wrong top-level shape",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "countries: null name becomes empty",
+    "value": [
+      {
+        "id": 1,
+        "name": ""
+      },
+      {
+        "id": 2,
+        "name": "Japan"
+      }
+    ]
+  },
+  {
+    "name": "availability: unsorted input comes back sorted",
+    "value": [
+      {
+        "date": "2026-10-05",
+        "available": false
+      },
+      {
+        "date": "2026-10-06",
+        "available": true
+      }
+    ]
+  },
+  {
+    "name": "availability: not an array",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "availability: entry with a string flag",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "iso dates",
+    "value": [
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  {
+    "name": "fuzz: impossible code points become U+FFFD; unknown named entities stay; decoding is one pass",
+    "value": [
+      {
+        "start": "08:30",
+        "end": "09:30",
+        "available": true,
+        "remaining": null,
+        "status": "",
+        "note": "a�b�c�d�e&copy;f&lt;g"
+      }
+    ]
+  },
+  {
+    "name": "fuzz: '<labelx>' is not a label; upper-case tags and attributes are",
+    "value": [
+      {
+        "start": "10:00",
+        "end": "11:00",
+        "available": false,
+        "remaining": null,
+        "status": "Fully Booked",
+        "note": null
+      }
+    ]
+  },
+  {
+    "name": "fuzz: an unclosed label ends the scan",
+    "value": [
+      {
+        "start": "08:30",
+        "end": "09:30",
+        "available": true,
+        "remaining": null,
+        "status": "",
+        "note": null
+      }
+    ]
+  },
+  {
+    "name": "fuzz: time must be the whole content of a bare <span>",
+    "value": [
+      {
+        "start": "08:30",
+        "end": "09:30",
+        "available": true,
+        "remaining": null,
+        "status": "",
+        "note": null
+      }
+    ]
+  },
+  {
+    "name": "fuzz: non-ASCII right before a keyword is still a boundary",
+    "value": {
+      "token": "t",
+      "serverToday": "2026-01-02",
+      "maxDate": null
+    }
+  },
+  {
+    "name": "fuzz: dates out of range fail cleanly",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "fuzz: year 10000 is out of range",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "fuzz: fractions truncate toward zero like JavaScript",
+    "value": [
+      {
+        "date": "1970-01-01",
+        "available": true
+      },
+      {
+        "date": "2026-10-05",
+        "available": false
+      }
+    ]
+  },
+  {
+    "name": "fuzz: NaN is not JSON in either language",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "fuzz: ids beyond 2^53 are rejected",
+    "error": "UpstreamError"
+  },
+  {
+    "name": "fuzz: offsets up to a day are kept, beyond it dropped (1440.5 rounds to 1441); -0 is 0; non-strings are empty names",
+    "value": [
+      {
+        "id": 0,
+        "name": "",
+        "description": null,
+        "address": null,
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": 1440
+      },
+      {
+        "id": 2,
+        "name": "B",
+        "description": null,
+        "address": null,
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": null
+      },
+      {
+        "id": 3,
+        "name": "C",
+        "description": null,
+        "address": null,
+        "telephone": null,
+        "hours": null,
+        "mapUrl": null,
+        "utcOffsetMinutes": 0
+      }
+    ]
+  },
+  {
+    "name": "fuzz: years 0001-9999 only",
+    "value": [
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  }
+]

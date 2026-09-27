@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the PengePassportPH checker every 5 minutes
+
+[Timer]
+# A scan is ~45 requests, 3 s apart, and takes about 2.5 minutes: 12 an hour
+# stay inside the scans' own budget (apps/server/src/budget.ts; a test reads
+# this line). A scan still running when the next is due makes systemd skip it,
+# and after a scan the site struggled with the checker rests (COOLDOWN_SECONDS).
+OnCalendar=*:02/5
+RandomizedDelaySec=60
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
