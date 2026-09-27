@@ -158,20 +158,31 @@ describe('home', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tue 20 Oct 2026: open at 1 office, show them' }));
     expect(screen.getByRole('button', { name: 'By office' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('status').textContent).toContain('Open on Tue 20 Oct: 1 office');
-    expect(scroll.mock.contexts.at(-1)).toBe(document.querySelector('.day-filter'));
+    expect(scroll.mock.contexts.at(-1)).toBe(document.querySelector('.list-head'));
     const places = [...document.querySelectorAll('.row-place')].map((e) => e.textContent);
     expect(places).toEqual(['Baguio']); // one list only: the calendar pane adds no second list
     fireEvent.click((await inList()).getByRole('button', { name: /^Baguio/ }));
     expect(window.location.search).toBe('?office=693&date=2026-10-20');
   });
 
-  it('clears the day to show every office again', async () => {
+  it('shows the chosen day on each office, and visibly shows every office again on "Show all"', async () => {
     render(<App path="/" api={fakeApi()} />);
     await screen.findByText(SUMMARY);
-    fireEvent.click(screen.getByRole('button', { name: 'Wed 7 Oct 2026: open at 1 office, show them' }));
+    const head = () => document.querySelector('.list-head')!.textContent;
+    expect(head()).toBe('All 12 offices, soonest date first');
+    // Antipolo is open on the 7th and the 9th: narrowed to the 9th, its row says the 9th.
+    fireEvent.click(screen.getByRole('button', { name: 'Fri 9 Oct 2026: open at 1 office, show them' }));
     expect(document.querySelectorAll('.row-place')).toHaveLength(1);
+    expect(document.querySelector('.pane-offices .row-date')!.textContent).toBe('Fri 9 Oct');
+    expect(head()).toContain('Open on Fri 9 Oct: 1 office');
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
     expect(document.querySelectorAll('.row-place')).toHaveLength(12);
+    expect(document.querySelector('.pane-offices .row-date')!.textContent).toBe('Wed 7 Oct'); // its soonest again
+    expect(head()).toBe('All 12 offices, soonest date first');
+    expect(document.querySelector('.pane-dates button.day[aria-pressed="true"]')).toBeNull();
+    // Narrowed by area, the header says how many of all.
+    fireEvent.click(screen.getByRole('button', { name: 'Visayas' }));
+    expect(head()).toBe('2 of 12 offices, soonest date first');
   });
 
   it('says so when a date from a link is no longer open', async () => {

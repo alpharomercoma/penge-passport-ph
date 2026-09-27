@@ -79,14 +79,24 @@ export function AllOffices({ offices, today, onOpen }: Props) {
               ))}
             </div>
           </div>
-          {day && (
-            <div ref={bannerRef} className="day-filter" role="status">
-              <p>
-                Open on <strong>{shortDate(day)}</strong>: {plural(shown.length, 'office')}
-              </p>
-              <button type="button" className="link-button" onClick={() => setDay(null)}>
-                Show all
-              </button>
+          {/* Always says what the list is showing, so clearing a filter visibly changes it. */}
+          {(day || shown.length > 0) && (
+            <div ref={bannerRef} className={day ? 'list-head is-filtered' : 'list-head'} role="status">
+              {day ? (
+                <>
+                  <p>
+                    Open on <strong>{shortDate(day)}</strong>: {plural(shown.length, 'office')}
+                  </p>
+                  <button type="button" className="link-button" onClick={() => setDay(null)}>
+                    Show all
+                  </button>
+                </>
+              ) : (
+                <p>
+                  {shown.length === offices.length ? `All ${offices.length} offices` : `${shown.length} of ${offices.length} offices`}, soonest
+                  date first
+                </p>
+              )}
             </div>
           )}
           {shown.length === 0 ? (
@@ -109,7 +119,8 @@ export function AllOffices({ offices, today, onOpen }: Props) {
                         <span className="row-warn">Couldn’t check</span>
                       ) : o.earliest ? (
                         <>
-                          <span className="row-date">{shortDate(o.earliest)}</span>
+                          {/* Narrowed to a day, every office listed is open on it: that day is the one to show. */}
+                          <span className="row-date">{shortDate(day ?? o.earliest)}</span>
                           {o.ok && <span className="row-count">{plural(o.openDates.length, 'open day')}</span>}
                         </>
                       ) : (
