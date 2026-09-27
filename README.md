@@ -40,8 +40,9 @@ takes it away from real applicants.
   one rate limit shared by every process of either language.
 - **Watched.** A scheduled [canary](docs/canary.md) scrapes a real record every 6 hours and fails loudly when
   the site changes.
-- **Email alerts, too.** The same repository runs a free website that checks every office every 5 minutes
-  and emails you when a date opens where you want it ([how it runs](deploy/README.md)).
+- **Email alerts, too.** The same repository runs a free website that checks every office in the
+  Philippines every 5 minutes, and the posts abroad about hourly, and emails you when a date opens where
+  you want it ([how it runs](deploy/README.md)).
 
 ## Contents
 
@@ -167,11 +168,12 @@ golden files, and share one rate-limit state file, so they can run side by side.
 ## Email alerts website
 
 `apps/` holds a website built on this package, live at <https://alphaexperiments.com/pengepassportph/>
-(short link `/p3h`): every office's open dates at a glance, each office's calendar and hourly times for one
-person or a group, and an email when a date opens at the offices you can get to.
+(short link `/p3h`): every office's open dates at a glance, in the Philippines and at the embassies and
+consulates abroad, each one's calendar and hourly times for one person or a group, and an email when a
+date opens where you can get to.
 
-- **Checks every office every 5 minutes** through this package's rate limiter, and stores every scan in
-  Cloudflare R2 for later analysis.
+- **Checks every office in the Philippines every 5 minutes, and each of about 130 posts abroad about
+  hourly,** through this package's rate limiter, and stores every scan in Cloudflare R2 for later analysis.
 - **Emails only on trustworthy news.** A scan that looks broken (too many offices failing, no dates
   anywhere, an office list suddenly cut short) sends nothing and changes nothing; the first look is never news; a flickering date is
   announced once; at most 3 alerts a day.

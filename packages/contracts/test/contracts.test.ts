@@ -1,7 +1,9 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  describePost,
   formatDate,
+  isAbroadResponse,
   isCalendarDate,
   isOfficeDates,
   isOfficeTimes,
@@ -238,6 +240,68 @@ describe('response guards', () => {
     fc.assert(
       fc.property(fc.anything(), (v) => {
         expect(() => isStatusResponse(v)).not.toThrow();
+      }),
+      { seed: SEED, numRuns: RUNS },
+    );
+  });
+});
+
+describe('posts abroad', () => {
+  const post = {
+    id: 497,
+    name: 'PE Copenhagen',
+    ok: true,
+    openDates: ['2026-10-05'],
+    publishedDays: 3,
+    regionId: 2,
+    region: 'Europe',
+    countryId: 62,
+    country: 'Denmark',
+  };
+  const good = { catalogAt: '2026-09-27T02:00:00.000Z', checkedEveryMinutes: 60, posts: [post] };
+
+  it.each([
+    ['PE Copenhagen', 'Denmark', 'Copenhagen', 'Philippine Embassy, Denmark', false],
+    ['PCG Los Angeles', 'United States of America', 'Los Angeles', 'Philippine Consulate General, United States of America', false],
+    ['MECO Taipei', 'Taiwan', 'Taipei', 'Manila Economic and Cultural Office, Taiwan', false],
+    ['PE Tokyo - Outreach in Okinawa 2026', 'Japan', 'Okinawa 2026', 'Outreach by the Philippine Embassy in Tokyo, Japan', true],
+    ['PE Brussels  - Outreach in Luxembourg', 'Belgium', 'Luxembourg', 'Outreach by the Philippine Embassy in Brussels, Belgium', true],
+    ['PE Oslo - Kristiansand Consular Outreach', 'Norway', 'Kristiansand', 'Outreach by the Philippine Embassy in Oslo, Norway', true],
+    ['PE Canberra - Outreach Mission - Darwin', 'Australia', 'Darwin', 'Outreach by the Philippine Embassy in Canberra, Australia', true],
+    ['PE Moscow - Consular Mission in Vladivostok', 'Russian Federation', 'Vladivostok', 'Outreach by the Philippine Embassy in Moscow, Russian Federation', true],
+    ['PE Nairobi - Outreach Mission 01 (For Dar es Salaam, Tanzania)', 'Kenya', 'Dar es Salaam, Tanzania', 'Outreach by the Philippine Embassy in Nairobi, Kenya', true],
+    ['PE Riyadh - Outreach Mission 01 Buraidah', 'Saudi Arabia', 'Buraidah', 'Outreach by the Philippine Embassy in Riyadh, Saudi Arabia', true],
+    ['Consulate of Somewhere', 'Nowhere', 'Consulate of Somewhere', 'Nowhere', false],
+  ])('describe %s', (name, country, place, detail, outreach) => {
+    expect(describePost(name, country)).toEqual({ place, detail, outreach });
+  });
+
+  it('describe any name without throwing, always naming a place', () => {
+    fc.assert(
+      fc.property(fc.string({ maxLength: 120 }), fc.string({ maxLength: 60 }), (name, country) => {
+        const d = describePost(name, country);
+        expect(typeof d.place).toBe('string');
+        expect(typeof d.detail).toBe('string');
+      }),
+      { seed: SEED, numRuns: RUNS },
+    );
+  });
+
+  it('accept a real answer and refuse broken ones', () => {
+    expect(isAbroadResponse(good)).toBe(true);
+    expect(isAbroadResponse({ ...good, catalogAt: null, posts: [] })).toBe(true);
+    for (const bad of [
+      { ...good, checkedEveryMinutes: 0 },
+      { ...good, posts: [{ ...post, country: '' }] },
+      { ...good, posts: [{ ...post, regionId: 0 }] },
+      { ...good, posts: [{ ...post, openDates: ['2026-02-30'] }] },
+      { ...good, catalogAt: 'last week' },
+    ]) {
+      expect(isAbroadResponse(bad)).toBe(false);
+    }
+    fc.assert(
+      fc.property(fc.anything(), (v) => {
+        expect(() => isAbroadResponse(v)).not.toThrow();
       }),
       { seed: SEED, numRuns: RUNS },
     );

@@ -1,13 +1,16 @@
 // The website's API. Caddy serves the React build and forwards /api/* here.
-// It never talks to passport.gov.ph: it reads what the checker stored.
+// It reads what the checker stored; only its lookups (lookups.ts) ask passport.gov.ph.
 import {
+  type AbroadResponse,
   type ApiError,
   type ConfirmResponse,
+  describePost,
   isCalendarDate,
   isToken,
   isUnsubscribeToken,
   LIMITS,
   type OfficeDates,
+  type SiteStatus,
   type SiteSummary,
   type StatusResponse,
   type SubscribeResponse,
@@ -17,6 +20,7 @@ import { createHmac } from 'node:crypto';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { abroadResponse, catalogPosts } from './abroad.ts';
 import { emailIndex, signUnsubscribe } from './crypto.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv } from './kv.ts';
@@ -76,7 +80,12 @@ export function createApi(deps: ApiDeps) {
     if (sitesCache && now() - sitesCache.at < SITES_CACHE_MS) return sitesCache.sites;
     const raw = await kv.get(K.sites);
     if (!raw) return null;
-    sitesCache = { at: now(), sites: JSON.parse(raw) as SiteSummary[] };
+    // Posts abroad too, named the way people know them: "Copenhagen (Philippine Embassy, Denmark)".
+    const abroad = (await catalogPosts(kv)).map((p) => {
+      const d = describePost(p.name, p.country);
+      return { id: p.id, name: `${d.place} (${d.detail})` };
+    });
+    sitesCache = { at: now(), sites: [...(JSON.parse(raw) as SiteSummary[]), ...abroad] };
     return sitesCache.sites;
   }
 
@@ -130,6 +139,11 @@ export function createApi(deps: ApiDeps) {
     });
   });
 
+  app.get('/api/abroad', async (c) => {
+    if (await limited(c, API_LIMITS.readPerIp)) return fail(c, 429, TOO_MANY);
+    return c.json<AbroadResponse>(await abroadResponse(kv));
+  });
+
   // -- Office details: dates for a group size, and the hours of one day ------
 
   async function officeFrom(raw: string | undefined) {
@@ -137,9 +151,15 @@ export function createApi(deps: ApiDeps) {
     const stored = await kv.get(K.status);
     const status = stored ? (JSON.parse(stored) as Omit<StatusResponse, 'mailLive'>) : null;
     const site = status?.sites.find((s) => s.id === Number(raw));
+    if (!site) {
+      // A post abroad, checked about hourly: one never checked yet has nothing
+      // stored to fall back on, so its dates must come from the DFA.
+      const post = (await abroadResponse(kv)).posts.find((p) => p.id === Number(raw));
+      return post ? { site: post as SiteStatus, checkedAt: post.checkedAt ?? new Date(0).toISOString(), never: !post.checkedAt } : null;
+    }
     // An office whose latest check failed shows older dates: say when they were read.
-    const checkedAt = site?.checkedAt ?? status?.lastHealthyAt ?? status?.checkedAt ?? new Date(now()).toISOString();
-    return site && status ? { site, checkedAt } : null;
+    const checkedAt = site.checkedAt ?? status?.lastHealthyAt ?? status?.checkedAt ?? new Date(now()).toISOString();
+    return status ? { site, checkedAt, never: false } : null;
   }
 
   const peopleFrom = (raw: string | undefined) => {
@@ -178,7 +198,7 @@ export function createApi(deps: ApiDeps) {
       try {
         return c.json(newer(await deps.lookups.dates(office.site.id, 1)));
       } catch (err) {
-        if (err instanceof LookupUnavailable) return c.json(scan);
+        if (err instanceof LookupUnavailable) return office.never ? lookupFailed(c, err) : c.json(scan);
         throw err;
       }
     }

@@ -149,7 +149,7 @@ export function OfficeView(props: Props) {
   return (
     <article className="office" aria-labelledby="office-title">
       <button type="button" className="back" onClick={onBack}>
-        <ChevronIcon /> All offices
+        <ChevronIcon /> {office.country ? 'All posts abroad' : 'All offices'}
       </button>
 
       <header className="office-head">
@@ -207,7 +207,11 @@ export function OfficeView(props: Props) {
 
       {noneOpen && (
         <div className="fallback">
-          <p>New dates are usually released around 12 noon and 9 PM.</p>
+          <p>
+            {office.country
+              ? 'Each post releases dates on its own schedule. We check this one about hourly, and email you when a date opens.'
+              : 'New dates are usually released around 12 noon and 9 PM.'}
+          </p>
           {actions}
           {nearby.length > 0 && (
             <>

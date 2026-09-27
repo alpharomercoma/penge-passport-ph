@@ -154,7 +154,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
                       type="search"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Search a city or mall"
+                      placeholder="Search a city, mall or country"
                       autoComplete="off"
                       maxLength={60}
                     />

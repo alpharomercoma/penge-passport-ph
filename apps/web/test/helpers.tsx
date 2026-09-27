@@ -1,4 +1,4 @@
-import type { OfficeTimes, SiteSummary, StatusResponse } from '@penge/contracts';
+import type { AbroadResponse, OfficeTimes, SiteSummary, StatusResponse } from '@penge/contracts';
 import { vi } from 'vitest';
 import type { Api } from '../src/api.ts';
 
@@ -35,6 +35,36 @@ export const STATUS: StatusResponse = {
   })),
 };
 
+const recent = new Date(Date.now() - 20 * 60_000).toISOString();
+const post = (id: number, name: string, regionId: number, region: string, countryId: number, country: string, openDates: string[], publishedDays = 12) => ({
+  id,
+  name,
+  address: id === 497 ? 'Arne Jacobsens Alle 13, 1st Floor, 2300 Copenhagen' : null,
+  telephone: id === 497 ? '+45 71415952' : null,
+  mapUrl: null,
+  checkedAt: recent,
+  ok: true,
+  openDates,
+  fullDates: [],
+  windowEnd: '2027-03-31',
+  publishedDays,
+  regionId,
+  region,
+  countryId,
+  country,
+});
+
+export const ABROAD: AbroadResponse = {
+  catalogAt: recent,
+  checkedEveryMinutes: 60,
+  posts: [
+    post(200, 'PE Tokyo', 1, 'Asia Pacific', 20, 'Japan', ['2026-10-12']),
+    { ...post(201, 'PE Tokyo - Outreach in Okinawa 2026', 1, 'Asia Pacific', 20, 'Japan', [], 0), ok: false, checkedAt: null },
+    post(497, 'PE Copenhagen', 2, 'Europe', 62, 'Denmark', [], 0),
+    post(36, 'PCG Dubai', 5, 'Middle East/Africa', 4, 'United Arab Emirates', ['2026-10-06', '2026-10-07']),
+  ],
+};
+
 export const TIMES: OfficeTimes = {
   siteId: 486,
   date: '2026-10-07',
@@ -50,12 +80,13 @@ export const TIMES: OfficeTimes = {
 export function fakeApi(overrides: Partial<Api> = {}): Api & { [K in keyof Api]: ReturnType<typeof vi.fn> } {
   return {
     status: vi.fn(async () => STATUS),
+    abroad: vi.fn(async () => ABROAD),
     subscribe: vi.fn(async () => 'Check your inbox for a confirmation link.'),
     confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1 })),
     unsubscribe: vi.fn(async () => {}),
     // Each office's own dates; a group of 4 or more fits only on the office's last open day.
     officeDates: vi.fn(async (siteId: number, applicants: number) => {
-      const site = STATUS.sites.find((s) => s.id === siteId);
+      const site = STATUS.sites.find((s) => s.id === siteId) ?? ABROAD.posts.find((s) => s.id === siteId);
       const open = site?.openDates ?? [];
       const fits = applicants > 3 ? open.slice(-1) : open;
       return {

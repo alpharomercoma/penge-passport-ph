@@ -1,7 +1,7 @@
 // Turning the checker's status into what the page shows: offices with a place
 // and a detail line, sorted and searchable, and dates and hours as words.
-import { LIMITS, officeMapUrl, officePhone, type SiteStatus } from '@penge/contracts';
-import { type Area, areaOf } from './areas.ts';
+import { type AbroadPost, describePost, LIMITS, officeMapUrl, officePhone, type SiteStatus } from '@penge/contracts';
+import { areaOf } from './areas.ts';
 
 export interface Office {
   id: number;
@@ -9,9 +9,12 @@ export interface Office {
   name: string;
   /** "Antipolo" */
   place: string;
-  /** "SM Center, Antipolo City, Rizal" */
+  /** "SM Center, Antipolo City, Rizal"; abroad, "Philippine Embassy, Denmark" */
   detail: string;
-  area: Area;
+  /** NCR, Luzon, Visayas or Mindanao at home; the DFA's region abroad ("Europe"). */
+  area: string;
+  /** Abroad only: the country the post is in. */
+  country: string | null;
   address: string | null;
   telephone: string | null;
   mapUrl: string | null;
@@ -52,26 +55,36 @@ export function splitName(name: string): { place: string; detail: string } {
   return { place: place || tidy(name), detail };
 }
 
+function facts(s: SiteStatus) {
+  const dates = [...s.openDates].sort();
+  return {
+    id: s.id,
+    name: s.name,
+    address: s.address?.replace(/\s+/g, ' ').trim() || null,
+    telephone: officePhone(s.telephone),
+    mapUrl: officeMapUrl(s.mapUrl),
+    ok: s.ok,
+    checkedAt: s.checkedAt ?? null,
+    openDates: dates,
+    fullDates: [...(s.fullDates ?? [])].sort(),
+    windowEnd: s.windowEnd ?? null,
+    publishedDays: s.publishedDays,
+    earliest: dates[0] ?? null,
+  };
+}
+
 export function toOffices(sites: SiteStatus[]): Office[] {
   return sites.map((s) => {
-    const dates = [...s.openDates].sort();
     const parts = splitName(s.name);
-    return {
-      id: s.id,
-      name: s.name,
-      ...parts,
-      area: areaOf(parts.place),
-      address: s.address?.replace(/\s+/g, ' ').trim() || null,
-      telephone: officePhone(s.telephone),
-      mapUrl: officeMapUrl(s.mapUrl),
-      ok: s.ok,
-      checkedAt: s.checkedAt ?? null,
-      openDates: dates,
-      fullDates: [...(s.fullDates ?? [])].sort(),
-      windowEnd: s.windowEnd ?? null,
-      publishedDays: s.publishedDays,
-      earliest: dates[0] ?? null,
-    };
+    return { ...facts(s), ...parts, area: areaOf(parts.place), country: null };
+  });
+}
+
+/** Posts abroad: "PE Copenhagen" in Denmark reads as Copenhagen, Philippine Embassy, Denmark. */
+export function toAbroadOffices(posts: AbroadPost[]): Office[] {
+  return posts.map((p) => {
+    const { place, detail } = describePost(p.name, p.country);
+    return { ...facts(p), place, detail, area: p.region, country: p.country };
   });
 }
 

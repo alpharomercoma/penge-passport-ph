@@ -22,7 +22,19 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { type Availability, CircuitOpenError, type Site } from 'penge-passport-ph';
-import { officeMapUrl, officePhone, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import { describePost, officeMapUrl, officePhone, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import {
+  ABROAD_DEADLINE_MS,
+  ABROAD_GROUP_CAP,
+  ABROAD_POSTS_PER_RUN,
+  ABROAD_REQUESTS_PER_RUN,
+  type AbroadUpstream,
+  CATALOG_STEPS_PER_RUN,
+  catalogPosts,
+  scanAbroad,
+  stepCatalog,
+  writeAbroadStatus,
+} from './abroad.ts';
 import { unsubscribeLinks } from './api.ts';
 import { exportSubscribers } from './backup.ts';
 import { K, manilaDay } from './keys.ts';
@@ -50,6 +62,8 @@ export interface Upstream {
 export interface CheckDeps {
   kv: Kv;
   upstream: Upstream;
+  /** Posts abroad, on their own rate limiter (abroad.ts); without it only the Philippines is scanned. */
+  abroad?: AbroadUpstream;
   sink: SnapshotSink;
   mailer: Mailer;
   keys: Keys;
@@ -109,6 +123,18 @@ export interface DeliveryReport {
   stoppedBy: 'paused' | 'daily limit' | 'mail errors' | null;
 }
 
+export interface AbroadReport {
+  /** Posts asked this run, and how many of them failed. */
+  checked: number;
+  failed: number;
+  /** Steps taken in reading the list of posts (weekly). */
+  catalogSteps: number;
+  /** False when too many posts failed, or the rate limiter paused: no alerts from them this run. */
+  trusted: boolean;
+  queued: number;
+  problems: string[];
+}
+
 export interface RunReport {
   runId: string;
   skipped: 'locked' | 'cooling down' | null;
@@ -117,6 +143,7 @@ export interface RunReport {
   uploaded: boolean;
   queued: number;
   delivery: DeliveryReport | null;
+  abroad: AbroadReport | null;
 }
 
 const message = (err: unknown) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err));
@@ -158,15 +185,16 @@ type LoadSubscriber = ReturnType<typeof subscriberCache>;
 export async function runCheck(deps: CheckDeps): Promise<RunReport> {
   const { kv, log } = deps;
   const now = deps.now ?? Date.now;
-  const runId = deps.runId ?? newRunId(now());
+  const started = now();
+  const runId = deps.runId ?? newRunId(started);
 
   if (await kv.get(K.scanCooldown)) {
     log.info('the site had trouble on a recent scan; resting before the next', { runId });
-    return { runId, skipped: 'cooling down', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null };
+    return { runId, skipped: 'cooling down', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null, abroad: null };
   }
   if (!(await kv.set(K.checkLock, runId, { nx: true, ttlSeconds: LOCK_TTL_SECONDS }))) {
     log.warn('another check is running; skipping this one', { runId });
-    return { runId, skipped: 'locked', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null };
+    return { runId, skipped: 'locked', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null, abroad: null };
   }
   try {
     const holdLock = async () => {
@@ -191,9 +219,15 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
     } else {
       log.warn('unhealthy run: no alerts, baselines unchanged', { runId, problems: scan.problems });
     }
-    const delivery = await deliver(deps, now);
+    let delivery = await deliver(deps, now);
+    // Posts abroad come after the Philippines' alerts are out, so they never delay them.
+    let abroad: AbroadReport | null = null;
+    if (deps.abroad) {
+      abroad = await abroadPass(deps, deps.abroad, scan.runId, now, started + ABROAD_DEADLINE_MS, loadSubscriber, holdLock);
+      if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now));
+    }
     await backupOncePerDay(deps, now, runId);
-    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, uploaded, queued, delivery };
+    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, uploaded, queued, delivery, abroad };
   } finally {
     if ((await kv.get(K.checkLock)) === runId) await kv.write([{ op: 'del', key: K.checkLock }]);
   }
@@ -219,6 +253,7 @@ async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: strin
   try {
     const raw = await kv.get(K.sites);
     const siteIds = raw ? (JSON.parse(raw) as { id: number }[]).map((s) => s.id) : [];
+    for (const post of await catalogPosts(kv)) siteIds.push(post.id);
     const backup = await exportSubscribers(kv, siteIds, now());
     await sink.putObject(backupKey(day), gzipSync(JSON.stringify(backup)), 'application/gzip');
     log.info('subscriber backup stored', { day, subscribers: backup.subscribers.length });
@@ -327,7 +362,7 @@ async function scanAll(
 
   const health = assessHealth(loaded, sites);
   const healthy = health.healthy && problems.length === 0;
-  const groups = healthy && !circuitOpen ? await scanGroups(deps, sites, loadSubscriber) : [];
+  const groups = healthy && !circuitOpen ? await scanGroups(deps.kv, deps.upstream, sites, loadSubscriber, GROUP_QUERY_CAP) : [];
   return {
     schema: SCAN_SCHEMA,
     runId,
@@ -346,14 +381,20 @@ async function scanAll(
  * lookup only at sites that have room for 1 and have subscribers who asked
  * for more. Lookups past the cap are recorded as skipped.
  */
-async function scanGroups(deps: CheckDeps, sites: SiteObservation[], loadSubscriber: LoadSubscriber) {
+async function scanGroups(
+  kv: Kv,
+  upstream: Pick<Upstream, 'availability'>,
+  sites: SiteObservation[],
+  loadSubscriber: LoadSubscriber,
+  cap: number,
+) {
   const groups: GroupObservation[] = [];
-  let budget = GROUP_QUERY_CAP;
+  let budget = cap;
   let stop: string | null = null;
   for (const site of sites) {
     if (!site.ok || site.openDates.length === 0) continue;
     const sizes = new Set<number>();
-    for (const id of await deps.kv.sMembers(K.siteSubscribers(site.id))) {
+    for (const id of await kv.sMembers(K.siteSubscribers(site.id))) {
       const sub = await loadSubscriber(id);
       if (sub && sub.applicants > 1) sizes.add(sub.applicants);
     }
@@ -364,11 +405,11 @@ async function scanGroups(deps: CheckDeps, sites: SiteObservation[], loadSubscri
         continue;
       }
       if (budget-- <= 0) {
-        skip(`skipped: more than ${GROUP_QUERY_CAP} group lookups this run`);
+        skip(`skipped: more than ${cap} group lookups this run`);
         continue;
       }
       try {
-        const a = await deps.upstream.availability({ siteId: site.id, applicants });
+        const a = await upstream.availability({ siteId: site.id, applicants });
         groups.push({ siteId: site.id, applicants, ok: true, error: null, openDates: [...a.availableDates].sort() });
       } catch (err) {
         skip(message(err));
@@ -377,6 +418,86 @@ async function scanGroups(deps: CheckDeps, sites: SiteObservation[], loadSubscri
     }
   }
   return groups;
+}
+
+/** Posts abroad failing beyond this share (or 2, whichever is more) make a run's posts untrusted: no alerts from them. */
+export const ABROAD_MAX_FAILED_FRACTION = 0.5;
+
+/**
+ * One run's share of the posts abroad: a few steps of reading their list, the
+ * posts most overdue, their status, and alerts for dates that just opened
+ * there, by the same rules as at home (baselines first, 3-hour announce
+ * window, caps). Stored in R2 beside the scans, under scans-abroad/.
+ */
+async function abroadPass(
+  deps: CheckDeps,
+  upstream: AbroadUpstream,
+  runId: string,
+  now: () => number,
+  deadline: number,
+  loadSubscriber: LoadSubscriber,
+  holdLock: () => Promise<void>,
+): Promise<AbroadReport> {
+  const { kv, log } = deps;
+  const more = () => now() < deadline;
+  const startedAt = new Date(now()).toISOString();
+  // The list and the posts share ABROAD_REQUESTS_PER_RUN; until the list is first read in full, it takes them all.
+  const firstReading = (await kv.get(K.abroadCatalogAt)) === null;
+  const catalog = await stepCatalog(kv, upstream, now, more, log, firstReading ? ABROAD_REQUESTS_PER_RUN : CATALOG_STEPS_PER_RUN);
+  const maxPosts = Math.min(ABROAD_POSTS_PER_RUN, ABROAD_REQUESTS_PER_RUN - catalog.steps);
+  const { observations, circuitOpen } = await scanAbroad({ kv, upstream, now, more, holdLock, maxPosts });
+  const followed = new Set<number>();
+  for (const o of observations) if ((await kv.sMembers(K.siteSubscribers(o.id))).length > 0) followed.add(o.id);
+  await writeAbroadStatus(kv, observations, now(), (id) => followed.has(id));
+
+  const failed = observations.filter((o) => !o.ok).length;
+  const trusted = observations.length > 0 && !circuitOpen && failed <= Math.max(2, observations.length * ABROAD_MAX_FAILED_FRACTION);
+  const problems = [...catalog.problems, ...observations.filter((o) => !o.ok).map((o) => `${o.name}: ${o.error}`)];
+  // Alerts name a post the way people know it: "Copenhagen (Philippine Embassy, Denmark)".
+  const sites: SiteObservation[] = observations.map(({ post, ...o }) => {
+    const d = describePost(post.name, post.country);
+    return { ...o, name: `${d.place} (${d.detail})` };
+  });
+  const groups = trusted ? await scanGroups(kv, upstream, sites, loadSubscriber, ABROAD_GROUP_CAP) : [];
+  const scan: Scan = {
+    schema: SCAN_SCHEMA,
+    runId,
+    startedAt,
+    finishedAt: new Date(now()).toISOString(),
+    source: { host: 'passport.gov.ph', client: deps.client },
+    healthy: trusted,
+    problems,
+    sites,
+    groups,
+  };
+  let queued = 0;
+  if (trusted) {
+    await holdLock();
+    queued = await queueAlerts(deps, scan, now, loadSubscriber);
+  } else if (observations.length > 0) {
+    log.warn('posts abroad: too many failed this run; no alerts from them', { runId, failed, circuitOpen });
+  }
+  if (observations.length > 0 && deps.sink.putObject) {
+    const stamp = startedAt.replace(/[:.]/g, '-');
+    // Kept with the posts' own names and places, for analysis.
+    const stored = { ...scan, sites: observations };
+    await deps.sink
+      .putObject(`scans-abroad/v${SCAN_SCHEMA}/date=${startedAt.slice(0, 10)}/${stamp}_${runId}.json.gz`, gzipSync(JSON.stringify(stored)), 'application/gzip')
+      .catch((err: unknown) => log.warn('posts abroad: the record did not reach R2', { runId, err: err as Error }));
+  }
+  return { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems };
+}
+
+function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
+  return {
+    sent: a.sent + b.sent,
+    dryRun: a.dryRun + b.dryRun,
+    skipped: a.skipped + b.skipped,
+    failed: a.failed + b.failed,
+    dropped: a.dropped + b.dropped,
+    remaining: b.remaining,
+    stoppedBy: b.stoppedBy ?? a.stoppedBy,
+  };
 }
 
 async function writeStatus(kv: Kv, scan: Scan) {

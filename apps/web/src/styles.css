@@ -107,6 +107,12 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .loading { padding: 24px 0; }
 .down { display: grid; gap: 12px; justify-items: start; padding: 20px; border-radius: var(--r); background: var(--surface); }
 
+/* Philippines | Abroad: where to look. Always shown, and the chosen side is filled in ink. */
+.scope { display: flex; gap: 4px; padding: 4px; border-radius: var(--r); background: var(--surface); }
+.scope button { flex: 1; min-height: 44px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-2); font: inherit; font-weight: 600; cursor: pointer; }
+.scope button[aria-pressed='true'] { background: var(--ink); color: var(--bg); }
+@media (min-width: 640px) { .scope { max-width: 360px; } }
+
 /* all offices */
 .tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 16px; border-radius: var(--r); background: var(--surface); }
 .tabs button { flex: 1; min-height: 44px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-2); font: inherit; font-weight: 600; cursor: pointer; }
@@ -129,6 +135,9 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .filter-chip[aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .empty { padding: 20px 0; color: var(--ink-2); }
 .rows { list-style: none; margin: 0; padding: 0; }
+/* posts abroad, under their country */
+.country-name { margin: 20px 4px 2px; color: var(--ink-2); font-size: 0.875rem; font-weight: 700; }
+.country:first-child .country-name { margin-top: 8px; }
 .rows li + li { border-top: 1px solid var(--line); }
 .row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 4px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .row:hover { background: var(--surface); }

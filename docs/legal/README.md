@@ -219,9 +219,10 @@ We don't assume its servers are old or weak. What the record shows:
 |---|---|
 | Scans | Every 5 minutes, about 45 requests each, taking about 2.5 minutes |
 | Scans' budget | At most 720 requests in any rolling hour, on their own rate limiter (a full hour of scans needs 696 at most) |
+| Posts abroad | About 130 embassies, consulates and outreach missions, each checked about hourly (every 6 hours while it publishes none and nobody follows it), a dozen per run; at most 300 requests in any rolling hour on a third rate limiter (276 at most needed, about 156 usually) |
 | Visitors' lookups | At most 1,000 requests in any rolling hour, on a separate rate limiter; each answer shared for 3 minutes |
 | Spacing | At least 3 seconds between requests on each limiter |
-| Worst case | 1,720 requests an hour if both budgets were ever used up (one every 2.1 s on average); scans alone are about 540 |
+| Worst case | 2,020 requests an hour if all three budgets were ever used up (one every 1.8 s on average); the scans at home are about 540, and the posts abroad about 156 more |
 | Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour. After 5 failures in a row, or a single `Retry-After` longer than an hour, the limiter stops for 15 minutes, or for as long as `Retry-After` asks, up to an hour |
 | When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 10 minutes; a scan still running when the next is due is skipped |
 | Hard ceiling | The library refuses more than 1,200 requests an hour on any one limiter |
@@ -231,6 +232,9 @@ We don't assume its servers are old or weak. What the record shows:
 hour in total to the settings above.
 - **The case for.** Openings are short-lived: of the openings our scans saw on 26–27 September, 60% were
   gone by the next scan 15 minutes later. Scanning more often catches more of them, sooner.
+- **Posts abroad.** Added the same day. Asking all of them every 5 minutes would have tripled the load, so
+  each is asked about once an hour, a sixth of the rate at home, and a post that publishes nothing every
+  6 hours.
 - **The case for caution.** Our requests reach the site's origin server directly. The law's line is "reckless
   hindering". The UK shows a government can ban scanners. The DFA does not yet know this service exists.
 - The rest of this page's open items follow from that.

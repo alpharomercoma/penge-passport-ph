@@ -35,7 +35,8 @@ Every 5 minutes (a scan is ~45 requests at the library's 3-second pace and takes
 `penge-check.service` asks every office for its calendar for one person, looks up group sizes that
 subscribers asked for, and stores the scan in R2. Then, only if the scan passes its checks,
 it compares each office with its last good look and emails whoever was waiting for a date that just
-opened. The guardrails:
+opened. After that, the same run checks the dozen most overdue of the ~130 posts abroad (below). The
+guardrails:
 
 1. One run at a time, enforced in Redis, so a laptop pointed at the same Redis cannot race the server.
 2. **An unhealthy scan sends nothing and changes no baseline**: the office list failed or was empty,
@@ -64,14 +65,24 @@ Exit code 3 means the scan failed its checks and nothing was emailed; `systemctl
 The API asks passport.gov.ph too, but only when someone opens an office or taps a day: fresh dates, dates
 for a group, and the hours of a day. Each answer is shared with everyone for 3 minutes.
 
-**Two budgets that never compete** (`apps/server/src/budget.ts`, checked by `test/budget.test.ts`):
+**Posts abroad** (`apps/server/src/abroad.ts`): the embassies, consulates and outreach missions that
+book on passport.gov.ph too, 133 in 68 countries in September 2026. They are not all asked every 5
+minutes. Each run, after the scan at home and its emails, checks the dozen most overdue on their own
+rate limiter: a post that publishes dates, or that someone follows, about once an hour; one that
+publishes none, every 6 hours. The list of posts is read again once a week, a few countries per run
+(18 a run the first time, so a new server lists them within half an hour, checking none meanwhile).
+Alerts follow the same rules as at home; a run where most of its posts failed sends nothing from them,
+and each post that failed keeps what was known. What each run saw goes to R2 under `scans-abroad/`.
+
+**Three budgets that never compete** (`apps/server/src/budget.ts`, checked by `test/budget.test.ts`):
 
 | | Rate limiter state | Most in any rolling hour | What fills it |
 |---|---|---|---|
 | Scans | `/var/lib/penge/limiter/scans` | 720 | 12 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 696 at most |
+| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 12 runs × (a session, 18 shared by 12 posts and 6 steps of reading the list, 4 group checks) = 276 at most; about 156 usually |
 | Visitors' lookups | `/var/lib/penge/limiter/lookups` | 1000 | Fresh dates, group dates, hours of a day, and the API's own sessions |
 
-Both are enforced by the library over an exact rolling hour, each request at least 3 seconds after
+All are enforced by the library over an exact rolling hour, each request at least 3 seconds after
 the last one on the same limiter. A busy hour of visitors cannot delay a scan. Past the lookups'
 budget, the page shows the last answer with its age, or says to try again in a few minutes.
 [docs/legal](../docs/legal/README.md) explains how these numbers were chosen and what the law and
@@ -85,6 +96,7 @@ All times are Manila time; the server's clock is UTC.
 |---|---|---|
 | Every office's dates, for one person | A scan starts at :02, :07, :12… and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker rests 10 minutes after a scan the site struggled with |
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
+| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | A dozen posts each run, after the scan at home and its emails; alerts in the same run. The list of posts is read again weekly |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA; shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
@@ -92,7 +104,7 @@ All times are Manila time; the server's clock is UTC.
 | Debian and Caddy security updates | Daily | Restart at 04:30 only when an update needs it |
 | Node.js security releases | Weekly, Tuesday 04:10–04:40 | Signature-checked; runs at the next boot if the server was off |
 | HTTPS certificate | Caddy renews it before it expires | |
-| Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later |
+| Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later. What each run saw at the posts abroad goes to `scans-abroad/`, and is not kept for later if R2 is down |
 | Subscriber backup to R2 | Once a day, on the first scan after midnight | |
 | Valkey to disk | Continuously | Append-only file, flushed every second |
 | Logs | Rotated daily | Journal kept 14 days; the mail log and root's mailbox keep 3 old days plus today |

@@ -31,6 +31,14 @@ export const K = {
   rate: (bucket: string, id: string) => `${P}rate:${bucket}:${id}`,
   /** Cached answers to on-demand lookups (dates for a group, hours of a day). */
   lookup: (what: string) => `${P}lookup:${what}`,
+  /** Hash: country id → JSON of that country's posts abroad, as last read from the DFA. */
+  abroadCountries: `${P}abroad:countries`,
+  /** List of steps left in the current reading of the posts abroad (JSON each). */
+  abroadPlan: `${P}abroad:plan`,
+  /** When the list of posts abroad was last read in full. */
+  abroadCatalogAt: `${P}abroad:catalog-at`,
+  /** Hash: post id → JSON of its latest check and when it is next due. */
+  abroadStatus: `${P}abroad:status`,
 };
 
 /** `YYYY-MM-DD` in Manila, where the day boundaries of the daily caps fall. */

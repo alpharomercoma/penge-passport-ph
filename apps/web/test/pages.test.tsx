@@ -333,6 +333,92 @@ describe('home', () => {
   }, 20_000 + RUNS * 400);
 });
 
+describe('posts abroad', () => {
+  beforeEach(() => {
+    visit('/');
+    window.localStorage.clear();
+  });
+
+  const inAbroadList = async () => within((await screen.findAllByRole('region', { name: 'Posts abroad, by country' }))[0]!);
+
+  it('loads posts abroad only when asked, and lists them by country under the DFA\'s regions', async () => {
+    const api = fakeApi();
+    render(<App path="/" api={api} />);
+    await screen.findByText(SUMMARY);
+    expect(api.abroad).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Abroad' }));
+    const list = await inAbroadList();
+    expect(api.abroad).toHaveBeenCalledTimes(1);
+    expect(window.location.search).toBe('?in=abroad');
+    expect(document.querySelector('.summary')!.textContent).toMatch(/^2 of 4 posts abroad have open dates for one person\. Each is checked about every 60 minutes/);
+    expect([...document.querySelectorAll('.pane-offices .country-name')].map((e) => e.textContent)).toEqual(['Denmark', 'Japan', 'United Arab Emirates']);
+    const copenhagen = within(list.getByRole('button', { name: /^Copenhagen/ }));
+    // Under the Denmark heading, the row need not name Denmark again.
+    expect(copenhagen.getByText('Philippine Embassy')).toBeTruthy();
+    expect(copenhagen.getByText('No dates yet')).toBeTruthy();
+    const okinawa = within(list.getByRole('button', { name: /^Okinawa 2026/ }));
+    expect(okinawa.getByText('Outreach by the Philippine Embassy in Tokyo')).toBeTruthy();
+    expect(okinawa.getByText('Not checked yet')).toBeTruthy();
+    expect(list.getByText('All 4 posts, by country')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'By post' })).toBeTruthy();
+    // The regions are the DFA's, and only those with posts are offered.
+    const chips = within(screen.getByRole('group', { name: 'Region' })).getAllByRole('button').map((b) => b.textContent);
+    expect(chips).toEqual(['Asia Pacific', 'Europe', 'Middle East/Africa']);
+    fireEvent.click(screen.getByRole('button', { name: 'Europe' }));
+    expect([...document.querySelectorAll('.pane-offices .row-place')].map((e) => e.textContent)).toEqual(['Copenhagen']);
+    // And back home.
+    fireEvent.click(screen.getByRole('button', { name: 'Philippines' }));
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(window.location.search).toBe('');
+  });
+
+  it('opens a post like an office, and says when posts abroad release dates', async () => {
+    const api = fakeApi();
+    visit('/?in=abroad');
+    render(<App path="/" api={api} />);
+    fireEvent.click((await inAbroadList()).getByRole('button', { name: /^Copenhagen/ }));
+    expect(await screen.findByRole('heading', { name: 'Copenhagen' })).toBeTruthy();
+    expect(screen.getByText('Philippine Embassy, Denmark')).toBeTruthy();
+    expect(screen.getByText('Arne Jacobsens Alle 13, 1st Floor, 2300 Copenhagen')).toBeTruthy();
+    expect(await screen.findByText(/Each post releases dates on its own schedule/)).toBeTruthy();
+    expect(window.location.search).toBe('?in=abroad&office=497');
+    fireEvent.click(screen.getByRole('button', { name: 'All posts abroad' }));
+    expect(await inAbroadList()).toBeTruthy();
+    expect(window.location.search).toBe('?in=abroad');
+  });
+
+  it('opens a post straight from a shared link', async () => {
+    visit('/?office=36&date=2026-10-07');
+    const api = fakeApi();
+    render(<App path="/" api={api} />);
+    expect(await screen.findByRole('heading', { name: 'Dubai' })).toBeTruthy();
+    await waitFor(() => expect(api.officeTimes).toHaveBeenCalledWith(36, '2026-10-07', 1));
+  });
+
+  it('offers posts abroad in the alert form, found by country', async () => {
+    const api = fakeApi();
+    render(<App path="/" api={api} />);
+    await screen.findByText(SUMMARY);
+    fireEvent.click(screen.getByRole('button', { name: /Email alerts/ }));
+    const sheet = screen.getByRole('dialog');
+    fireEvent.change(await within(sheet).findByPlaceholderText(/Search a city/), { target: { value: 'emirates' } });
+    fireEvent.click(await within(sheet).findByRole('checkbox', { name: /Dubai/ }));
+    expect(within(sheet).getByRole('button', { name: 'Remove Dubai' })).toBeTruthy();
+    fireEvent.change(within(sheet).getByLabelText('Your email'), { target: { value: 'ana@example.com' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Send confirmation email' }));
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, website: '' }));
+  });
+
+  it('explains when posts abroad cannot be loaded, and offers to try again', async () => {
+    const api = fakeApi({ abroad: vi.fn(async () => Promise.reject(new ApiFailure('The server did not answer.', 503))) as never });
+    visit('/?in=abroad');
+    render(<App path="/" api={api} />);
+    expect(await screen.findByText(/Dates can’t be loaded right now\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(api.abroad).toHaveBeenCalledTimes(2));
+  });
+});
+
 describe('confirm and unsubscribe pages', () => {
   const token = 'a'.repeat(43);
   const unsub = `${'s'.repeat(22)}.${'b'.repeat(43)}`;

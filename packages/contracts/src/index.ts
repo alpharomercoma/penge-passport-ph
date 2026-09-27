@@ -161,6 +161,23 @@ export interface StatusResponse {
   sites: SiteStatus[];
 }
 
+/** A post abroad (embassy, consulate, or one of their outreach missions) and what its latest check saw. */
+export interface AbroadPost extends SiteStatus {
+  /** The DFA's region: 1 Asia Pacific, 2 Europe, 3 North America, 4 South America, 5 Middle East/Africa. */
+  regionId: number;
+  region: string;
+  countryId: number;
+  country: string;
+}
+
+export interface AbroadResponse {
+  /** When the list of posts was last read in full from the DFA. */
+  catalogAt: string | null;
+  /** How often a post that publishes dates is checked, in minutes. */
+  checkedEveryMinutes: number;
+  posts: AbroadPost[];
+}
+
 export interface ApiError {
   error: string;
   fields?: Partial<Record<Field, string>>;
@@ -193,6 +210,46 @@ export function shortName(name: string): string {
   const cut = name.indexOf('(');
   const short = (cut > 0 ? name.slice(0, cut) : name).replace(/[\s,-]+$/, '').trim();
   return short || name.trim();
+}
+
+const POST_KINDS: Record<string, string> = {
+  PE: 'Philippine Embassy',
+  PCG: 'Philippine Consulate General',
+  MECO: 'Manila Economic and Cultural Office',
+};
+
+/**
+ * A post abroad in words: "PE Copenhagen", "Denmark" → place "Copenhagen",
+ * detail "Philippine Embassy, Denmark". An outreach mission is named for where
+ * it goes: "PE Tokyo - Outreach in Okinawa 2026" → "Okinawa 2026", run by the
+ * embassy in Tokyo.
+ */
+export function describePost(name: string, country: string): { place: string; detail: string; outreach: boolean } {
+  const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const [head = '', ...rest] = clean(name).split(/\s+-\s+/);
+  const [prefix = '', ...city] = head.split(' ');
+  const kind = POST_KINDS[prefix];
+  const base = kind ? clean(city.join(' ')) || head : head;
+  const where = clean(country);
+  if (rest.length === 0) {
+    return { place: base, detail: kind ? `${kind}, ${where}` : where, outreach: false };
+  }
+  // "Outreach Mission 01 (For Dar es Salaam, Tanzania)", "Consular Mission in
+  // Vladivostok", "Kristiansand Consular Outreach": keep only the place.
+  let place = clean(rest.join(' - '));
+  const inside = /\(\s*for\s+([^)]+)\)/i.exec(place);
+  if (inside) place = inside[1]!;
+  place = clean(
+    place
+      .replace(/^(?:consular\s+)?(?:outreach|mission)(?:\s+mission)?(?:\s+\d+)?(?:\s+(?:in|for))?\s*/i, '')
+      .replace(/\s+consular\s+outreach$/i, '')
+      .replace(/^-\s*/, ''),
+  );
+  return {
+    place: place || base,
+    detail: `Outreach by the ${kind ?? head} in ${base}, ${where}`,
+    outreach: true,
+  };
 }
 
 /** "2026-10-05" and a real day of the calendar (2026-09-31 is not one). */
@@ -237,6 +294,27 @@ const isIso = (v: unknown): v is string => typeof v === 'string' && v.length <= 
 const isDate = isCalendarDate;
 const isName = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200;
 
+function isSiteStatus(s: unknown): s is SiteStatus {
+  return (
+    isObject(s) &&
+    isId(s.id) &&
+    isName(s.name) &&
+    (s.address === undefined || s.address === null || (typeof s.address === 'string' && s.address.length <= 400)) &&
+    (s.telephone === undefined || s.telephone === null || officePhone(s.telephone) === s.telephone) &&
+    (s.mapUrl === undefined || s.mapUrl === null || officeMapUrl(s.mapUrl) === s.mapUrl) &&
+    (s.checkedAt === undefined || s.checkedAt === null || isIso(s.checkedAt)) &&
+    (s.fullDates === undefined || (Array.isArray(s.fullDates) && s.fullDates.length <= 1000 && s.fullDates.every(isDate))) &&
+    (s.windowEnd === undefined || s.windowEnd === null || isDate(s.windowEnd)) &&
+    typeof s.ok === 'boolean' &&
+    Array.isArray(s.openDates) &&
+    s.openDates.length <= 1000 &&
+    s.openDates.every(isDate) &&
+    typeof s.publishedDays === 'number' &&
+    Number.isSafeInteger(s.publishedDays) &&
+    s.publishedDays >= 0
+  );
+}
+
 export function isStatusResponse(v: unknown): v is StatusResponse {
   return (
     isObject(v) &&
@@ -246,24 +324,27 @@ export function isStatusResponse(v: unknown): v is StatusResponse {
     typeof v.mailLive === 'boolean' &&
     Array.isArray(v.sites) &&
     v.sites.length <= 500 &&
-    v.sites.every(
-      (s) =>
-        isObject(s) &&
-        isId(s.id) &&
-        isName(s.name) &&
-        (s.address === undefined || s.address === null || (typeof s.address === 'string' && s.address.length <= 400)) &&
-        (s.telephone === undefined || s.telephone === null || officePhone(s.telephone) === s.telephone) &&
-        (s.mapUrl === undefined || s.mapUrl === null || officeMapUrl(s.mapUrl) === s.mapUrl) &&
-        (s.checkedAt === undefined || s.checkedAt === null || isIso(s.checkedAt)) &&
-        (s.fullDates === undefined || (Array.isArray(s.fullDates) && s.fullDates.length <= 1000 && s.fullDates.every(isDate))) &&
-        (s.windowEnd === undefined || s.windowEnd === null || isDate(s.windowEnd)) &&
-        typeof s.ok === 'boolean' &&
-        Array.isArray(s.openDates) &&
-        s.openDates.length <= 1000 &&
-        s.openDates.every(isDate) &&
-        typeof s.publishedDays === 'number' &&
-        Number.isSafeInteger(s.publishedDays) &&
-        s.publishedDays >= 0,
+    v.sites.every(isSiteStatus)
+  );
+}
+
+export function isAbroadResponse(v: unknown): v is AbroadResponse {
+  return (
+    isObject(v) &&
+    (v.catalogAt === null || isIso(v.catalogAt)) &&
+    typeof v.checkedEveryMinutes === 'number' &&
+    Number.isSafeInteger(v.checkedEveryMinutes) &&
+    v.checkedEveryMinutes > 0 &&
+    Array.isArray(v.posts) &&
+    v.posts.length <= 1000 &&
+    v.posts.every(
+      (p) =>
+        isObject(p) &&
+        isId(p.regionId) &&
+        isName(p.region) &&
+        isId(p.countryId) &&
+        isName(p.country) &&
+        isSiteStatus(p),
     )
   );
 }

@@ -1,8 +1,10 @@
 // The only place the website talks to the server. Every answer is checked
 // before the UI uses it; anything unexpected becomes a readable error.
 import {
+  type AbroadResponse,
   type ConfirmResponse,
   type Field,
+  isAbroadResponse,
   isOfficeDates,
   isOfficeTimes,
   isStatusResponse,
@@ -83,6 +85,8 @@ const isConfirm = (v: unknown): v is ConfirmResponse => {
 
 export interface Api {
   status(): Promise<StatusResponse>;
+  /** Posts abroad, checked about hourly. */
+  abroad(): Promise<AbroadResponse>;
   subscribe(request: SubscribeRequest & { website: string }): Promise<string>;
   confirm(token: string): Promise<ConfirmResponse>;
   unsubscribe(token: string): Promise<void>;
@@ -92,6 +96,7 @@ export interface Api {
 
 export const api: Api = {
   status: async () => expect(await call(`${BASE}api/status`), isStatusResponse),
+  abroad: async () => expect(await call(`${BASE}api/abroad`), isAbroadResponse),
   subscribe: async (request) => expect(await call(`${BASE}api/subscribe`, request), hasMessage).message,
   confirm: async (token) => expect(await call(`${BASE}api/confirm`, { token }), isConfirm),
   unsubscribe: async (token) => {

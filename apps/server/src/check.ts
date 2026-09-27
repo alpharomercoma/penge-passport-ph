@@ -2,7 +2,7 @@
 // Exit codes: 0 done (or another run was in progress), 1 crashed, 3 the scan
 // failed its health checks (nothing was emailed).
 import { NAME, PengePassportPH, VERSION } from 'penge-passport-ph';
-import { SCAN_REQUESTS_PER_HOUR, scanStateDir } from './budget.ts';
+import { ABROAD_REQUESTS_PER_HOUR, abroadStateDir, SCAN_REQUESTS_PER_HOUR, scanStateDir } from './budget.ts';
 import { runCheck } from './checker.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { connectRedis } from './kv.ts';
@@ -22,11 +22,19 @@ const upstream = new PengePassportPH({
   maxWaitMs: 120_000,
   ...(config.publicBaseUrl ? { contact: config.publicBaseUrl } : {}),
 });
+// Posts abroad: their own budget and limiter, so they can never slow the scans at home.
+const abroad = new PengePassportPH({
+  stateDir: abroadStateDir(config.stateDir),
+  maxRequestsPerHour: ABROAD_REQUESTS_PER_HOUR,
+  maxWaitMs: 60_000,
+  ...(config.publicBaseUrl ? { contact: config.publicBaseUrl } : {}),
+});
 
 try {
   const report = await runCheck({
     kv,
     upstream,
+    abroad,
     sink: r2Sink({ ...r2, spoolDir: config.spoolDir, log }),
     mailer,
     keys: config.keys,

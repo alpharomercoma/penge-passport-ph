@@ -1,7 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { LIMITS } from 'penge-passport-ph';
 import { describe, expect, it } from 'vitest';
-import { LOOKUP_REQUESTS_PER_HOUR, SCAN_REQUESTS_PER_HOUR, SCANS_PER_HOUR, lookupStateDir, scanStateDir } from '../src/budget.ts';
+import { ABROAD_GROUP_CAP, ABROAD_POSTS_PER_RUN, ABROAD_REQUESTS_PER_RUN, CATALOG_STEPS_PER_RUN } from '../src/abroad.ts';
+import {
+  ABROAD_REQUESTS_PER_HOUR,
+  abroadStateDir,
+  LOOKUP_REQUESTS_PER_HOUR,
+  lookupStateDir,
+  SCAN_REQUESTS_PER_HOUR,
+  SCANS_PER_HOUR,
+  scanStateDir,
+} from '../src/budget.ts';
 import { GROUP_QUERY_CAP, RETRY_CAP } from '../src/checker.ts';
 
 describe('what the server asks of passport.gov.ph', () => {
@@ -16,9 +25,20 @@ describe('what the server asks of passport.gov.ph', () => {
     expect(SCANS_PER_HOUR * worstScan).toBeLessThanOrEqual(SCAN_REQUESTS_PER_HOUR);
   });
 
-  it('keeps both budgets under the library\'s hard ceiling, on separate rate limiters', () => {
+  it('fits every run\'s share of the posts abroad into their own budget', () => {
+    // A session, the posts and the reading of their list (sharing one allowance), and the group checks.
+    expect(ABROAD_REQUESTS_PER_RUN).toBe(ABROAD_POSTS_PER_RUN + CATALOG_STEPS_PER_RUN);
+    const worstRun = 1 + ABROAD_REQUESTS_PER_RUN + ABROAD_GROUP_CAP;
+    expect(SCANS_PER_HOUR * worstRun).toBeLessThanOrEqual(ABROAD_REQUESTS_PER_HOUR);
+    // Enough runs an hour to check about 140 posts hourly (133 were listed in September 2026).
+    expect(SCANS_PER_HOUR * ABROAD_POSTS_PER_RUN).toBeGreaterThanOrEqual(140);
+  });
+
+  it('keeps every budget under the library\'s hard ceiling, on separate rate limiters', () => {
     expect(SCAN_REQUESTS_PER_HOUR).toBeLessThanOrEqual(LIMITS.maxRequestsPerHourCeiling);
     expect(LOOKUP_REQUESTS_PER_HOUR).toBeLessThanOrEqual(LIMITS.maxRequestsPerHourCeiling);
-    expect(scanStateDir('/var/lib/penge/limiter')).not.toBe(lookupStateDir('/var/lib/penge/limiter'));
+    expect(ABROAD_REQUESTS_PER_HOUR).toBeLessThanOrEqual(LIMITS.maxRequestsPerHourCeiling);
+    const dirs = [scanStateDir, lookupStateDir, abroadStateDir].map((f) => f('/var/lib/penge/limiter'));
+    expect(new Set(dirs).size).toBe(3);
   });
 });

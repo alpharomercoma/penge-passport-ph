@@ -50,6 +50,9 @@ const BY_PLACE: Record<string, Area> = {
   zamboanga: 'Mindanao',
 };
 
+/** The DFA's own regions for its posts abroad, in its order. */
+export const REGIONS = ['Asia Pacific', 'Europe', 'North America', 'South America', 'Middle East/Africa'] as const;
+
 export function areaOf(place: string): Area {
   return BY_PLACE[place.toLowerCase()] ?? 'Other';
 }
