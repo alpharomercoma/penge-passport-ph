@@ -4,12 +4,14 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.1] - 2026-09-27
 
 ### Changed
 
 - The website moved to https://alphaexperiments.com/pengepassportph/, so the User-Agent and the package
   homepage now link there. The old address, alphaexperimental.org, no longer serves it.
+- The READMEs now say when the rate limiter stops after an error: after 5 failures in a row, or a single
+  `Retry-After` longer than an hour, for 15 minutes or as long as `Retry-After` asks, up to an hour.
 
 ## [0.1.0] - 2026-09-27
 
@@ -35,5 +37,5 @@ First release, on npm and PyPI.
 - A canary workflow that scrapes one real record (through both packages) and walks the booking UI
   every 6 hours, and opens an issue when the site changes.
 
-[Unreleased]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.0...HEAD
+[0.1.1]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpharomercoma/penge-passport-ph/releases/tag/v0.1.0

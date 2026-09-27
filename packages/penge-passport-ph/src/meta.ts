@@ -9,7 +9,7 @@ export const DISPLAY_NAME = 'PengePassportPH';
 export const NAME = 'penge-passport-ph';
 /** Short CLI command installed alongside `NAME`. */
 export const CLI_ALIAS = 'penge';
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 /** A live page about the project: shown in the CLI help and the User-Agent, so the site's operators can see who is asking. */
 export const HOMEPAGE = 'https://alphaexperiments.com/pengepassportph/';
 /** Source, issues and changelog. It must exist before a release is published (CONTRIBUTING.md). */
