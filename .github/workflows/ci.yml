@@ -58,7 +58,7 @@ jobs:
           cache: npm
       - run: npm ci && npm run build -w penge-passport-ph
         working-directory: .
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0 (no moving major tag is published)
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
