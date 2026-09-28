@@ -16,8 +16,14 @@ export interface Kv {
   get(key: string): Promise<string | null>;
   /** Returns false when `nx` is set and the key already exists. */
   set(key: string, value: string, opts?: { ttlSeconds?: number; nx?: boolean }): Promise<boolean>;
-  /** Increment a counter; a new counter expires after `ttlSeconds`. */
-  incr(key: string, ttlSeconds: number): Promise<number>;
+  /** Increment a counter (by 1 unless `by` says); a new counter expires after `ttlSeconds`. */
+  incr(key: string, ttlSeconds: number, by?: number): Promise<number>;
+  /** Increment one field of a hash by 1; a new hash expires after `ttlSeconds`. */
+  hIncr(key: string, field: string, ttlSeconds: number): Promise<number>;
+  /** Add to a HyperLogLog, which estimates how many distinct members it was given; a new one expires after `ttlSeconds`. */
+  pfAdd(key: string, member: string, ttlSeconds: number): Promise<void>;
+  /** A HyperLogLog's estimate (0.81% standard error in Redis; exact in MemoryKv). */
+  pfCount(key: string): Promise<number>;
   /** Undo one increment. */
   decr(key: string): Promise<number>;
   hGetAll(key: string): Promise<Record<string, string>>;
@@ -50,10 +56,18 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
       });
       return reply === 'OK';
     },
-    async incr(key, ttlSeconds) {
-      const [count] = await client.multi().incr(key).expire(key, ttlSeconds, 'NX').exec();
+    async incr(key, ttlSeconds, by = 1) {
+      const [count] = await client.multi().incrBy(key, by).expire(key, ttlSeconds, 'NX').exec();
       return Number(count);
     },
+    async hIncr(key, field, ttlSeconds) {
+      const [count] = await client.multi().hIncrBy(key, field, 1).expire(key, ttlSeconds, 'NX').exec();
+      return Number(count);
+    },
+    async pfAdd(key, member, ttlSeconds) {
+      await client.multi().pfAdd(key, member).expire(key, ttlSeconds, 'NX').exec();
+    },
+    pfCount: (key) => client.pfCount(key),
     decr: (key) => client.decr(key),
     hGetAll: async (key) => ({ ...(await client.hGetAll(key)) }),
     sMembers: (key) => client.sMembers(key),
@@ -92,6 +106,9 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     close: () => client.close(),
   };
 }
+
+/** A HyperLogLog in MemoryKv: kept exactly, as a set, but not readable as one. */
+class Hll extends Set<string> {}
 
 type Entry = { value: string | Map<string, string> | Set<string> | string[]; expiresAt: number | null };
 
@@ -148,9 +165,9 @@ export class MemoryKv implements Kv {
     return true;
   }
 
-  async incr(key: string, ttlSeconds: number) {
+  async incr(key: string, ttlSeconds: number, by = 1) {
     const current = this.string(key);
-    const next = (current === null ? 0 : Number(current)) + 1;
+    const next = (current === null ? 0 : Number(current)) + by;
     const expiresAt = this.entry(key)?.expiresAt ?? this.now() + ttlSeconds * 1000;
     this.data.set(key, { value: String(next), expiresAt });
     return next;
@@ -163,6 +180,32 @@ export class MemoryKv implements Kv {
     return next;
   }
 
+  /** A new key expires after `ttlSeconds`, as EXPIRE NX does right after creating it in Redis. */
+  private created<T extends Entry['value']>(key: string, ttlSeconds: number, make: () => T, is: (v: Entry['value']) => boolean): T {
+    const isNew = !this.entry(key);
+    const value = this.typed(key, make, is);
+    if (isNew) this.data.get(key)!.expiresAt = this.now() + ttlSeconds * 1000;
+    return value;
+  }
+
+  async hIncr(key: string, field: string, ttlSeconds: number) {
+    const map = this.created(key, ttlSeconds, () => new Map<string, string>(), (v) => v instanceof Map);
+    const next = Number(map.get(field) ?? 0) + 1;
+    map.set(field, String(next));
+    return next;
+  }
+
+  async pfAdd(key: string, member: string, ttlSeconds: number) {
+    this.created(key, ttlSeconds, () => new Hll(), (v) => v instanceof Hll).add(member);
+  }
+
+  async pfCount(key: string) {
+    const entry = this.entry(key);
+    if (!entry) return 0;
+    if (!(entry.value instanceof Hll)) throw new Error(`WRONGTYPE ${key}`);
+    return entry.value.size;
+  }
+
   async hGetAll(key: string) {
     const entry = this.entry(key);
     if (!entry) return {};
@@ -173,7 +216,7 @@ export class MemoryKv implements Kv {
   async sMembers(key: string) {
     const entry = this.entry(key);
     if (!entry) return [];
-    if (!(entry.value instanceof Set)) throw new Error(`WRONGTYPE ${key}`);
+    if (!(entry.value instanceof Set) || entry.value instanceof Hll) throw new Error(`WRONGTYPE ${key}`);
     return [...entry.value];
   }
 
@@ -206,7 +249,7 @@ export class MemoryKv implements Kv {
           break;
         }
         case 'sAdd': {
-          const set = this.typed(op.key, () => new Set<string>(), (v) => v instanceof Set);
+          const set = this.typed(op.key, () => new Set<string>(), (v) => v instanceof Set && !(v instanceof Hll));
           for (const m of op.members) set.add(m);
           this.tidy(op.key);
           break;

@@ -106,6 +106,7 @@ All times are Manila time; the server's clock is UTC.
 | HTTPS certificate | Caddy renews it before it expires | |
 | Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later. What each run saw at the posts abroad goes to `scans-abroad/`, and is not kept for later if R2 is down |
 | Subscriber backup to R2 | Once a day, on the first scan after midnight | |
+| Daily numbers to R2 and by email | Once a day, on the first scan after 07:00 (Manila), for the day before | `stats/v1/`; emailed to `STATS_EMAIL` when set ([Daily numbers](#daily-numbers)) |
 | Valkey to disk | Continuously | Append-only file, flushed every second |
 | Logs | Rotated daily | Journal kept 14 days; the mail log and root's mailbox keep 3 old days plus today |
 | Canary | Every 6 hours, and on pushes that change either package | A few read-only requests through both packages, and a walk of the booking pages; opens an issue when the site changes |
@@ -339,6 +340,12 @@ them, under a keyed hash of the address (never the address itself), and the coun
 two hours. Caddy's error log (in the journal, 14 days) does record the visitor's address when a request
 fails, for example a dropped HTTP/3 connection.
 
+**Visitors, counted.** The [daily numbers](#daily-numbers) count distinct visitors without a cookie, a
+script or a stored address: the API hashes the visitor's network address and browser (user agent) with a
+random salt for the Manila day and adds the hash to a HyperLogLog, which keeps an estimate of how many
+distinct hashes it saw, not the hashes. The salt is deleted within 25 hours, after which nobody can tell
+whether a given address visited, even with the database and the server's keys.
+
 ## Keys and backups
 
 Subscribers live only in Redis. Once a day the checker copies them, as stored (addresses encrypted), to R2
@@ -362,6 +369,25 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
 - The DKIM private key is `/etc/opendkim/keys/<domain>/penge.private`. Losing it only means generating
   a new one and updating the DNS record.
 - Rotate the Redis password and the R2 keys from their dashboards, update `server.env`, restart the API.
+
+## Daily numbers
+
+The API counts, per Manila day: distinct visitors (estimated, see above) and how many of them looked at
+the posts abroad, offices opened and which ones most, group sizes checked, days tapped for their hours,
+confirmation emails, new subscribers, changed subscriptions and unsubscribes. The checker adds its runs,
+the new dates it found, the alerts it sent and the ones the daily cap held back. Nothing is added to the
+page, and a request never waits for its count (`apps/server/src/stats.ts`). Crawlers, link previews and
+scripts are not counted as visitors.
+
+On the first scan after 07:00 Manila time, yesterday's numbers go to R2 as
+`stats/v1/date=YYYY-MM-DD/stats.json` (`DailyStats` in `stats.ts`) and, when `STATS_EMAIL` is set in
+`/etc/penge/server.env`, to that address. The day counting began is marked as partial. The counters stay
+in Valkey 40 days.
+
+```sql
+SELECT day, visitors, counts.officeViews, counts.confirmed, counts.alertsSent
+FROM read_json('r2://pengepassportph/stats/v1/*/stats.json') ORDER BY day;
+```
 
 ## Data in R2
 

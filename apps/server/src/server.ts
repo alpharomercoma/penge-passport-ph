@@ -8,6 +8,7 @@ import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
 import { createLookups } from './lookups.ts';
 import { createMailer } from './mailer.ts';
+import { createStats } from './stats.ts';
 
 const config = loadConfig();
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
@@ -28,6 +29,7 @@ const app = createApi({
   mailer,
   log,
   publicBaseUrl: config.publicBaseUrl ?? `http://localhost:${config.api.port}`,
+  stats: createStats(kv, log),
 });
 
 const server = serve({ fetch: app.fetch, hostname: config.api.host, port: config.api.port }, (info) =>

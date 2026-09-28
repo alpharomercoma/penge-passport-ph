@@ -2,6 +2,7 @@
 // no link shorteners: the things spam filters look at besides the DNS records.
 import { formatDate, shortName } from '@penge/contracts';
 import { DISPLAY_NAME } from 'penge-passport-ph';
+import type { DailyStats } from './stats.ts';
 
 export { formatDate, shortName };
 
@@ -110,6 +111,77 @@ ${button(BOOKING_URL, 'Book on the DFA site')}
 <p style="margin:0;font-size:14px;color:#4f5b55">Dates go fast, and they may already be taken. We never book or hold a slot for you.</p>
 ${capNote ? `<p style="margin:12px 0 0;font-size:14px;color:#4f5b55">${esc(capNote)}</p>` : ''}`,
     `You asked ${esc(DISPLAY_NAME)} for these alerts. <a href="${esc(input.manageUrl)}" style="color:#4f5b55">Change your offices</a> · <a href="${esc(input.unsubscribeUrl)}" style="color:#4f5b55">Unsubscribe</a><br>${esc(UNOFFICIAL)}`,
+  );
+  return { subject, text, html };
+}
+
+/** The operator's morning email: yesterday in numbers. */
+export function dailyStatsEmail(stats: DailyStats): Rendered {
+  const c = stats.counts;
+  const manilaTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' });
+  const partial = stats.partialFrom
+    ? `Counting started at ${manilaTime(stats.partialFrom)}, so this is part of the day.`
+    : '';
+  const top = stats.topOffices.map((o) => `${shortName(o.name)} (${o.views})`).join(', ');
+  const sections: [string, [string, string][]][] = [
+    [
+      'Visitors',
+      [
+        ['People who visited (estimated, no cookies)', String(stats.visitors)],
+        ['Of them, looked at posts abroad', String(stats.abroadVisitors)],
+        ['Offices opened', String(c.officeViews)],
+        ['Group sizes checked', String(c.groupChecks)],
+        ['Days tapped for their hours', String(c.hourLookups)],
+        ...(top ? ([['Opened most', top]] as [string, string][]) : []),
+      ],
+    ],
+    [
+      'Alerts',
+      [
+        ['Confirmation emails sent', String(c.confirmEmails)],
+        ['New subscribers', String(c.confirmed)],
+        ['Changed their offices', String(c.updated)],
+        ['Unsubscribed', String(c.unsubscribed)],
+        ['Subscribers now', String(stats.subscribers)],
+        ['Alerts sent', String(c.alertsSent)],
+        ['Alerts held back by the daily cap', String(c.alertsCapped)],
+      ],
+    ],
+    [
+      'Checker',
+      [
+        ['Checks run', `${c.runs} (${c.healthyRuns} healthy)`],
+        ['New dates found, for one person', String(c.datesOpened)],
+      ],
+    ],
+  ];
+  const where = `The same numbers are in R2 at stats/v1/date=${stats.day}/stats.json.`;
+  const day = formatDate(stats.day);
+  const subject = `${DISPLAY_NAME}, ${day}: ${stats.visitors} ${stats.visitors === 1 ? 'visitor' : 'visitors'}, ${c.confirmed} new ${c.confirmed === 1 ? 'subscriber' : 'subscribers'}`;
+  const text = [
+    `${DISPLAY_NAME} on ${day} (Manila time).`,
+    ...(partial ? [partial] : []),
+    '',
+    ...sections.flatMap(([title, rows]) => [title, ...rows.map(([label, value]) => `  ${label}: ${value}`), '']),
+    where,
+  ].join('\n');
+  const html = page(
+    subject,
+    `<p style="margin:0 0 16px">${esc(DISPLAY_NAME)} on ${esc(day)} (Manila time).${partial ? ` ${esc(partial)}` : ''}</p>
+${sections
+  .map(
+    ([title, rows]) => `<p style="margin:0 0 6px;font-weight:700">${esc(title)}</p>
+<table style="width:100%;border-collapse:collapse;margin:0 0 18px;font-size:15px">${rows
+      .map(
+        ([label, value]) =>
+          `<tr><td style="padding:4px 0;border-bottom:1px solid #dfe5e2">${esc(label)}</td><td style="padding:4px 0 4px 12px;border-bottom:1px solid #dfe5e2;text-align:right;font-weight:600">${esc(value)}</td></tr>`,
+      )
+      .join('')}</table>`,
+  )
+  .join('\n')}
+<p style="margin:0;font-size:14px;color:#4f5b55">${esc(where)}</p>`,
+    'Sent to whoever runs this server (STATS_EMAIL in /etc/penge/server.env). Visitors are counted without cookies or stored addresses.',
   );
   return { subject, text, html };
 }

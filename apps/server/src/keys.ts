@@ -39,6 +39,17 @@ export const K = {
   abroadCatalogAt: `${P}abroad:catalog-at`,
   /** Hash: post id → JSON of its latest check and when it is next due. */
   abroadStatus: `${P}abroad:status`,
+  /** One of a Manila day's numbers (stats.ts): a counter, or a HyperLogLog of visitors. */
+  stat: (day: string, name: string) => `${P}stats:${day}:${name}`,
+  /** Hash: office id → how often it was opened that day. */
+  statOffices: (day: string) => `${P}stats:${day}:offices`,
+  /** Random, and deleted within a day: what that day's visitors are hashed with. */
+  statSalt: (day: string) => `${P}stats:salt:${day}`,
+  /** When counting began, so a report does not pass off a part of a day as the whole of it. */
+  statsSince: `${P}stats:since`,
+  /** Set once a day's numbers are in R2, and once they are emailed. */
+  statsStored: (day: string) => `${P}stats:stored:${day}`,
+  statsEmailed: (day: string) => `${P}stats:emailed:${day}`,
 };
 
 /** `YYYY-MM-DD` in Manila, where the day boundaries of the daily caps fall. */

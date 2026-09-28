@@ -9,6 +9,7 @@ import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
 import { createMailer } from './mailer.ts';
 import { r2Sink } from './r2.ts';
+import { createStats } from './stats.ts';
 
 const config = loadConfig();
 const r2 = requireR2(config);
@@ -45,6 +46,8 @@ try {
     mailDailyLimit: config.mailDailyLimit,
     alertsPerSubscriberPerDay: config.alertsPerSubscriberPerDay,
     client: `${NAME}@${VERSION}`,
+    stats: createStats(kv, log),
+    statsEmail: config.statsEmail,
   });
   log.info('check finished', { ...report, mail: config.mailMode });
   process.exitCode = report.skipped || report.healthy ? 0 : 3;

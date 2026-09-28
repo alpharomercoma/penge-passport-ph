@@ -42,6 +42,7 @@ import type { Kv, WriteOp } from './kv.ts';
 import type { Logger } from './log.ts';
 import { type Mailer, wasRefused } from './mailer.ts';
 import type { SnapshotSink } from './r2.ts';
+import { reportOncePerDay, type Stats } from './stats.ts';
 import {
   assessHealth,
   type GroupObservation,
@@ -75,6 +76,9 @@ export interface CheckDeps {
   alertsPerSubscriberPerDay: number;
   /** Recorded in each scan, e.g. "penge-passport-ph@0.1.0". */
   client: string;
+  /** The day's numbers (stats.ts), and who gets them by email each morning. */
+  stats?: Stats;
+  statsEmail?: string | null;
   now?: () => number;
   runId?: string;
 }
@@ -206,6 +210,8 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
     };
     const loadSubscriber = subscriberCache(kv);
     const scan = await scanAll(deps, runId, now, loadSubscriber, holdLock);
+    deps.stats?.count('runs');
+    if (scan.healthy) deps.stats?.count('healthyRuns');
     const siteErrors = scan.sites.filter((s) => !s.ok && !s.error?.startsWith('skipped:')).length;
     const paused = scan.sites.some((s) => s.error === 'skipped: the rate limiter paused requests');
     if (siteErrors >= COOLDOWN_ERRORS || paused) {
@@ -230,6 +236,8 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
       if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now));
     }
     await backupOncePerDay(deps, now, runId);
+    await deps.stats?.settled();
+    await reportOncePerDay(deps, now());
     return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, uploaded, queued, delivery, abroad };
   } finally {
     if ((await kv.get(K.checkLock)) === runId) await kv.write([{ op: 'del', key: K.checkLock }]);
@@ -599,6 +607,7 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
     }
   }
 
+  deps.stats?.count('datesOpened', openings.filter((o) => o.applicants === 1).reduce((n, o) => n + o.dates.length, 0));
   const jobs = new Map<string, AlertJob>();
   for (const { site, applicants, dates } of openings) {
     for (const id of await kv.sMembers(K.siteSubscribers(site.id))) {
@@ -662,6 +671,7 @@ export async function deliver(deps: CheckDeps, now: () => number = deps.now ?? D
     const day = manilaDay(now());
     if (Number((await kv.get(K.alertsToday(sub.id, day))) ?? 0) >= deps.alertsPerSubscriberPerDay) {
       report.skipped++;
+      deps.stats?.count('alertsCapped');
       continue;
     }
     if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
@@ -683,7 +693,10 @@ export async function deliver(deps: CheckDeps, now: () => number = deps.now ?? D
     });
     try {
       const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
-      if (result === 'sent') report.sent++;
+      if (result === 'sent') {
+        report.sent++;
+        deps.stats?.count('alertsSent');
+      }
       else if (result === 'dry-run') report.dryRun++;
       else report.skipped++;
       failuresInARow = 0;

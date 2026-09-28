@@ -10,7 +10,7 @@ import type { Rendered } from './templates.ts';
 
 export interface Mail extends Rendered {
   to: string;
-  kind: 'confirm' | 'alert';
+  kind: 'confirm' | 'alert' | 'report';
   /** Adds the one-click unsubscribe headers (RFC 8058) that Gmail and Yahoo require. */
   unsubscribeUrl?: string;
 }

@@ -1,5 +1,6 @@
 // Everything the server reads from its environment (/etc/penge/server.env on
 // the VPS), checked once at start-up so a bad value fails loudly, not later.
+import { normalizeEmail } from '@penge/contracts';
 
 export type MailMode = 'live' | 'dry-run' | 'off';
 
@@ -23,6 +24,8 @@ export interface Config {
   mailDailyLimit: number;
   /** Most alert emails one person gets in a day. */
   alertsPerSubscriberPerDay: number;
+  /** Who gets the daily numbers by email (stats.ts); without it they only go to R2. */
+  statsEmail: string | null;
   /** Where the rate limiter keeps its shared state. */
   stateDir: string;
   /** Where scans wait when R2 cannot be reached. */
@@ -77,6 +80,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('MAIL_MODE must be live, dry-run or off');
   }
   const mailFrom = env.MAIL_FROM?.trim() || null;
+  const statsEmail = env.STATS_EMAIL?.trim() ? normalizeEmail(env.STATS_EMAIL) : null;
+  if (env.STATS_EMAIL?.trim() && !statsEmail) throw new ConfigError('STATS_EMAIL is not an email address');
   const publicBaseUrl = optionalUrl('PUBLIC_BASE_URL');
   if (mailMode === 'live' && (!mailFrom || !publicBaseUrl)) {
     throw new ConfigError('MAIL_MODE=live needs MAIL_FROM and PUBLIC_BASE_URL');
@@ -123,6 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     mailMode,
     mailDailyLimit: int('MAIL_DAILY_LIMIT', 300, 0, 100_000),
     alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 3, 1, 50),
+    statsEmail,
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',
     spoolDir: env.SPOOL_DIR?.trim() || '/var/lib/penge/spool',
     api: { host: env.API_HOST?.trim() || '127.0.0.1', port: int('API_PORT', 8787, 1, 65535) },

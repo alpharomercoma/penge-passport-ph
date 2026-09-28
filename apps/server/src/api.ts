@@ -28,6 +28,7 @@ import { API_LIMITS, hit, ipBucket, type Limit } from './limits.ts';
 import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
+import { type Count, isPerson, type Stats } from './stats.ts';
 import { confirm, createPending, type Keys, unsubscribe } from './subscribers.ts';
 import { confirmationEmail } from './templates.ts';
 
@@ -42,6 +43,8 @@ export interface ApiDeps {
   clientIp?: (c: Context) => string;
   /** On-demand office details; without them those routes answer 503. */
   lookups?: Lookups;
+  /** The day's numbers; without it nothing is counted. */
+  stats?: Stats;
 }
 
 export const SUBSCRIBE_MESSAGE =
@@ -104,6 +107,12 @@ export function createApi(deps: ApiDeps) {
 
   const TOO_MANY = 'Too many requests from your network. Try again in an hour.';
 
+  // The day's numbers (stats.ts), written after the answer and never waited for.
+  const seen = (c: Context, abroad = false) => deps.stats?.visit(ipOf(c), c.req.header('user-agent'), { abroad });
+  const byPerson = (c: Context, name: Count) => {
+    if (isPerson(c.req.header('user-agent'))) deps.stats?.count(name);
+  };
+
   app.use('*', async (c, next) => {
     await next();
     c.header('Cache-Control', 'no-store');
@@ -128,6 +137,7 @@ export function createApi(deps: ApiDeps) {
 
   app.get('/api/status', async (c) => {
     if (await limited(c, API_LIMITS.readPerIp)) return fail(c, 429, TOO_MANY);
+    seen(c);
     const raw = await kv.get(K.status);
     const stored = raw ? (JSON.parse(raw) as Omit<StatusResponse, 'mailLive'>) : null;
     return c.json<StatusResponse>({
@@ -141,6 +151,7 @@ export function createApi(deps: ApiDeps) {
 
   app.get('/api/abroad', async (c) => {
     if (await limited(c, API_LIMITS.readPerIp)) return fail(c, 429, TOO_MANY);
+    seen(c, true);
     return c.json<AbroadResponse>(await abroadResponse(kv));
   });
 
@@ -178,6 +189,9 @@ export function createApi(deps: ApiDeps) {
     if (!office) return fail(c, 404, 'There is no office with that number.');
     const applicants = peopleFrom(c.req.query('applicants'));
     if (applicants === null) return fail(c, 400, `Choose from 1 to ${LIMITS.maxApplicants} people.`);
+    seen(c);
+    if (applicants === 1) deps.stats?.officeView(office.site.id, c.req.header('user-agent'));
+    else byPerson(c, 'groupChecks');
     // For one person the scans have the answer. While they keep up, the last
     // one (or a newer stored lookup) is it, and the DFA is not asked again;
     // when they fall behind, a fresh look is tried, and the newer answer wins.
@@ -222,6 +236,8 @@ export function createApi(deps: ApiDeps) {
     if (!isCalendarDate(date) || date < today || date > latest) {
       return fail(c, 400, 'Choose a date from today on.');
     }
+    seen(c);
+    byPerson(c, 'hourLookups');
     if (!deps.lookups) return fail(c, 503, 'Times can’t be checked right now.');
     try {
       return c.json(await deps.lookups.times(office.site.id, date, applicants));
@@ -278,6 +294,7 @@ export function createApi(deps: ApiDeps) {
     });
     try {
       await mailer.send({ ...content, to: request.email, kind: 'confirm' });
+      deps.stats?.count('confirmEmails');
     } catch (err) {
       log.error('confirmation email failed', { err: err as Error });
       return fail(c, 503, 'We could not send the confirmation email. Try again later.');
@@ -295,6 +312,7 @@ export function createApi(deps: ApiDeps) {
     if (result.status === 'invalid') {
       return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
     }
+    deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
     return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants });
   });
 
@@ -325,6 +343,7 @@ export function createApi(deps: ApiDeps) {
     // The same answer whether or not the subscription still existed.
     const removed = await unsubscribe(kv, keys, token);
     log.info('unsubscribe', { removed });
+    if (removed) deps.stats?.count('unsubscribed');
     return c.json({ ok: true });
   });
 
