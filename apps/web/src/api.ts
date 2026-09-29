@@ -7,6 +7,7 @@ import {
   isAbroadResponse,
   isOfficeDates,
   isOfficeTimes,
+  isPace,
   isStatusResponse,
   type OfficeDates,
   type OfficeTimes,
@@ -28,7 +29,7 @@ export class ApiFailure extends Error {
 
 const OFFLINE = 'We could not reach the server. Check your connection and try again.';
 const UNEXPECTED = 'The server sent an answer we did not expect. Try again in a few minutes.';
-const FIELDS: readonly Field[] = ['email', 'siteIds', 'applicants', 'form'];
+const FIELDS: readonly Field[] = ['email', 'siteIds', 'applicants', 'pace', 'form'];
 
 const isShortText = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 300;
 
@@ -79,7 +80,8 @@ const isConfirm = (v: unknown): v is ConfirmResponse => {
     (r.status === 'confirmed' || r.status === 'updated') &&
     Array.isArray(r.siteIds) &&
     r.siteIds.every((id) => Number.isSafeInteger(id)) &&
-    Number.isSafeInteger(r.applicants)
+    Number.isSafeInteger(r.applicants) &&
+    isPace(r.pace)
   );
 };
 

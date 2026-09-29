@@ -2,7 +2,8 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { gunzipSync } from 'node:zlib';
 import { exportSubscribers, importSubscribers } from '../src/backup.ts';
-import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob } from '../src/checker.ts';
+import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, PACE_SPACING_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob } from '../src/checker.ts';
+import type { Pace } from '@penge/contracts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
 import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
@@ -44,8 +45,9 @@ async function world(overrides: Partial<CheckDeps> = {}) {
     ...overrides,
   };
   let n = 0;
-  const subscribe = async (email: string, siteIds: number[], applicants = 1) => {
-    const token = await createPending(kv, keys, { email, siteIds, applicants }, t.now());
+  // Most tests here want an email at every check: the "asap" pace. Pace itself is tested below.
+  const subscribe = async (email: string, siteIds: number[], applicants = 1, pace: Pace = 'asap') => {
+    const token = await createPending(kv, keys, { email, siteIds, applicants, pace }, t.now());
     const result = await confirm(kv, token, t.now());
     if (result.status === 'invalid') throw new Error('confirm failed');
     return result.subscriberId;
@@ -186,7 +188,7 @@ describe('checker', () => {
     await w.run();
     w.upstream.open.set('486', ['2026-10-05']);
     const report = await w.run();
-    expect(report.delivery).toMatchObject({ sent: 1, remaining: 1, stoppedBy: 'daily limit' });
+    expect(report.delivery).toMatchObject({ sent: 1, remaining: 0, held: 1, stoppedBy: 'daily limit' });
   });
 
   it('drops alerts that waited too long', async () => {
@@ -208,7 +210,8 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     w.mailer.failNext = 3;
     const report = await w.run();
-    expect(report.delivery).toMatchObject({ failed: 3, stoppedBy: 'mail errors', remaining: 4 });
+    // The three refused wait with their people; the fourth never left the outbox.
+    expect(report.delivery).toMatchObject({ failed: 3, stoppedBy: 'mail errors', remaining: 1, held: 3 });
     // A refused email costs nobody their daily allowance, nor the daily total.
     const day = manilaDay(w.t.now());
     expect(Number((await w.kv.get(K.mailSentToday(day))) ?? 0)).toBe(0);
@@ -349,8 +352,8 @@ describe('checker, found by adversarial review', () => {
 
   it('creates one subscriber when two confirmations for one address race', async () => {
     const w = await world();
-    const a = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1 }, w.t.now());
-    const b = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1 }, w.t.now());
+    const a = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
+    const b = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly' }, w.t.now());
     const results = await Promise.all([confirm(w.kv, a, w.t.now()), confirm(w.kv, b, w.t.now())]);
     const ids = new Set(results.map((r) => (r.status === 'invalid' ? null : r.subscriberId)));
     expect(ids.size).toBe(1);
@@ -363,7 +366,7 @@ describe('checker, found by adversarial review', () => {
     const w = await world();
     const id = await w.subscribe('ana@example.com', [486]);
     // Ana asks to change her offices, then unsubscribes from an older alert before confirming.
-    const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1 }, w.t.now());
+    const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly' }, w.t.now());
     expect(await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token))).toBe(true);
     expect((await confirm(w.kv, update, w.t.now())).status).toBe('invalid'); // no way back in by an old link
     expect(w.kv.keys().filter((k) => k.startsWith('pp:pending'))).toEqual([]);
@@ -372,14 +375,14 @@ describe('checker, found by adversarial review', () => {
 
   it('keeps a confirmation link working when the address is busy, and single-use once it works', async () => {
     const w = await world();
-    const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1 }, w.t.now());
+    const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
     const pending = JSON.parse((await w.kv.get(w.kv.keys().find((k) => k.startsWith('pp:pending:'))!))!) as { index: string };
     await w.kv.set(K.addressLock(pending.index), 'someone-else', { ttlSeconds: 60 });
     await expect(confirm(w.kv, token, w.t.now())).rejects.toThrow('busy');
     await w.kv.write([{ op: 'del', key: K.addressLock(pending.index) }]);
     expect((await confirm(w.kv, token, w.t.now())).status).toBe('confirmed');
     expect((await confirm(w.kv, token, w.t.now())).status).toBe('invalid');
-    const twice = await createPending(w.kv, keys, { email: 'bo@example.com', siteIds: [486], applicants: 1 }, w.t.now());
+    const twice = await createPending(w.kv, keys, { email: 'bo@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
     const both = await Promise.all([confirm(w.kv, twice, w.t.now()), confirm(w.kv, twice, w.t.now())]);
     expect(both.map((r) => r.status).sort()).toEqual(['confirmed', 'invalid']);
   }, 15_000);
@@ -391,7 +394,8 @@ describe('checker, found by adversarial review', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     await w.run();
     for (let i = 0; i < 5; i++) await deliver(w.deps);
-    expect(await w.kv.lLen(K.outbox)).toBe(1);
+    expect(await w.kv.sMembers(K.heldSubscribers)).toHaveLength(1);
+    expect(await w.kv.lLen(K.outbox)).toBe(0);
     expect(w.kv.keys().filter((k) => k.startsWith('pp:alerts:'))).toEqual([]);
   });
 
@@ -607,6 +611,324 @@ describe('outbox integrity and backups', () => {
     await importSubscribers(fresh, backup);
     expect(await fresh.sMembers(K.allSubscribers)).toEqual([id]);
   });
+});
+
+describe('pace', () => {
+  const datesIn = (text: string) => [...text.matchAll(/ {2}- (\w{3} \d+ \w{3} \d{4})/g)].map((m) => m[1]);
+
+  it('emails an hourly person at most once an hour, with everything new since the last email', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run(); // the baseline
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 1 }); // 10 minutes after the email
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    for (let i = 0; i < 4; i++) await w.run(); // 20 to 50 minutes after
+    expect(w.mailer.sent).toHaveLength(1);
+
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 }); // an hour after
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026', 'Wed 7 Oct 2026']);
+  });
+
+  it('leaves out dates that closed while they waited, and still tells them if one opens again', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // 6 Oct waits
+    w.upstream.open.set('486', ['2026-10-05']);
+    for (let i = 0; i < 5; i++) await w.run(); // 6 Oct closes; an hour passes
+    expect(w.mailer.sent).toHaveLength(1); // nothing open to tell: no email
+    expect(await w.kv.sMembers(K.heldSubscribers)).toHaveLength(1); // 6 Oct waits in case it opens again
+
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    await w.run(); // an hour and more since the email: 6 Oct is back, and 7 Oct is new
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026', 'Wed 7 Oct 2026']);
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08']);
+    await w.run(); // 8 Oct waits
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-07', '2026-10-08']);
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(datesIn(w.mailer.sent[2]!.text)).toEqual(['Thu 8 Oct 2026']);
+
+    // A date that closed and stays closed is dropped once it is 3 hours old.
+    w.t.advance(OUTBOX_MAX_AGE_MS);
+    await w.run();
+    expect(await w.kv.sMembers(K.heldSubscribers)).toEqual([]);
+    expect(w.mailer.sent).toHaveLength(3);
+  });
+
+  it('emails an asap person at every check, and holds a second email within the same check', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'asap');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(2);
+    expect(PACE_SPACING_MS.asap).toBeLessThan(15 * 60_000); // checks start every 15 minutes
+
+    // More in the same run (the posts abroad come minutes after): it joins the next email.
+    const job = { id: 'x', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
+    await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
+    w.t.advance(-10 * 60_000); // back to the moment of the last email
+    expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
+  });
+
+  it('drops a held alert that was altered, and forgets what waited on unsubscribing', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run();
+    const held = JSON.parse((await w.kv.get(K.held(id)))!) as { job: string; mac: string };
+    await w.kv.set(K.held(id), JSON.stringify({ ...held, job: held.job.replace('2026-10-06', '2026-10-05') }));
+    w.t.advance(60 * 60_000);
+    expect(await deliver(w.deps)).toMatchObject({ dropped: 1, sent: 0, held: 0 });
+
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08']);
+    await w.run();
+    expect(await w.kv.get(K.held(id))).not.toBeNull();
+    expect(await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token))).toBe(true);
+    expect(await w.kv.get(K.held(id))).toBeNull();
+    expect(await w.kv.get(K.lastAlert(id))).toBeNull();
+    expect(await w.kv.sMembers(K.heldSubscribers)).toEqual([]);
+  });
+
+  it('keeps a person\'s pace through a change of offices and a backup', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'asap');
+    await w.subscribe('ana@example.com', [693], 1, 'asap'); // an update keeps what they chose
+    expect((await w.kv.hGetAll(K.subscriber(id))).pace).toBe('asap');
+    const backup = await exportSubscribers(w.kv, [693], 0);
+    const fresh = new MemoryKv();
+    await importSubscribers(fresh, backup);
+    expect((await fresh.hGetAll(K.subscriber(id))).pace).toBe('asap');
+    backup.subscribers[0]!.fields.pace = 'daily';
+    await expect(importSubscribers(new MemoryKv(), backup)).rejects.toThrow(/bad subscriber/);
+    // A subscription from before paces existed is hourly.
+    await w.kv.write([{ op: 'hSet', key: K.subscriber(id), fields: { pace: '' } }]);
+    const { load } = await import('../src/subscribers.ts');
+    expect((await load(w.kv, id))!.pace).toBe('hourly');
+  });
+
+  it('marks an alert sent before it goes out, and undoes that when the mail server refuses it', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    const first = await w.kv.get(K.lastAlert(id));
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    for (let i = 0; i < 5; i++) await w.run(); // 6 Oct waits for the hour
+
+    const atSend: { last: string | null; held: string | null }[] = [];
+    const send = w.mailer.send.bind(w.mailer);
+    w.mailer.send = async (mail) => {
+      atSend.push({ last: await w.kv.get(K.lastAlert(id)), held: await w.kv.get(K.held(id)) });
+      return send(mail);
+    };
+    w.mailer.failNext = 1; // refused: nothing went out
+    await w.run();
+    expect(atSend[0]).toEqual({ last: String(w.t.now() - 10 * 60_000), held: null }); // claimed first, like a popped outbox entry
+    expect(await w.kv.get(K.lastAlert(id))).toBe(first); // undone
+    expect(await w.kv.get(K.held(id))).not.toBeNull();
+    await w.run(); // tried again
+    expect(w.mailer.sent).toHaveLength(2);
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026']);
+  });
+
+  it('keeps closed dates waiting when the daily email limit stops a send', async () => {
+    const w = await world({ mailDailyLimit: 1 });
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the one email allowed today
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // 6 Oct waits
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-07']);
+    for (let i = 0; i < 5; i++) await w.run(); // 6 Oct closes, 7 Oct opens; the hour passes into the limit
+    const held = openJob((await w.kv.get(K.held(id)))!, keys.token)!;
+    expect(held.openings.flatMap((o) => o.dates).sort()).toEqual(['2026-10-06', '2026-10-07']);
+  });
+
+  it('never sends a group a date that has no room even for one person', async () => {
+    const w = await world();
+    await w.subscribe('family@example.com', [486], 2, 'hourly');
+    w.upstream.open.set('486', ['2026-10-05']);
+    w.upstream.open.set('486:2', ['2026-10-05']);
+    await w.run(); // the baseline
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    w.upstream.open.set('486:2', ['2026-10-05', '2026-10-06']);
+    await w.run(); // the first email
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    w.upstream.open.set('486:2', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    await w.run(); // 7 Oct waits
+    w.upstream.open.set('486', []); // then everything goes, even for one person
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+  });
+
+  it('ages each date on its own, so a new one never expires with an old one', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    const open = (...dates: string[]) => w.upstream.open.set('486', ['2026-10-05', ...dates]);
+    open();
+    await w.run(); // email 1, at t0
+    open('2026-10-06');
+    await w.run(); // 6 Oct waits (t0 + 10 min)
+    open();
+    for (let i = 0; i < 14; i++) await w.run(); // 6 Oct closed; now t0 + 2 h 30
+    open('2026-10-07');
+    await w.run(); // email 2 with 7 Oct; 6 Oct, closed, keeps waiting
+    expect(w.mailer.sent).toHaveLength(2);
+    open('2026-10-07', '2026-10-08');
+    await w.run(); // 8 Oct waits alongside the old 6 Oct (t0 + 2 h 50)
+    for (let i = 0; i < 5; i++) await w.run(); // past 3 hours for 6 Oct, not for 8 Oct
+    expect(w.mailer.sent).toHaveLength(3);
+    expect(datesIn(w.mailer.sent[2]!.text)).toEqual(['Thu 8 Oct 2026']);
+    expect(await w.kv.get(K.held(id))).toBeNull();
+  });
+
+  it('ignores a held alert signed for someone else', async () => {
+    const w = await world();
+    const ana = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    const ben = await w.subscribe('ben@example.com', [486], 1, 'hourly');
+    await w.run();
+    const theirs = { id: 'x', createdAt: w.t.now(), subscriberId: ben, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-08'] }] };
+    await w.kv.set(K.held(ana), sealJob(theirs, keys.token)); // moved by someone who can write to Redis
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run();
+    const toAna = w.mailer.sent.find((m) => m.to === 'ana@example.com')!;
+    expect(datesIn(toAna.text)).toEqual(['Mon 5 Oct 2026']);
+    expect(await w.kv.get(K.held(ana))).toBeNull(); // not kept, either
+  });
+
+  it('sends nothing to someone who unsubscribes while their alert is being prepared', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    const incr = w.kv.incr.bind(w.kv);
+    w.kv.incr = async (key, ttl, by) => {
+      // The API unsubscribes them just as the checker counts this email against the day's total.
+      if (key.startsWith('pp:mail:sent:')) await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token));
+      return incr(key, ttl, by);
+    };
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(0);
+    expect(await w.kv.get(K.held(id))).toBeNull();
+    expect(Number(await w.kv.get(K.mailSentToday(manilaDay(w.t.now()))))).toBe(0);
+  });
+
+  it('keeps an hourly person to a full hour between emails', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // T + 10: 6 Oct waits
+    w.t.advance(35 * 60_000); // T + 55 minutes
+    await deliver(w.deps);
+    expect(w.mailer.sent).toHaveLength(1);
+    w.t.advance(5 * 60_000); // T + 60
+    await deliver(w.deps);
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('sends an asap person at most one email per check, even when the posts abroad come late in it', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486, 36], 1, 'asap');
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the baseline has 5 Oct open at 486
+    const run = new Set<string>(); // one check: the Philippines, then the posts abroad
+    const job = (siteId: number, date: string) => ({ id: `j${siteId}`, createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: siteId, name: `Office ${siteId}`, dates: [date] }] });
+    await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job(486, '2026-10-05'), keys.token)] }]);
+    await deliver(w.deps, w.t.now, run);
+    w.t.advance(11 * 60_000); // the abroad pass may end 12 minutes into the check
+    await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job(36, '2026-10-06'), keys.token)] }]);
+    expect(await deliver(w.deps, w.t.now, run)).toMatchObject({ sent: 0, held: 1 });
+    expect(w.mailer.sent).toHaveLength(1);
+    await deliver(w.deps, w.t.now, new Set()); // the next check
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('counts retries per date, so a new date is not lost with an old one that kept failing', async () => {
+    const w = await world();
+    const id = await w.subscribe('ana@example.com', [486], 1, 'hourly');
+    w.upstream.open.set('486', ['2026-10-06']);
+    await w.run(); // the baseline: 6 Oct open
+    const old = { id: 'old', createdAt: w.t.now(), subscriberId: id, applicants: 1, attempts: 2, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
+    await w.kv.write([
+      { op: 'set', key: K.held(id), value: sealJob(old, keys.token) },
+      { op: 'sAdd', key: K.heldSubscribers, members: [id] },
+    ]);
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    w.mailer.failNext = 1; // the merged email is refused, and tried again later in the same check
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+    expect(datesIn(w.mailer.sent[0]!.text)).toEqual(['Mon 5 Oct 2026']); // 6 Oct had used its last try
+    expect(await w.kv.get(K.held(id))).toBeNull();
+  });
+
+  it('refuses a backup whose pace is not one of the two', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486], 1, 'asap');
+    for (const pace of [123, null, 'daily']) {
+      const backup = await exportSubscribers(w.kv, [486], 0);
+      (backup.subscribers[0]!.fields as Record<string, unknown>).pace = pace;
+      await expect(importSubscribers(new MemoryKv(), backup)).rejects.toThrow(/bad subscriber/);
+    }
+  });
+
+  it('never emails an hourly person twice within 55 minutes, and only about dates open now', async () => {
+    const SITE_IDS = [10, 20, 30, 486, 693];
+    const step = fc.record({
+      open: fc.array(fc.subarray(PUBLISHED), { minLength: 5, maxLength: 5 }),
+      failing: fc.subarray(SITE_IDS, { maxLength: 1 }),
+      minutes: fc.constantFrom(10, 15, 15, 30, 70),
+    });
+    await fc.assert(
+      fc.asyncProperty(fc.array(step, { minLength: 2, maxLength: 16 }), async (steps) => {
+        const w = await world();
+        const people = new Map<string, number>();
+        for (const id of SITE_IDS) people.set(`p${id}@example.com`, id);
+        for (const [email, id] of people) await w.subscribe(email, [id], 1, 'hourly');
+        const lastMail = new Map<string, number>();
+        const lastGood = new Map<number, Set<string>>();
+        for (const s of steps) {
+          SITE_IDS.forEach((id, i) => w.upstream.open.set(String(id), s.open[i]!));
+          w.upstream.failing = new Set(s.failing);
+          const before = w.mailer.sent.length;
+          await runCheck({ ...w.deps, runId: `r${w.t.now()}` });
+          // One failing office of five keeps the run healthy; the others were looked at.
+          for (const id of SITE_IDS) if (!s.failing.includes(id)) lastGood.set(id, new Set(w.upstream.open.get(String(id))));
+          for (const mail of w.mailer.sent.slice(before)) {
+            const last = lastMail.get(mail.to);
+            if (last !== undefined) expect(w.t.now() - last).toBeGreaterThanOrEqual(PACE_SPACING_MS.hourly);
+            lastMail.set(mail.to, w.t.now());
+            // "Open now" is as of the office's latest good look: that is all the checker can know.
+            const open = lastGood.get(people.get(mail.to)!)!;
+            for (const date of PUBLISHED) if (datesIn(mail.text).includes(formatDate(date))) expect(open.has(date)).toBe(true);
+          }
+          w.t.advance(s.minutes * 60_000);
+        }
+      }),
+      { seed: 20260929, numRuns: RUNS },
+    );
+  }, 10_000 + RUNS * 10);
 });
 
 describe('checker fuzz', () => {

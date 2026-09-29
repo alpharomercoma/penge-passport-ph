@@ -1,6 +1,6 @@
 // Plain words, a text part and a matching HTML part, no images, no trackers,
 // no link shorteners: the things spam filters look at besides the DNS records.
-import { formatDate, shortName } from '@penge/contracts';
+import { formatDate, type Pace, shortName } from '@penge/contracts';
 import { DISPLAY_NAME } from 'penge-passport-ph';
 import type { DailyStats } from './stats.ts';
 
@@ -49,12 +49,21 @@ const button = (href: string, label: string) =>
 
 const UNOFFICIAL = `${DISPLAY_NAME} is a free, unofficial service, not run by or affiliated with the DFA.`;
 
-export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[]; applicants: number }): Rendered {
+/** How often a person hears from us, in their words. */
+export const PACE_PROMISE: Record<Pace, string> = {
+  hourly: 'at most once an hour, with everything new since the last email',
+  asap: 'as soon as a check finds dates (one email per check; checks run every 15 minutes), with everything new since the last email',
+};
+
+export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[]; applicants: number; pace: Pace }): Rendered {
   const names = input.sites.map((s) => s.name);
+  const often = `We email ${PACE_PROMISE[input.pace]}.`;
   const text = [
     `Someone, hopefully you, asked ${DISPLAY_NAME} to email this address when passport appointment dates open for ${people(input.applicants)} at:`,
     '',
     ...names.map((n) => `  - ${n}`),
+    '',
+    often,
     '',
     'To start the alerts, open this link and press Confirm:',
     input.confirmUrl,
@@ -67,6 +76,7 @@ export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[];
     'Confirm your alerts',
     `<p style="margin:0 0 12px">Someone, hopefully you, asked us to email this address when passport appointment dates open for ${esc(people(input.applicants))} at:</p>
 <ul style="margin:0 0 12px;padding-left:20px">${names.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+<p style="margin:0 0 12px">${esc(often)}</p>
 ${button(input.confirmUrl, 'Confirm alerts')}
 <p style="margin:0;font-size:14px;color:#4f5b55">The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.</p>`,
     esc(UNOFFICIAL),

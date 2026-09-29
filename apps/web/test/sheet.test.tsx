@@ -1,4 +1,4 @@
-import { LIMITS, validateSubscribe } from '@penge/contracts';
+import { LIMITS, PACES, validateSubscribe } from '@penge/contracts';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import fc from 'fast-check';
 import { useState } from 'react';
@@ -28,6 +28,7 @@ function open(api = fakeApi(), initial: number[] = [], onClose = vi.fn()) {
     sheet,
     email: within(sheet).getByLabelText('Your email') as HTMLInputElement,
     people: within(sheet).getByLabelText('Booking for') as HTMLSelectElement,
+    pace: within(sheet).getByLabelText('How often') as HTMLSelectElement,
     honeypot: sheet.querySelector('input[name="website"]') as HTMLInputElement,
     boxes: () => within(sheet).queryAllByRole('checkbox') as HTMLInputElement[],
     submit: within(sheet).getByRole('button', { name: /Send confirmation email/ }),
@@ -69,9 +70,11 @@ describe('alert sheet', () => {
     const s = open(fakeApi(), [486]);
     fireEvent.change(s.email, { target: { value: ' Juan@Example.com ' } });
     fireEvent.change(s.people, { target: { value: '3' } });
+    expect(s.pace.value).toBe('hourly'); // at most once an hour, unless they choose otherwise
+    fireEvent.change(s.pace, { target: { value: 'asap' } });
     fireEvent.click(s.submit);
     await screen.findByText('Check your inbox for a confirmation link.');
-    expect(s.api.subscribe).toHaveBeenCalledWith({ email: 'juan@example.com', siteIds: [486], applicants: 3, website: '' });
+    expect(s.api.subscribe).toHaveBeenCalledWith({ email: 'juan@example.com', siteIds: [486], applicants: 3, pace: 'asap', website: '' });
   });
 
   it('says, at the email field, how the address is kept', () => {
@@ -139,19 +142,21 @@ describe('alert sheet', () => {
         fc.array(fc.nat({ max: OFFICES.length - 1 }), { maxLength: 30 }),
         fc.integer({ min: 1, max: LIMITS.maxApplicants }),
         fc.oneof(fc.constant(''), fc.constant(''), fc.string({ minLength: 1, maxLength: 20 })),
-        async (typed, clicks, applicants, website) => {
+        fc.constantFrom(...PACES),
+        async (typed, clicks, applicants, website, pace) => {
           cleanup();
           const s = open();
           fireEvent.change(s.email, { target: { value: typed } });
           for (const i of clicks) fireEvent.click(s.boxes()[i]!);
           fireEvent.change(s.people, { target: { value: String(applicants) } });
+          fireEvent.change(s.pace, { target: { value: pace } });
           fireEvent.change(s.honeypot, { target: { value: website } });
 
           const boxes = s.boxes();
           const places = [...OFFICES].sort((a, b) => a.place.localeCompare(b.place));
           const chosen = boxes.flatMap((b, i) => (b.checked ? [places[i]!.id] : []));
           expect(chosen.length).toBeLessThanOrEqual(LIMITS.sitesPerSubscription);
-          const expected = validateSubscribe({ email: s.email.value, siteIds: chosen, applicants, website }, KNOWN);
+          const expected = validateSubscribe({ email: s.email.value, siteIds: chosen, applicants, pace, website }, KNOWN);
 
           fireEvent.click(s.submit);
           if (expected.ok) {

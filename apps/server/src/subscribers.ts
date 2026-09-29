@@ -2,7 +2,7 @@
 // only following the emailed link (and pressing the button) makes it real.
 // Addresses exist only encrypted; the keyed index finds them without
 // decrypting.
-import type { SubscribeRequest } from '@penge/contracts';
+import { isPace, type Pace, type SubscribeRequest } from '@penge/contracts';
 import { decryptEmail, emailIndex, encryptEmail, hashToken, newId, randomToken, verifyUnsubscribe } from './crypto.ts';
 import { K } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
@@ -21,6 +21,8 @@ export interface Subscriber {
   index: string;
   siteIds: number[];
   applicants: number;
+  /** How often they may be emailed; subscriptions from before it existed are hourly. */
+  pace: Pace;
   createdAt: string;
   confirmedAt: string;
 }
@@ -30,6 +32,7 @@ interface Pending {
   index: string;
   siteIds: number[];
   applicants: number;
+  pace?: Pace;
   requestedAt: string;
 }
 
@@ -41,6 +44,7 @@ export async function createPending(kv: Kv, keys: Keys, request: SubscribeReques
     index: emailIndex(request.email, keys.index),
     siteIds: request.siteIds,
     applicants: request.applicants,
+    pace: request.pace,
     requestedAt: new Date(now).toISOString(),
   };
   const hash = hashToken(token);
@@ -53,7 +57,7 @@ export async function createPending(kv: Kv, keys: Keys, request: SubscribeReques
 }
 
 export type ConfirmResult =
-  | { status: 'confirmed' | 'updated'; subscriberId: string; siteIds: number[]; applicants: number }
+  | { status: 'confirmed' | 'updated'; subscriberId: string; siteIds: number[]; applicants: number; pace: Pace }
   | { status: 'invalid' };
 
 /**
@@ -116,6 +120,7 @@ async function upsert(kv: Kv, pending: Pending, now: number): Promise<ConfirmRes
         index: pending.index,
         sites: pending.siteIds.join(','),
         applicants: String(pending.applicants),
+        pace: pending.pace ?? 'hourly',
         createdAt: existing?.createdAt ?? at,
         confirmedAt: at,
       },
@@ -125,7 +130,13 @@ async function upsert(kv: Kv, pending: Pending, now: number): Promise<ConfirmRes
     ...pending.siteIds.map((siteId): WriteOp => ({ op: 'sAdd', key: K.siteSubscribers(siteId), members: [id] })),
   );
   await kv.write(ops);
-  return { status: existing ? 'updated' : 'confirmed', subscriberId: id, siteIds: pending.siteIds, applicants: pending.applicants };
+  return {
+    status: existing ? 'updated' : 'confirmed',
+    subscriberId: id,
+    siteIds: pending.siteIds,
+    applicants: pending.applicants,
+    pace: pending.pace ?? 'hourly',
+  };
 }
 
 /** Remove a subscriber completely. False when the link is forged or already used. */
@@ -144,6 +155,9 @@ export async function unsubscribe(kv: Kv, keys: Keys, token: string): Promise<bo
       { op: 'del', key: K.subscriber(id) },
       { op: 'del', key: K.emailIndex(subscriber.index) },
       { op: 'sRem', key: K.allSubscribers, members: [id] },
+      { op: 'del', key: K.held(id) },
+      { op: 'sRem', key: K.heldSubscribers, members: [id] },
+      { op: 'del', key: K.lastAlert(id) },
       ...waiting.map((hash): WriteOp => ({ op: 'del', key: K.pending(hash) })),
       { op: 'del', key: K.pendingFor(subscriber.index) },
     ]);
@@ -160,6 +174,7 @@ export async function load(kv: Kv, id: string): Promise<Subscriber | null> {
     index: h.index,
     siteIds: h.sites.split(',').map(Number).filter(Number.isSafeInteger),
     applicants: Number(h.applicants),
+    pace: isPace(h.pace) ? h.pace : 'hourly',
     createdAt: h.createdAt ?? '',
     confirmedAt: h.confirmedAt ?? '',
   };

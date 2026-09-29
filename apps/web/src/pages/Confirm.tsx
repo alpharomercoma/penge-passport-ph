@@ -20,7 +20,8 @@ export function Confirm({ api }: { api: Api }) {
             <h1>{r.status === 'updated' ? 'Your alert is updated' : 'You are subscribed'}</h1>
             <p>
               We will email you when a date opens at {plural(r.siteIds.length, 'office')}, for{' '}
-              {r.applicants === 1 ? 'one person' : `${r.applicants} people`}.
+              {r.applicants === 1 ? 'one person' : `${r.applicants} people`},{' '}
+              {r.pace === 'asap' ? 'as soon as a check finds dates' : 'at most once an hour'}.
             </p>
             <p>
               <a className="btn btn-secondary" href={BASE}>

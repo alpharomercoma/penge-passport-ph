@@ -406,7 +406,7 @@ describe('posts abroad', () => {
     expect(within(sheet).getByRole('button', { name: 'Remove Dubai' })).toBeTruthy();
     fireEvent.change(within(sheet).getByLabelText('Your email'), { target: { value: 'ana@example.com' } });
     fireEvent.click(within(sheet).getByRole('button', { name: 'Send confirmation email' }));
-    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, website: '' }));
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', website: '' }));
   });
 
   it('explains when posts abroad cannot be loaded, and offers to try again', async () => {
@@ -430,7 +430,7 @@ describe('confirm and unsubscribe pages', () => {
     expect(window.location.hash).toBe('');
     expect(fake.confirm).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm email alert' }));
-    expect(await screen.findByText('We will email you when a date opens at 1 office, for one person.')).toBeTruthy();
+    expect(await screen.findByText('We will email you when a date opens at 1 office, for one person, at most once an hour.')).toBeTruthy();
     expect(fake.confirm).toHaveBeenCalledWith(token);
   });
 
@@ -491,7 +491,7 @@ describe('API client', () => {
           if (offline) throw new TypeError('Failed to fetch');
           return new Response(text, { status: code, headers: { 'content-type': 'application/json' } });
         });
-        for (const call of [api.status, () => api.subscribe({ email: 'a@b.co', siteIds: [1], applicants: 1, website: '' }), () => api.confirm('t'), () => api.unsubscribe('t')]) {
+        for (const call of [api.status, () => api.subscribe({ email: 'a@b.co', siteIds: [1], applicants: 1, pace: 'hourly', website: '' }), () => api.confirm('t'), () => api.unsubscribe('t')]) {
           try {
             await call();
           } catch (err) {

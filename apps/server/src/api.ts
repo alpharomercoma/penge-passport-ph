@@ -297,6 +297,7 @@ export function createApi(deps: ApiDeps) {
       confirmUrl: `${deps.publicBaseUrl}/confirm#token=${token}`,
       sites: chosen,
       applicants: request.applicants,
+      pace: request.pace,
     });
     try {
       await mailer.send({ ...content, to: request.email, kind: 'confirm' });
@@ -319,7 +320,7 @@ export function createApi(deps: ApiDeps) {
       return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
-    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants });
+    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace });
   });
 
   // Some mail apps open the List-Unsubscribe link instead of POSTing to it:

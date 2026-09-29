@@ -89,7 +89,7 @@ async function world() {
     return report;
   };
   const subscribe = async (email: string, siteIds: number[], applicants = 1) => {
-    const token = await createPending(kv, keys, { email, siteIds, applicants }, t.now());
+    const token = await createPending(kv, keys, { email, siteIds, applicants, pace: 'asap' }, t.now());
     const result = await confirm(kv, token, t.now());
     if (result.status === 'invalid') throw new Error('confirm failed');
     return result.subscriberId;

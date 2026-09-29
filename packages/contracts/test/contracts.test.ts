@@ -68,8 +68,9 @@ describe('validateSubscribe', () => {
   it('accepts a normal request, de-duplicating and sorting sites', () => {
     expect(
       validateSubscribe({ email: 'A@b.co', siteIds: [693, 10, 693], applicants: 2 }, known),
-    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2 } });
-    expect(validateSubscribe({ email: 'a@b.co', siteIds: [10] })).toMatchObject({ ok: true, value: { applicants: 1 } });
+    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2, pace: 'hourly' } });
+    expect(validateSubscribe({ email: 'a@b.co', siteIds: [10] })).toMatchObject({ ok: true, value: { applicants: 1, pace: 'hourly' } });
+    expect(validateSubscribe({ email: 'a@b.co', siteIds: [10], pace: 'asap' })).toMatchObject({ ok: true, value: { pace: 'asap' } });
   });
 
   it.each([
@@ -78,6 +79,8 @@ describe('validateSubscribe', () => {
     ['{"email":"a@b.co"}', 'form'],
     [{ email: 'a@b.co', siteIds: [10], website: 'http://spam' }, 'form'],
     [{ email: 'nope', siteIds: [10] }, 'email'],
+    [{ email: 'a@b.co', siteIds: [10], pace: 'daily' }, 'pace'],
+    [{ email: 'a@b.co', siteIds: [10], pace: null }, 'pace'],
     [{ email: 'a@b.co', siteIds: [] }, 'siteIds'],
     [{ email: 'a@b.co', siteIds: '10' }, 'siteIds'],
     [{ email: 'a@b.co', siteIds: [10.5] }, 'siteIds'],

@@ -10,7 +10,9 @@ export type WriteOp =
   | { op: 'sAdd'; key: string; members: string[] }
   | { op: 'sRem'; key: string; members: string[] }
   | { op: 'rPush'; key: string; values: string[] }
-  | { op: 'expire'; key: string; ttlSeconds: number };
+  | { op: 'expire'; key: string; ttlSeconds: number }
+  /** Undo one increment, keeping the counter's expiry. */
+  | { op: 'decr'; key: string };
 
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -98,6 +100,9 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
             break;
           case 'expire':
             multi.expire(op.key, op.ttlSeconds);
+            break;
+          case 'decr':
+            multi.decr(op.key);
             break;
         }
       }
@@ -271,6 +276,9 @@ export class MemoryKv implements Kv {
           if (entry) entry.expiresAt = this.now() + op.ttlSeconds * 1000;
           break;
         }
+        case 'decr':
+          await this.decr(op.key);
+          break;
       }
     }
   }

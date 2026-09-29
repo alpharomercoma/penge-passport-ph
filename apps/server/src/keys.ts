@@ -20,6 +20,11 @@ export const K = {
   sites: `${P}sites`,
   status: `${P}status`,
   outbox: `${P}outbox`,
+  /** One person's alerts waiting for their next email (signed, like the outbox), and who has any. */
+  held: (subscriberId: string) => `${P}held:${subscriberId}`,
+  heldSubscribers: `${P}held-subs`,
+  /** When a person was last sent an alert, for their pace. */
+  lastAlert: (subscriberId: string) => `${P}last-alert:${subscriberId}`,
   checkLock: `${P}lock:check`,
   /** Set after a scan the site struggled with: scans wait until it expires. */
   scanCooldown: `${P}scan:cooldown`,

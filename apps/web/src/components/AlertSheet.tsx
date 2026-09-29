@@ -1,4 +1,4 @@
-import { type Field, LIMITS, validateSubscribe } from '@penge/contracts';
+import { type Field, LIMITS, PACE_LABELS, PACES, type Pace, validateSubscribe } from '@penge/contracts';
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type Api, ApiFailure, errorText } from '../api.ts';
 import { AREAS } from '../areas.ts';
@@ -27,6 +27,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
   const emailRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState('');
   const [applicants, setApplicants] = useState(initialApplicants);
+  const [pace, setPace] = useState<Pace>('hourly');
   const [website, setWebsite] = useState('');
   const [picking, setPicking] = useState(selected.length === 0);
   const [query, setQuery] = useState('');
@@ -98,7 +99,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
-    const checked = validateSubscribe({ email, siteIds: selected, applicants, website }, new Set(offices.map((o) => o.id)));
+    const checked = validateSubscribe({ email, siteIds: selected, applicants, pace, website }, new Set(offices.map((o) => o.id)));
     if (!checked.ok) {
       setErrors(checked.errors);
       if (checked.errors.siteIds) setPicking(true);
@@ -246,6 +247,24 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
               {errors.applicants && <p className="error">{errors.applicants}</p>}
             </div>
 
+            <div className="field">
+              <label htmlFor={`${id}-pace`}>How often</label>
+              <select id={`${id}-pace`} value={pace} onChange={(e) => setPace(e.target.value as Pace)}>
+                {PACES.map((p) => (
+                  <option key={p} value={p}>
+                    {PACE_LABELS[p]}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                {pace === 'hourly'
+                  ? 'One email with everything new since the last one, at most once an hour.'
+                  : 'One email from each check that finds dates; checks run every 15 minutes.'}{' '}
+                Dates that closed in the meantime are left out.
+              </p>
+              {errors.pace && <p className="error">{errors.pace}</p>}
+            </div>
+
             {/* Hidden from people; bots fill it in, and the server refuses them. */}
             <div className="hp" aria-hidden="true">
               <label htmlFor={`${id}-website`}>Website</label>
@@ -261,8 +280,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
               {busy ? 'Sending…' : 'Send confirmation email'}
             </button>
             <p className="hint sheet-fine">
-              We email you a link first; nothing starts until you press it. At most 3 alerts a day, each with a one-click
-              unsubscribe.
+              We email you a link first; nothing starts until you press it. Every alert has a one-click unsubscribe.
             </p>
           </form>
         )}

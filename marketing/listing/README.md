@@ -27,8 +27,8 @@ What it does:
 - Checks all 43 DFA offices in the Philippines every 15 minutes
 - Checks 133 embassies, consulates and outreach posts in 67 countries: hourly while they publish dates,
   every 6 hours while they don't
-- Pick up to 10 offices, add your email, and get an alert when a date opens (at most 3 a day, each with
-  a one-click unsubscribe)
+- Pick up to 10 offices, add your email, and get an alert when a date opens: at most once an hour, or as
+  soon as a check finds dates if you'd rather, each with a one-click unsubscribe
 - Tap an open day to see its hours and how many places are left, live from passport.gov.ph
 - Booking for a group of 2 to 5? You only hear about dates with room for everyone
 
@@ -43,5 +43,5 @@ What makes it different:
 
 Sources: release times are the DFA's notice quoted in `docs/legal/README.md`; cadence in
 `deploy/systemd/penge-check.timer` and `apps/server/src/abroad.ts`; the 10-office and group-of-5 limits
-in `packages/contracts` (`LIMITS`); 3 alerts a day is `ALERTS_PER_SUBSCRIBER_PER_DAY` in
-`apps/server/src/config.ts` (production keeps the default).
+in `packages/contracts` (`LIMITS`); the two paces are `PACES` there and `PACE_SPACING_MS` in
+`apps/server/src/checker.ts`.

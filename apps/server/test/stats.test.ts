@@ -337,7 +337,7 @@ describe('what the checker counts', () => {
       now: t.now,
       stats,
     };
-    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1 }, t.now());
+    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now());
     await confirm(kv, token, t.now());
     let n = 0;
     const run = async () => {

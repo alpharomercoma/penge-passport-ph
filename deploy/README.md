@@ -49,8 +49,12 @@ guardrails:
 4. The first look at anything is a baseline, never an alert.
 5. A date is announced at most once every 3 hours, however often it flickers (held slots are released
    after 30 minutes).
-6. Caps: 3 alerts per subscriber per Manila day; `MAIL_DAILY_LIMIT` (300) emails a day in total.
-7. Alerts older than an hour are dropped.
+6. Pace: at most one alert an hour per person, or one per check (every 15 minutes) if they chose "as soon
+   as a check finds dates". What comes in between waits (`pp:held:*`, signed like the outbox) and joins
+   their next email. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (96) a person per Manila day;
+   `MAIL_DAILY_LIMIT` (300) emails a day in total.
+7. Only dates open at the latest good look are sent; one that closed while it waited keeps waiting, in case
+   it opens again. Alerts older than 3 hours are dropped.
 8. Three mail failures in a row stop delivery; the rest waits for the next run. An email the mail
    server refused is tried again later and not charged to anyone's daily count; one that failed
    part-way through may already have gone out, so it stays charged and is never sent twice.
@@ -100,7 +104,7 @@ All times are Manila time; the server's clock is UTC.
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA, in one request: while a person has the site open, a DFA session is kept ready (at most one request every 7 minutes or so, none while nobody visits); shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
-| Email alerts | In the same run as the healthy scan that found the date | 3 a day per subscriber and 300 a day in total by default (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
+| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 96 a person and 300 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
 | Debian and Caddy security updates | Daily | Restart at 04:30 only when an update needs it |
 | Node.js security releases | Weekly, Tuesday 04:10–04:40 | Signature-checked; runs at the next boot if the server was off |
 | HTTPS certificate | Caddy renews it before it expires | |
@@ -293,7 +297,7 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
 ```
 
 **Pause every email at once** (alerts and confirmation emails; checked before every message; the outbox
-keeps filling and alerts over an hour old are dropped):
+keeps filling, and on resuming each date goes out if it is still open and under 3 hours old):
 
 ```sh
 apt install redis-tools                            # once, for redis-cli

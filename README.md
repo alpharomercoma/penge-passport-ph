@@ -176,7 +176,8 @@ date opens where you can get to.
   hourly,** through this package's rate limiter, and stores every scan in Cloudflare R2 for later analysis.
 - **Emails only on trustworthy news.** A scan that looks broken (too many offices failing, no dates
   anywhere, an office list suddenly cut short) sends nothing and changes nothing; the first look is never news; a flickering date is
-  announced once; at most 3 alerts a day.
+  announced once; at most one email an hour (or one per check, for those who ask), each with everything
+  new since the last and none of the dates that closed in between.
 - **Private.** Addresses are stored encrypted (AES-256-GCM), confirmed by double opt-in, and deleted on
   unsubscribe (daily backups, also encrypted, drop them within 14 days); every alert has a one-click
   unsubscribe (RFC 8058). No trackers: visitors are counted on the server, without cookies, scripts or

@@ -1,6 +1,7 @@
 // Subscribers live only in Redis. Once a day the checker copies them, exactly
 // as stored (addresses stay encrypted), to R2; `admin.mjs restore` puts a copy
 // back. A backup is useless without the EMAIL_ENC_KEY that sealed it.
+import { isPace } from '@penge/contracts';
 import { K } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
 
@@ -11,7 +12,7 @@ export interface Backup {
 }
 
 const ID = /^[A-Za-z0-9_-]{16,32}$/;
-const FIELDS = ['email', 'index', 'sites', 'applicants', 'createdAt', 'confirmedAt'];
+const FIELDS = ['email', 'index', 'sites', 'applicants', 'pace', 'createdAt', 'confirmedAt'];
 
 /**
  * Every subscriber: from the set of all of them, and from the site sets too,
@@ -36,6 +37,8 @@ export async function importSubscribers(kv: Kv, backup: Backup): Promise<number>
     if (!ID.test(id) || typeof fields !== 'object' || fields === null) throw new Error(`bad subscriber ${String(id)}`);
     const clean = Object.fromEntries(FIELDS.filter((f) => typeof fields[f] === 'string').map((f) => [f, fields[f]!]));
     const sites = (clean.sites ?? '').split(',').map(Number);
+    // Absent in backups from before paces existed; anything else must be a pace.
+    if (fields.pace !== undefined && !isPace(fields.pace)) throw new Error(`bad subscriber ${id}`);
     if (!clean.email || !clean.index || !sites.every((n) => Number.isSafeInteger(n) && n > 0)) {
       throw new Error(`bad subscriber ${id}`);
     }

@@ -98,7 +98,7 @@ describe('templates', () => {
           manageUrl: 'https://x.example/',
           lastToday: false,
         });
-        const confirm = confirmationEmail({ confirmUrl: 'https://x.example/confirm#token=a', sites: [{ id: 1, name: hostile }], applicants: 1 });
+        const confirm = confirmationEmail({ confirmUrl: 'https://x.example/confirm#token=a', sites: [{ id: 1, name: hostile }], applicants: 1, pace: 'hourly' });
         for (const html of [alert.html, confirm.html]) {
           expect(html).not.toContain('<script>');
           expect(html).not.toContain(`"'&${extra}`);
@@ -166,6 +166,9 @@ describe('config', () => {
     const config = loadConfig(env);
     expect(config.mailMode).toBe('dry-run');
     expect(config.mailDailyLimit).toBe(300);
+    // A safety net above what either pace allows: 24 an hour apart, 96 one per check.
+    expect(config.alertsPerSubscriberPerDay).toBe(96);
+    expect(config.statsEmail).toBeNull();
     expect(config.api).toEqual({ host: '127.0.0.1', port: 8787 });
   });
 

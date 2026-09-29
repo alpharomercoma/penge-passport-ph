@@ -10,8 +10,12 @@
 //     glitch can never make every date look new on the next run.
 //  4. The first observation of anything is a baseline, never an alert.
 //  5. A date is announced at most once per 3 hours, however often it flickers.
-//  6. Caps: alerts per subscriber per day, and emails per day in total.
-//  7. Alerts older than an hour are dropped: stale news is noise.
+//  6. Pace: one alert an hour per person (or one per check if they chose it);
+//     what comes in between waits and joins their next email. Caps: alerts per
+//     person per day, and emails per day in total.
+//  7. Only dates open at the latest good look are sent; one that closed while
+//     it waited keeps waiting, in case it opens again. Alerts older than 3
+//     hours are dropped: stale news is noise.
 //  8. Three mail failures in a row stop delivery; the rest waits for the next run.
 //  9. A Redis flag (pp:mail:paused) pauses all delivery at once, checked before every email.
 // 10. Baselines, announcement marks and queued alerts are written in one
@@ -22,7 +26,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { type Availability, CircuitOpenError, type Site } from 'penge-passport-ph';
-import { describePost, officeMapUrl, officePhone, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import { describePost, officeMapUrl, officePhone, type Pace, type SiteStatus, type StatusResponse } from '@penge/contracts';
 import {
   ABROAD_DEADLINE_MS,
   ABROAD_GROUP_CAP,
@@ -84,7 +88,18 @@ export interface CheckDeps {
 }
 
 export const ANNOUNCE_WINDOW_SECONDS = 3 * 3600;
-export const OUTBOX_MAX_AGE_MS = 60 * 60_000;
+/** Alerts waiting longer than this are dropped, even about dates still open: by then they are not news. */
+export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
+/**
+ * The least time between two alerts to one person. "hourly" is a full hour:
+ * checks start every 15 minutes, so the next email goes at the first check an
+ * hour or more after the last one. "asap" is one email per check at most (a
+ * check emails a person once, whether their dates came from the Philippines or
+ * from the posts abroad later in it), with a 5-minute floor between checks.
+ */
+export const PACE_SPACING_MS: Record<Pace, number> = { hourly: 60 * 60_000, asap: 5 * 60_000 };
+const HELD_TTL_SECONDS = OUTBOX_MAX_AGE_MS / 1000 + 3600;
+const LAST_ALERT_TTL_SECONDS = 2 * 3600;
 /** Extra lookups per run for group sizes; each is one more request to the site (budget.ts has the sum). */
 export const GROUP_QUERY_CAP = 10;
 /** Offices that answered with an error are tried once more, this many at most per run. */
@@ -117,7 +132,12 @@ export interface AlertJob {
   subscriberId: string;
   applicants: number;
   openings: Opening[];
+  /** Refused sends so far, for every date in it (entries written before `tries` existed). */
   attempts?: number;
+  /** When each "siteId:date" was first queued, once alerts have been merged; otherwise `createdAt`. */
+  dateAt?: Record<string, number>;
+  /** Refused sends so far, per "siteId:date", once alerts have been merged. */
+  tries?: Record<string, number>;
 }
 
 export interface DeliveryReport {
@@ -126,6 +146,8 @@ export interface DeliveryReport {
   skipped: number;
   failed: number;
   dropped: number;
+  /** People whose alerts wait for their pace (or the daily limit) after this pass. */
+  held: number;
   remaining: number;
   stoppedBy: 'paused' | 'daily limit' | 'mail errors' | null;
 }
@@ -228,12 +250,14 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
     } else {
       log.warn('unhealthy run: no alerts, baselines unchanged', { runId, problems: scan.problems });
     }
-    let delivery = await deliver(deps, now);
+    // One email per person per check: the posts abroad join the next check's email.
+    const emailed = new Set<string>();
+    let delivery = await deliver(deps, now, emailed);
     // Posts abroad come after the Philippines' alerts are out, so they never delay them.
     let abroad: AbroadReport | null = null;
     if (deps.abroad) {
       abroad = await abroadPass(deps, deps.abroad, scan.runId, now, started + ABROAD_DEADLINE_MS, loadSubscriber, holdLock);
-      if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now));
+      if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now, emailed));
     }
     await backupOncePerDay(deps, now, runId);
     await deps.stats?.settled();
@@ -506,6 +530,7 @@ function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
     skipped: a.skipped + b.skipped,
     failed: a.failed + b.failed,
     dropped: a.dropped + b.dropped,
+    held: b.held,
     remaining: b.remaining,
     stoppedBy: b.stoppedBy ?? a.stoppedBy,
   };
@@ -632,19 +657,27 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
   return jobs.size;
 }
 
-/** Send what is in the outbox, within every cap. */
-export async function deliver(deps: CheckDeps, now: () => number = deps.now ?? Date.now): Promise<DeliveryReport> {
-  const { kv, log, mailer } = deps;
-  const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, remaining: 0, stoppedBy: null };
+/** Send what is in the outbox and what waited for its pace, within every cap. */
+export async function deliver(
+  deps: CheckDeps,
+  now: () => number = deps.now ?? Date.now,
+  /** People already emailed in this check; each is emailed once per check. */
+  emailed: Set<string> = new Set(),
+): Promise<DeliveryReport> {
+  const { kv, log } = deps;
+  const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
+  const run = { failuresInARow: 0, emailed };
+  // Checked before every email, so a pause takes effect mid-run.
+  const paused = async () => {
+    if (!(await kv.get(K.mailPaused))) return false;
+    report.stoppedBy = 'paused';
+    log.warn('mail is paused; the outbox waits');
+    return true;
+  };
 
-  let failuresInARow = 0;
+  // What the checks found, one entry per person, each joining what that person already has waiting.
   for (let i = 0; i < 5000; i++) {
-    // Checked before every email, so a pause takes effect mid-run.
-    if (await kv.get(K.mailPaused)) {
-      report.stoppedBy = 'paused';
-      log.warn('mail is paused; the outbox waits');
-      break;
-    }
+    if (await paused()) break;
     const raw = await kv.lPop(K.outbox);
     if (raw === null) break;
     const job = openJob(raw, deps.keys.token);
@@ -653,77 +686,265 @@ export async function deliver(deps: CheckDeps, now: () => number = deps.now ?? D
       log.warn('dropped an outbox entry with a bad signature');
       continue;
     }
-    if (now() - job.createdAt > OUTBOX_MAX_AGE_MS) {
-      report.dropped++;
-      continue;
-    }
-    const sub = await load(kv, job.subscriberId);
-    if (!sub) {
-      report.skipped++;
-      continue;
-    }
-    // The subscriber may have changed their offices or group size since this was queued.
-    const openings = job.openings.filter((o) => sub.siteIds.includes(o.id));
-    if (sub.applicants !== job.applicants || openings.length === 0) {
-      report.skipped++;
-      continue;
-    }
-    const day = manilaDay(now());
-    if (Number((await kv.get(K.alertsToday(sub.id, day))) ?? 0) >= deps.alertsPerSubscriberPerDay) {
-      report.skipped++;
-      deps.stats?.count('alertsCapped');
-      continue;
-    }
-    if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
-      // Put it back uncharged: the subscriber's own allowance is only spent on a send.
-      await kv.write([{ op: 'rPush', key: K.outbox, values: [raw] }]);
-      report.stoppedBy = 'daily limit';
-      log.warn('daily email limit reached; the outbox waits', { limit: deps.mailDailyLimit });
-      break;
-    }
-    const todays = await kv.incr(K.alertsToday(sub.id, day), COUNTER_TTL_SECONDS);
-
-    const links = unsubscribeLinks(deps.publicBaseUrl, sub.id, deps.keys);
-    const content = alertEmail({
-      openings,
-      applicants: job.applicants,
-      unsubscribeUrl: links.page,
-      manageUrl: `${deps.publicBaseUrl}/`,
-      lastToday: todays === deps.alertsPerSubscriberPerDay,
-    });
-    try {
-      const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
-      if (result === 'sent') {
-        report.sent++;
-        deps.stats?.count('alertsSent');
-      }
-      else if (result === 'dry-run') report.dryRun++;
-      else report.skipped++;
-      failuresInARow = 0;
-    } catch (err) {
-      report.failed++;
-      failuresInARow++;
-      if (wasRefused(err)) {
-        // Nothing was sent: neither today's total nor the subscriber's
-        // allowance is charged, and it is tried again later.
-        await kv.decr(K.mailSentToday(day));
-        await kv.decr(K.alertsToday(sub.id, day));
-        log.error('alert email refused', { job: job.id, err: err as Error });
-        const attempts = (job.attempts ?? 0) + 1;
-        if (attempts < MAX_MAIL_ATTEMPTS) {
-          await kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob({ ...job, attempts }, deps.keys.token)] }]);
+    if ((await consider(deps, job, false, now, report, run)) === 'stop') break;
+  }
+  // People whose alerts waited for their pace, and may now be due.
+  if (!report.stoppedBy) {
+    for (const id of await kv.sMembers(K.heldSubscribers)) {
+      if (await paused()) break;
+      const raw = await kv.get(K.held(id));
+      const job = raw === null ? null : openJob(raw, deps.keys.token);
+      if (!job || job.subscriberId !== id) {
+        if (raw !== null) {
+          report.dropped++;
+          log.warn('dropped a held alert with a bad signature');
         }
-      } else {
-        // It may have gone out: it stays charged, and is not sent again, which
-        // could make a duplicate.
-        log.error('alert email may or may not have gone out; not sending it again', { job: job.id, err: err as Error });
+        await clearHeld(kv, id);
+        continue;
       }
-      if (failuresInARow >= 3) {
-        report.stoppedBy = 'mail errors';
-        break;
+      if ((await consider(deps, job, true, now, report, run)) === 'stop') break;
+    }
+  }
+  report.held = (await kv.sMembers(K.heldSubscribers)).length;
+  report.remaining = await kv.lLen(K.outbox);
+  return report;
+}
+
+/** Everything in both, one entry per office, dates merged and sorted. */
+function mergeOpenings(lists: Opening[][]): Opening[] {
+  const byId = new Map<number, Opening>();
+  for (const o of lists.flat()) {
+    const seen = byId.get(o.id);
+    byId.set(o.id, { id: o.id, name: o.name, dates: [...new Set([...(seen?.dates ?? []), ...o.dates])].sort() });
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function clearHeld(kv: Kv, subscriberId: string) {
+  await kv.write([
+    { op: 'del', key: K.held(subscriberId) },
+    { op: 'sRem', key: K.heldSubscribers, members: [subscriberId] },
+  ]);
+}
+
+async function hold(deps: CheckDeps, job: AlertJob) {
+  await deps.kv.write([
+    { op: 'set', key: K.held(job.subscriberId), value: sealJob(job, deps.keys.token), ttlSeconds: HELD_TTL_SECONDS },
+    { op: 'sAdd', key: K.heldSubscribers, members: [job.subscriberId] },
+  ]);
+}
+
+/**
+ * One person's next alert: what `job` brings plus anything they have waiting,
+ * less what no longer applies. Sent now if their pace allows, otherwise held
+ * for a later check. `fromHeld` when `job` is itself what they had waiting.
+ */
+async function consider(
+  deps: CheckDeps,
+  job: AlertJob,
+  fromHeld: boolean,
+  now: () => number,
+  report: DeliveryReport,
+  run: { failuresInARow: number; emailed: Set<string> },
+): Promise<'next' | 'stop'> {
+  const { kv, log, mailer } = deps;
+  const id = job.subscriberId;
+  const parts: AlertJob[] = [job];
+  if (!fromHeld) {
+    const raw = await kv.get(K.held(id));
+    const waiting = raw === null ? null : openJob(raw, deps.keys.token);
+    // A record signed for someone else was moved here by whoever can write to Redis.
+    if (waiting && waiting.subscriberId === id) parts.unshift(waiting);
+    else if (raw !== null) report.dropped++;
+  }
+  // When each date was first queued: each is dropped on its own once older than OUTBOX_MAX_AGE_MS.
+  const firstAt = new Map<string, number>();
+  for (const p of parts) {
+    for (const o of p.openings) {
+      for (const d of o.dates) {
+        const key = dateKey(o.id, d);
+        firstAt.set(key, Math.min(firstAt.get(key) ?? Infinity, p.dateAt?.[key] ?? p.createdAt));
       }
     }
   }
-  report.remaining = await kv.lLen(K.outbox);
-  return report;
+  const fresh = (siteId: number, date: string) => now() - (firstAt.get(dateKey(siteId, date)) ?? 0) <= OUTBOX_MAX_AGE_MS;
+  for (const p of parts) if (!p.openings.some((o) => o.dates.some((d) => fresh(o.id, d)))) report.dropped++;
+  if (![...firstAt.keys()].some((key) => now() - firstAt.get(key)! <= OUTBOX_MAX_AGE_MS)) {
+    await clearHeld(kv, id);
+    return 'next';
+  }
+
+  const sub = await load(kv, id);
+  if (!sub) {
+    report.skipped++;
+    await clearHeld(kv, id);
+    return 'next';
+  }
+  // They may have changed their offices or group size since.
+  const wanted = mergeOpenings(parts.filter((p) => p.applicants === sub.applicants).map((p) => p.openings))
+    .filter((o) => sub.siteIds.includes(o.id))
+    .map((o) => ({ ...o, dates: o.dates.filter((d) => fresh(o.id, d)) }))
+    .filter((o) => o.dates.length > 0);
+  if (wanted.length === 0) {
+    report.skipped++;
+    await clearHeld(kv, id);
+    return 'next';
+  }
+  // Refused sends, counted per date: a date that joins a failing alert keeps its own tries.
+  const tries = new Map<string, number>();
+  for (const p of parts) {
+    for (const o of p.openings) {
+      for (const d of o.dates) {
+        const key = dateKey(o.id, d);
+        tries.set(key, Math.max(tries.get(key) ?? 0, p.tries?.[key] ?? p.attempts ?? 0));
+      }
+    }
+  }
+  const jobOf = (openings: Opening[]): AlertJob => {
+    const dateAt: Record<string, number> = {};
+    const tried: Record<string, number> = {};
+    for (const o of openings) {
+      for (const d of o.dates) {
+        const key = dateKey(o.id, d);
+        dateAt[key] = firstAt.get(key)!;
+        if (tries.get(key)) tried[key] = tries.get(key)!;
+      }
+    }
+    return {
+      id: job.id,
+      createdAt: Math.min(...Object.values(dateAt)),
+      subscriberId: id,
+      applicants: sub.applicants,
+      openings,
+      dateAt,
+      ...(Object.keys(tried).length > 0 ? { tries: tried } : {}),
+    };
+  };
+  const holdOps = (held: AlertJob | null): WriteOp[] =>
+    held
+      ? [
+          { op: 'set', key: K.held(id), value: sealJob(held, deps.keys.token), ttlSeconds: HELD_TTL_SECONDS },
+          { op: 'sAdd', key: K.heldSubscribers, members: [id] },
+        ]
+      : [
+          { op: 'del', key: K.held(id) },
+          { op: 'sRem', key: K.heldSubscribers, members: [id] },
+        ];
+
+  // Their pace: too soon after their last alert, or emailed already in this check, it waits.
+  const lastRaw = await kv.get(K.lastAlert(id));
+  if (run.emailed.has(id) || now() - Number(lastRaw ?? 0) < PACE_SPACING_MS[sub.pace]) {
+    await hold(deps, jobOf(wanted));
+    return 'next';
+  }
+  // Only dates open at the latest good look go out. One that closed while it
+  // waited keeps waiting, until it is too old: if it opens again, they have
+  // still not been told, and a date is announced to everyone once in 3 hours.
+  const { open: openings, closed } = await splitByOpen(kv, sub.applicants, wanted);
+  const leftover = closed.length > 0 ? jobOf(closed) : null;
+  if (openings.length === 0) {
+    await hold(deps, jobOf(wanted));
+    return 'next';
+  }
+  const next = jobOf(openings);
+
+  const day = manilaDay(now());
+  if (Number((await kv.get(K.alertsToday(id, day))) ?? 0) >= deps.alertsPerSubscriberPerDay) {
+    report.skipped++;
+    deps.stats?.count('alertsCapped');
+    await clearHeld(kv, id);
+    return 'next';
+  }
+  if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
+    // It all waits uncharged, closed dates too: the allowance is only spent on a send.
+    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, ...holdOps(jobOf(wanted))]);
+    report.stoppedBy = 'daily limit';
+    log.warn('daily email limit reached; the outbox waits', { limit: deps.mailDailyLimit });
+    return 'stop';
+  }
+  const todays = await kv.incr(K.alertsToday(id, day), COUNTER_TTL_SECONDS);
+  // Unsubscribed a moment ago? Then nothing goes out, and nothing is kept.
+  // (Checked right before the claim; the two are not one atomic step.)
+  if (!(await load(kv, id))) {
+    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, { op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(null)]);
+    report.skipped++;
+    return 'next';
+  }
+  // Marked sent before it goes out, as an outbox entry is popped before it is
+  // sent: a crash after the send can lose this alert, never send it twice.
+  await kv.write([
+    { op: 'set', key: K.lastAlert(id), value: String(now()), ttlSeconds: LAST_ALERT_TTL_SECONDS },
+    ...holdOps(leftover),
+  ]);
+  run.emailed.add(id);
+
+  const links = unsubscribeLinks(deps.publicBaseUrl, id, deps.keys);
+  const content = alertEmail({
+    openings,
+    applicants: next.applicants,
+    unsubscribeUrl: links.page,
+    manageUrl: `${deps.publicBaseUrl}/`,
+    lastToday: todays === deps.alertsPerSubscriberPerDay,
+  });
+  try {
+    const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
+    if (result === 'sent') {
+      report.sent++;
+      deps.stats?.count('alertsSent');
+    } else if (result === 'dry-run') report.dryRun++;
+    else report.skipped++;
+    run.failuresInARow = 0;
+  } catch (err) {
+    report.failed++;
+    run.failuresInARow++;
+    if (wasRefused(err)) {
+      // Nothing was sent: the claim is undone, neither today's total nor the
+      // subscriber's allowance is charged, and it is tried again later, all in
+      // one write. A date refused MAX_MAIL_ATTEMPTS times is given up on.
+      run.emailed.delete(id);
+      for (const o of openings) for (const d of o.dates) tries.set(dateKey(o.id, d), (tries.get(dateKey(o.id, d)) ?? 0) + 1);
+      const retry = wanted
+        .map((o) => ({ ...o, dates: o.dates.filter((d) => (tries.get(dateKey(o.id, d)) ?? 0) < MAX_MAIL_ATTEMPTS) }))
+        .filter((o) => o.dates.length > 0);
+      await kv.write([
+        { op: 'decr', key: K.mailSentToday(day) },
+        { op: 'decr', key: K.alertsToday(id, day) },
+        lastRaw === null
+          ? { op: 'del', key: K.lastAlert(id) }
+          : { op: 'set', key: K.lastAlert(id), value: lastRaw, ttlSeconds: LAST_ALERT_TTL_SECONDS },
+        ...holdOps(retry.length > 0 ? jobOf(retry) : null),
+      ]);
+      log.error('alert email refused', { job: next.id, err: err as Error });
+    } else {
+      // It may have gone out: it stays charged and claimed, and is not sent
+      // again, which could make a duplicate.
+      log.error('alert email may or may not have gone out; not sending it again', { job: next.id, err: err as Error });
+    }
+    if (run.failuresInARow >= 3) {
+      report.stoppedBy = 'mail errors';
+      return 'stop';
+    }
+  }
+  return 'next';
+}
+
+const dateKey = (siteId: number, date: string) => `${siteId}:${date}`;
+
+/**
+ * Which dates are open at the latest good look, and which have closed. A group
+ * fits only where one person does, so a date gone for one person is closed for
+ * every group; with no baseline at all, the office was never looked at: open.
+ */
+async function splitByOpen(kv: Kv, applicants: number, openings: Opening[]) {
+  const open: Opening[] = [];
+  const closed: Opening[] = [];
+  for (const o of openings) {
+    const baseline = await kv.hGetAll(K.openDates(o.id));
+    const one = parseDates(baseline['1']);
+    const group = applicants === 1 ? null : parseDates(baseline[String(applicants)]);
+    const isOpen = (d: string) => (!one || one.includes(d)) && (!group || group.includes(d));
+    if (o.dates.some(isOpen)) open.push({ ...o, dates: o.dates.filter(isOpen) });
+    if (!o.dates.every(isOpen)) closed.push({ ...o, dates: o.dates.filter((d) => !isOpen(d)) });
+  }
+  return { open, closed };
 }

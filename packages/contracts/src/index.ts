@@ -11,13 +11,26 @@ export const LIMITS = Object.freeze({
   maxApplicants: 5,
 });
 
+/**
+ * How often one person may be emailed. Either way each email carries everything
+ * new since the last, and dates that closed in between are left out.
+ */
+export const PACES = ['hourly', 'asap'] as const;
+export type Pace = (typeof PACES)[number];
+export const isPace = (v: unknown): v is Pace => (PACES as readonly unknown[]).includes(v);
+export const PACE_LABELS: Record<Pace, string> = {
+  hourly: 'At most once an hour',
+  asap: 'As soon as a check finds dates',
+};
+
 export interface SubscribeRequest {
   email: string;
   siteIds: number[];
   applicants: number;
+  pace: Pace;
 }
 
-export type Field = 'email' | 'siteIds' | 'applicants' | 'form';
+export type Field = 'email' | 'siteIds' | 'applicants' | 'pace' | 'form';
 
 export type Checked<T> =
   | { ok: true; value: T }
@@ -106,8 +119,14 @@ export function validateSubscribe(
     errors.applicants = `Choose from 1 to ${LIMITS.maxApplicants} people.`;
   }
 
+  const pace = body.pace === undefined ? 'hourly' : body.pace;
+  if (!isPace(pace)) errors.pace = 'Choose how often to get emails.';
+
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return { ok: true, value: { email: email!, siteIds: siteIds.sort((a, b) => a - b), applicants: applicants as number } };
+  return {
+    ok: true,
+    value: { email: email!, siteIds: siteIds.sort((a, b) => a - b), applicants: applicants as number, pace: pace as Pace },
+  };
 }
 
 /** Tokens in links are 32 random bytes, base64url: exactly 43 characters. */
@@ -191,6 +210,7 @@ export interface ConfirmResponse {
   status: 'confirmed' | 'updated';
   siteIds: number[];
   applicants: number;
+  pace: Pace;
 }
 
 // -- Display helpers shared by the emails and the website ---------------------
