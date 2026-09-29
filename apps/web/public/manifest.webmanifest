@@ -1,0 +1,20 @@
+{
+  "id": "./",
+  "name": "PengePassportPH",
+  "short_name": "PassportPH",
+  "description": "Open DFA passport appointment dates at every office in the Philippines and posts abroad, with free email alerts. Unofficial: not run by or affiliated with the Department of Foreign Affairs.",
+  "lang": "en-PH",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "categories": ["travel", "utilities", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

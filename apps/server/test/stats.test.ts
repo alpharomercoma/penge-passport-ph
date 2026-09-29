@@ -74,6 +74,20 @@ describe('counting visitors', () => {
     expect(await kv.pfCount(K.stat('2026-09-27', 'visitors'))).toBe(1);
   });
 
+  it('keeps the salt only in Redis, so when Redis deletes it no copy is left', async () => {
+    const { kv, stats } = counting();
+    stats.visit('203.0.113.7', PHONE);
+    await stats.settled();
+    const first = await kv.get(K.statSalt('2026-09-27'));
+    await kv.write([{ op: 'del', key: K.statSalt('2026-09-27') }]);
+    // The same process on the same day: a salt it had kept would be used again, and not stored.
+    stats.visit('198.51.100.2', PHONE);
+    await stats.settled();
+    const second = await kv.get(K.statSalt('2026-09-27'));
+    expect(second).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(second).not.toBe(first);
+  });
+
   it('never stores an address or a browser string', async () => {
     await fc.assert(
       fc.asyncProperty(fc.ipV4(), fc.ipV6(), fc.stringMatching(/^Mozilla\/5\.0 \([A-Za-z0-9 ;.]{4,40}\)$/), async (v4, v6, ua) => {

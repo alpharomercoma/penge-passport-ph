@@ -4,6 +4,7 @@ import { LogoMark } from './components/Logo.tsx';
 import { BASE, BOOKING_URL, REPO_URL, routeOf } from './links.ts';
 import { Confirm } from './pages/Confirm.tsx';
 import { Home } from './pages/Home.tsx';
+import { Privacy } from './pages/Privacy.tsx';
 import { Unsubscribe } from './pages/Unsubscribe.tsx';
 
 function Layout({ children }: { children: ReactNode }) {
@@ -31,10 +32,11 @@ function Layout({ children }: { children: ReactNode }) {
           .
         </p>
         <p>
+          <a href={`${BASE}privacy`}>Privacy</a> and{' '}
           <a href={REPO_URL} rel="noreferrer">
-            Source code
-          </a>
-          , MIT license.
+            source code
+          </a>{' '}
+          (MIT license).
         </p>
       </footer>
     </>
@@ -64,6 +66,8 @@ export function App({ path, api = realApi }: { path: string; api?: Api }) {
         <Confirm api={api} />
       ) : route === '/unsubscribe' ? (
         <Unsubscribe api={api} />
+      ) : route === '/privacy' ? (
+        <Privacy />
       ) : (
         <NotFound />
       )}

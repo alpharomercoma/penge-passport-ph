@@ -13,3 +13,7 @@ __pycache__/
 .secrets/
 .env*
 .qa/
+
+# The Android project Bubblewrap generates from android/twa-manifest.json, and its builds.
+android/project/
+android/out/

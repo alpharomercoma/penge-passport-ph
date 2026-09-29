@@ -27,7 +27,7 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
 | Releases | `/opt/penge/releases/<time>-<commit>`; `current` points at the live one; five are kept |
 | Secrets | `/etc/penge/server.env` (root:penge, 0640); template in `server.env.example` |
 | Rate-limiter state, R2 spool | `/var/lib/penge/limiter`, `/var/lib/penge/spool` |
-| Units | `penge-api.service`, `penge-check.service`, `penge-check.timer`, `caddy.service` |
+| Units | `penge-api.service`, `penge-check.service`, `penge-check.timer`, `penge-valkey-compact.timer`, `caddy.service` |
 
 ## What the checker does, and when it refuses to email
 
@@ -114,6 +114,7 @@ All times are Manila time; the server's clock is UTC.
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
 | A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | 36 posts each run, after the scan at home and its emails; alerts in the same run. The list of posts is read again weekly |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
+| The site's copy on a phone (installed from the browser, or the [Android app](../docs/android.md)) | Each page load asks the server first, so a deploy shows on the next visit | The service worker (`apps/web/src/sw.js`) keeps the last deploy's page, code and icons to open offline; appointment data is never kept |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA, in one request: while a person has the site open, a DFA session is kept ready (at most one request every 7 minutes or so, none while nobody visits); shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
 | Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 96 a person and 300 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
@@ -123,7 +124,7 @@ All times are Manila time; the server's clock is UTC.
 | Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later. What each run saw at the posts abroad goes to `scans-abroad/`, and is not kept for later if R2 is down |
 | Subscriber backup to R2 | Once a day, on the first scan after midnight | |
 | Daily numbers to R2 and by email | Once a day, on the first scan after 07:00 (Manila), for the day before | `stats/v1/`; emailed to `STATS_EMAIL` when set ([Daily numbers](#daily-numbers)) |
-| Valkey to disk | Continuously | Append-only file, flushed every second |
+| Valkey to disk | Continuously | Append-only file, flushed every second. Rewritten hourly (`penge-valkey-compact.timer`), which drops deleted and expired data from it: Valkey by itself would wait until the file passed 64 MB |
 | Logs | Rotated daily | Journal kept 14 days; the mail log and root's mailbox keep 3 old days plus today |
 | Canary | Every 6 hours, and on pushes that change either package | A few read-only requests through both packages, and a walk of the booking pages; opens an issue when the site changes |
 | Fuzzing | Mondays | |
@@ -339,6 +340,7 @@ are gone within 14 days."), checked on 27 September 2026:
 |---|---|---|---|
 | Browser to server | The form, over HTTPS: TLS 1.2 or 1.3 (Caddy's default; 1.3 when we checked); plain HTTP is redirected, and HSTS is set for a year | Yes | Not stored |
 | Valkey | AES-256-GCM, a fresh nonce each time (`crypto.ts`); lookups use a keyed hash, never the address | Yes | At once |
+| Valkey's append-only log | Every write, the encrypted record included, until the log is rewritten (hourly, `deploy/valkey-compact.sh`) | Yes | Within an hour |
 | Unconfirmed sign-ups | The same encrypted record, waiting for its link to be clicked | Yes | At once (unsubscribing cancels them); otherwise after 48 hours |
 | Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day's scan deletes every copy older than that |
 | API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
@@ -363,8 +365,9 @@ fails, for example a dropped HTTP/3 connection.
 **Visitors, counted.** The [daily numbers](#daily-numbers) count distinct visitors without a cookie, a
 script or a stored address: the API hashes the visitor's network address and browser (user agent) with a
 random salt for the Manila day and adds the hash to a HyperLogLog, which keeps an estimate of how many
-distinct hashes it saw, not the hashes. The salt is deleted within 25 hours, after which nobody can tell
-whether a given address visited, even with the database and the server's keys.
+distinct hashes it saw, not the hashes. The salt lives 24 hours, and its copy in Valkey's log goes at the
+next hourly rewrite: after 25 hours nobody can link a given address to that day's count, even with the
+database and the server's keys (Caddy's error log, above, is separate).
 
 ## Keys and backups
 

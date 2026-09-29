@@ -172,8 +172,9 @@ bash "$HERE/setup-valkey.sh"
 echo "== systemd"
 install -o root -g root -m 0644 "$HERE"/systemd/penge-*.service "$HERE"/systemd/penge-*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable penge-api.service penge-check.timer penge-node-update.timer >/dev/null
-systemctl start penge-node-update.timer
+install -o root -g root -m 0755 "$HERE/valkey-compact.sh" /usr/local/bin/penge-valkey-compact
+systemctl enable penge-api.service penge-check.timer penge-node-update.timer penge-valkey-compact.timer >/dev/null
+systemctl start penge-node-update.timer penge-valkey-compact.timer
 
 echo "== caddy config for https://$SITE_ADDRESS$BASE_PATH"
 aliases=""

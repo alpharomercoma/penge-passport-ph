@@ -20,10 +20,11 @@ Thanks for helping. Three ground rules come before everything else:
 | `packages/python/` | The Python port, `penge-passport-ph` on PyPI |
 | `packages/contracts/` | Rules the website and server share: form validation, response shapes, date formatting |
 | `apps/server/` | The checker (scan, R2 snapshot, alerts) and the website's API, bundled to two files |
-| `apps/web/` | The website: React, built to static files |
+| `apps/web/` | The website: React, built to static files, with a service worker and a web app manifest |
+| `android/` | The Android app: `twa-manifest.json` and `build.sh`; the project is generated ([how](docs/android.md)) |
 | `deploy/` | Server provisioning, systemd units, Caddy, releases, mail ([runbook](deploy/README.md)) |
 | `scripts/canary/` | The canary that watches passport.gov.ph for changes |
-| `marketing/` | The launch video, built from code ([how](marketing/ad/README.md)), and the launch post |
+| `marketing/` | The launch video, built from code ([how](marketing/ad/README.md)), the launch post, and the listings ([Google Play](marketing/play-store/README.md)) |
 
 ## Development
 

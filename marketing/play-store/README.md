@@ -1,0 +1,140 @@
+# Google Play listing
+
+What to enter in Play Console for the Android app (29 September 2026). Same rules as the rest of
+`marketing/`: every claim checked against the live site, the code or a cited page. How to build and
+release the app is in [`docs/android.md`](../../docs/android.md).
+
+## Store listing
+
+| Field | Value |
+| --- | --- |
+| App name (30 at most) | PengePassportPH (15) |
+| Short description (80 at most) | Open DFA passport appointment dates, with free email alerts. Unofficial app. (76) |
+| Category | Travel & Local |
+| Website | https://alphaexperiments.com/pengepassportph/ |
+| Privacy policy | https://alphaexperiments.com/pengepassportph/privacy |
+| Contact email | Required, and **shown publicly** on the listing: use an address made for this app, not a personal one |
+
+Full description (1,520 of 4,000 characters). Google requires an app that shows government
+information without being run by a government to say so and to name its sources in the description,
+which is why both come first and last:
+
+```text
+PengePassportPH is unofficial. It is not run by, affiliated with or endorsed by the Department of Foreign Affairs (DFA) or any other government agency. It shows what the DFA's public appointment calendar shows, and you book on the DFA's own site.
+
+The DFA releases new passport appointment dates at 12 noon and 9 PM, Monday to Saturday, except holidays. PengePassportPH checks for you and emails you when dates open at the offices you can get to.
+
+What it does
+• Checks all 43 DFA offices in the Philippines every 15 minutes
+• Checks 133 embassies, consulates and outreach posts in 67 countries: hourly while they publish dates, every 6 hours while they don't
+• Tap an open day to see its hours and how many places are left, live from passport.gov.ph
+• Pick up to 10 offices and get an email when a date opens: at most once an hour, or as soon as a check finds dates
+• Booking for a group of 2 to 5? You only hear about dates with room for everyone
+
+What it doesn't do
+• It never selects, holds or books a slot, and never sells one. You book for free at passport.gov.ph yourself.
+• No account, no ads, no tracking scripts.
+
+Free and open source (MIT license): https://github.com/alpharomercoma/penge-passport-ph
+
+Sources
+• Appointment dates and hours: the DFA's Online Passport Appointment System, https://passport.gov.ph/appointment
+• Release times: the DFA's passport FAQ, https://passport.gov.ph/faqs_2
+• Department of Foreign Affairs: https://dfa.gov.ph
+
+Privacy: https://alphaexperiments.com/pengepassportph/privacy
+```
+
+Where each claim comes from:
+- The release times are quoted from https://passport.gov.ph/faqs_2 ("12:00 noon and 9:00 p.m. Mondays to
+  Saturdays except holidays", read on 29 September 2026).
+- The 43 offices, and the 133 posts in 67 countries, are the live site's counts (`/api/status` and
+  `/api/abroad`) on 29 September.
+- The check cadence is set in `deploy/systemd/penge-check.timer` and `apps/server/src/abroad.ts`.
+- The 10 offices and groups of 2 to 5 are `LIMITS` in `packages/contracts`; the two paces are `PACES`
+  there.
+
+`dfa.gov.ph` shows scripts a Cloudflare challenge, so it could not be fetched from here; it is the
+Department's own domain.
+
+## Graphics
+
+All made by `node marketing/play-store/capture.cjs` (needs Playwright's Chromium and Python's Pillow).
+The screenshots are of the live site, so rerun it when the site changes.
+
+| File | Play Console field | Size and format |
+| --- | --- | --- |
+| [`icon-512.png`](icon-512.png) | App icon | 512×512, 32-bit PNG, every pixel opaque, full square: Play rounds the corners |
+| [`feature-graphic.png`](feature-graphic.png) | Feature graphic | 1024×500, 24-bit PNG ([`feature.html`](feature.html)) |
+| [`phone-1-offices.png`](phone-1-offices.png) … [`phone-5-abroad.png`](phone-5-abroad.png) | Phone screenshots | 1080×1920 (9:16; Play refuses sides more than 2:1), 24-bit PNG |
+
+The screenshots show the offices, an office's calendar, a day's hours, the alert form (filled in with
+the placeholder `juan@example.com`, never sent) and the posts abroad.
+
+## App content
+
+| Declaration | Answer |
+| --- | --- |
+| Privacy policy | https://alphaexperiments.com/pengepassportph/privacy |
+| Ads | No ads |
+| App access | All functionality is available without special access: there is no sign-in |
+| Target audience | 18 and over. The people booking are adults, and parents book for children; choosing ages under 13 brings in the Families policy |
+| Government apps | The app is not affiliated with a government entity. It communicates government information (the DFA's appointment calendar), and names its sources in the description |
+| News app | No |
+| Financial features, health | None |
+
+**Content rating questionnaire.** For the answers: there is no violence, sexual content, crude
+language, drugs, alcohol or tobacco, and no gambling. Users can't talk to or share anything with each
+other. There is no location sharing and nothing to buy. The app shows one website and doesn't browse
+the web: links to other sites open in the browser.
+
+## Data safety
+
+What Play asks about is data sent off the phone, including by web content the app controls, which a
+Trusted Web Activity's is ([Play's guide](https://support.google.com/googleplay/android-developer/answer/10787469)).
+The answers follow the [privacy page](https://alphaexperiments.com/pengepassportph/privacy) and the
+runbook's inventory ([`deploy/README.md`](../../deploy/README.md#where-a-subscribers-address-goes)).
+
+| Question | Answer |
+| --- | --- |
+| Does the app collect or share any of the required user data types? | Yes |
+| Is all of the user data collected by the app encrypted in transit? | Yes: from the phone, HTTPS only (plain HTTP is redirected, HSTS for a year). The alert emails the server sends out use TLS when the recipient's mail server offers it (`smtp_tls_security_level = may`), as the privacy page says; that is delivery to the user, not collection from the phone |
+| Can users request that their data be deleted? | Yes: the unsubscribe link in every alert email deletes it at once. A sign-up that is never confirmed is deleted after 48 hours |
+
+| Data type | Collected | Shared | Ephemeral | Required | Purpose |
+| --- | --- | --- | --- | --- | --- |
+| Personal info: Email address | Yes | No | No | Optional (only for alerts) | App functionality; Fraud prevention, security, and compliance (confirmation emails per address are counted under a keyed hash for about two days, so the form can't flood an inbox) |
+| App activity: Other actions (the offices, group size and pace chosen for alerts) | Yes | No | No | Optional | App functionality |
+| Device or other IDs (the network address every request comes from) | Yes | No | No | Required | Fraud prevention, security, and compliance |
+
+The network address is declared because the server uses it:
+- the rate limits count requests under a keyed hash of it, not the address, for about two hours;
+- the web server's error log may record the address itself when a request fails, and keeps it 14 days.
+
+Play's guide asks for data to be declared by what it is used for, and pseudonymous data can still count.
+
+Not declared, and why:
+- **Service providers aren't sharing.** Huawei Cloud runs the server, and Cloudflare R2 holds the
+  encrypted backups. Play's guide exempts service providers acting on the developer's behalf.
+- **Anonymized counts.** The daily visitor count keeps an estimate from salted hashes, and the salt is
+  deleted within 25 hours. Views are counted per office, never per person. Play exempts fully
+  anonymized data.
+- **The saved office list stays on the phone** (browser storage), so it isn't collected.
+- **Location.** No location is inferred from the network address.
+- **Failed lookups.** When passport.gov.ph fails to answer, the log (kept 14 days) notes the office, day
+  and group size asked about, with nothing about who asked, so it isn't linked to anyone.
+
+## A policy to be ready for
+
+Google Play's policy on government information bars apps that "falsely claim affiliation with a
+government entity or offer, or facilitate government services without proper authorization"
+([requirements](https://support.google.com/googleplay/android-developer/answer/9514050)).
+
+If a reviewer reads this app as facilitating the DFA's service, the answer is what it does and doesn't
+do:
+- It only reads the public calendar anyone can open.
+- It never selects, holds or books a slot.
+- It sends people to passport.gov.ph to book.
+- It says it is unofficial on every page, in the listing and in the app's description.
+
+[`docs/legal/README.md`](../../docs/legal/README.md) has the longer case.

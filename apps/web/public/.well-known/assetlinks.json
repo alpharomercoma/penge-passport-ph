@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.alphaexperiments.pengepassportph",
+      "sha256_cert_fingerprints": [
+        "C1:60:19:C4:8C:EE:B7:C9:F1:50:AA:2D:B3:D1:0B:63:2D:C5:58:A4:E9:76:87:EC:5C:5F:70:C3:A0:0D:53:FE"
+      ]
+    }
+  }
+]

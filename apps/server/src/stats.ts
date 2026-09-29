@@ -2,7 +2,8 @@
 // and no visitor's address kept. A visitor is a hash of their network address
 // and browser (user agent) with a random salt for the Manila day, added to a
 // HyperLogLog, which keeps an estimate of how many distinct hashes it was
-// given, not the hashes. The salt is deleted within a day; after that nobody,
+// given, not the hashes. The salt is deleted within 25 hours, its copy in
+// Valkey's log included (deploy/valkey-compact.sh); after that nobody,
 // us included, can tell whether some address visited.
 //
 // Once a day, after REPORT_HOUR in Manila, the checker writes yesterday's
@@ -19,8 +20,12 @@ import { dailyStatsEmail } from './templates.ts';
 
 /** How long a day's numbers stay in Redis: long enough for a late report. */
 export const STATS_KEEP_SECONDS = 40 * 24 * 3600;
-/** A salt outlives the end of its day, but never by a whole day. */
-export const SALT_SECONDS = 25 * 3600;
+/**
+ * A salt lasts at least to the end of its day, and never a whole day beyond it.
+ * Valkey's log keeps it up to an hour more, until the hourly rewrite: 25 hours
+ * in all, as the privacy page says.
+ */
+export const SALT_SECONDS = 24 * 3600;
 /** After this hour, Manila time, the checker reports the day before. */
 export const REPORT_HOUR = 7;
 
@@ -64,7 +69,6 @@ export interface Stats {
  */
 export function createStats(kv: Kv, log: Logger, now: () => number = Date.now): Stats {
   const pending = new Set<Promise<void>>();
-  const salts = new Map<string, Promise<string>>();
   let sinceMarked = false;
 
   const later = (work: () => Promise<unknown>) => {
@@ -83,21 +87,13 @@ export function createStats(kv: Kv, log: Logger, now: () => number = Date.now): 
     sinceMarked = true;
   };
 
-  // Only the current day's salt is ever needed, so only it is kept in memory.
-  const saltFor = (day: string) => {
-    let salt = salts.get(day);
-    if (!salt) {
-      salt = (async () => {
-        await kv.set(K.statSalt(day), randomBytes(32).toString('base64url'), { nx: true, ttlSeconds: SALT_SECONDS });
-        const stored = await kv.get(K.statSalt(day));
-        if (!stored) throw new Error('the day has no salt');
-        return stored;
-      })();
-      salt.catch(() => salts.delete(day));
-      salts.clear();
-      salts.set(day, salt);
-    }
-    return salt;
+  // Read from Redis on every visit and never kept in memory: when Redis expires
+  // the salt, no copy of it is left anywhere.
+  const saltFor = async (day: string) => {
+    await kv.set(K.statSalt(day), randomBytes(32).toString('base64url'), { nx: true, ttlSeconds: SALT_SECONDS });
+    const stored = await kv.get(K.statSalt(day));
+    if (!stored) throw new Error('the day has no salt');
+    return stored;
   };
 
   return {

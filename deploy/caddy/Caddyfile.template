@@ -46,6 +46,14 @@ __PATH_ALIASES__
 		}
 	}
 
+	# Digital Asset Links, at the domain's root as Android requires: the certificates
+	# allowed to show the site full screen in the Android app (docs/android.md). The
+	# file ships with the website, from apps/web/public/.well-known.
+	handle /.well-known/assetlinks.json {
+		root * /opt/penge/current/web
+		file_server
+	}
+
 	handle /robots.txt {
 		respond <<ROBOTS
 			User-agent: *

@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { serviceWorker } from './sw-plugin.ts';
 
 // The path the site is served under, e.g. /pengepassportph/ at alphaexperiments.com.
 // deploy/release.sh sets it from deploy/site.conf; it must end with a slash.
@@ -7,7 +8,7 @@ const base = `/${(process.env.BASE_PATH ?? '').replace(/^\/+|\/+$/g, '')}/`.repl
 
 export default defineConfig({
   base,
-  plugins: [react()],
+  plugins: [react(), serviceWorker()],
   build: {
     // No source maps in production, and nothing inlined: the Content-Security-Policy
     // Caddy sends allows scripts and styles from this origin only.

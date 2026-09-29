@@ -192,7 +192,8 @@ date opens where you can get to.
 | `packages/python/` | The Python port (PyPI) |
 | `packages/contracts/` | Validation and shapes shared by the website and the server |
 | `apps/server/` | The checker, the mailer and the website's API |
-| `apps/web/` | The website (React) |
+| `apps/web/` | The website (React), installable as an app |
+| `android/` | The Android app for Google Play: the website in a Trusted Web Activity ([how](docs/android.md)) |
 | `deploy/` | Provisioning, releases, mail setup and the [runbook](deploy/README.md) |
 
 ## Rate limits and responsible use
@@ -262,6 +263,7 @@ The canary has its own `PENGE_PASSPORT_PH_*` variables, listed in [docs/canary.m
 - [Alert timing](docs/alert-timing.md): when alerts go out, how time is measured, and what the reviews found.
 - [Canary runbook](docs/canary.md): what each check means and how to respond when one fails.
 - [Website runbook](deploy/README.md): how the alerts website runs, deploys, sends mail and stores scans.
+- [Android app](docs/android.md): building, signing and releasing the Google Play app.
 - [Law and responsible use](docs/legal/README.md): the DFA's rules, Philippine law, and why the limits are what they are.
 - [Contributing](CONTRIBUTING.md): layout, development, fuzzing, naming and the ground rules.
 - [Changelog](packages/penge-passport-ph/CHANGELOG.md)

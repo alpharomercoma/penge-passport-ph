@@ -1,0 +1,13 @@
+[Unit]
+Description=Rewrite Valkey's append-only log, so deleted and expired data leaves it
+After=valkey-server.service
+Requisite=valkey-server.service
+
+[Service]
+Type=oneshot
+# The script waits up to 10 minutes for a running rewrite, then for its own.
+TimeoutStartSec=25min
+ExecStart=/usr/local/bin/penge-valkey-compact
+# A failed rewrite is tried again in minutes, not at the next hour.
+Restart=on-failure
+RestartSec=2min
