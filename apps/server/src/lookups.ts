@@ -12,6 +12,8 @@ import type { Logger } from './log.ts';
 export interface LookupUpstream {
   availability(query: { siteId: number; applicants: number }): Promise<Availability>;
   timeSlots(query: { siteId: number; date: string; applicants: number }): Promise<TimeSlot[]>;
+  /** Opens a DFA session if the current one would lapse within `withinMs`; true when it did. */
+  warmSession(opts: { withinMs: number }): Promise<boolean>;
 }
 
 /**
@@ -30,6 +32,11 @@ const KEEP_SECONDS = 3600;
  */
 export const SCAN_RECENT_SECONDS = 18 * 60;
 
+/** A DFA session is opened ahead of a tap once the current one would lapse within this. */
+export const WARM_WITHIN_MS = 2 * 60_000;
+/** After a session could not be opened ahead of time, the next try waits this long. */
+export const WARM_RETRY_MS = 5 * 60_000;
+
 export class LookupUnavailable extends Error {
   override name = 'LookupUnavailable';
 }
@@ -43,6 +50,8 @@ export function createLookups(deps: { kv: Kv; upstream: LookupUpstream; log: Log
   const { kv, upstream, log } = deps;
   const now = deps.now ?? Date.now;
   const inflight = new Map<string, Promise<unknown>>();
+  let warming: Promise<void> | null = null;
+  let warmFailedAt = -Infinity;
 
   async function cached<T>(key: string, fresh: number, fetch: () => Promise<T>): Promise<T> {
     const raw = await kv.get(key);
@@ -82,6 +91,27 @@ export function createLookups(deps: { kv: Kv; upstream: LookupUpstream; log: Log
   };
 
   return {
+    /**
+     * Opens a DFA session ahead of a visitor's tap when the current one would
+     * lapse within WARM_WITHIN_MS, so the tap costs one request, not a session
+     * and then, 3 seconds later, the request. Called as pages load and refresh
+     * and never waited for: while nobody is on the site, nothing is asked.
+     */
+    warm(): Promise<void> {
+      if (warming) return warming;
+      if (now() - warmFailedAt < WARM_RETRY_MS) return Promise.resolve();
+      const job = upstream.warmSession({ withinMs: WARM_WITHIN_MS }).then(
+        () => undefined,
+        (err: unknown) => {
+          warmFailedAt = now();
+          log.warn('could not open a DFA session ahead of time', { err: err as Error });
+        },
+      );
+      warming = job.finally(() => {
+        warming = null;
+      });
+      return warming;
+    },
     /** A stored answer, however old, without asking the DFA; null if there is none. */
     peekDates: async (siteId: number, applicants: number): Promise<OfficeDates | null> => {
       const raw = await kv.get(lookupKey.dates(siteId, applicants));

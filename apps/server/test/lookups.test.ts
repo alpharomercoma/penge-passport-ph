@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createApi } from '../src/api.ts';
 import { K } from '../src/keys.ts';
 import { silentLog } from '../src/log.ts';
-import { createLookups, type LookupUpstream, SCAN_RECENT_SECONDS } from '../src/lookups.ts';
+import { createLookups, type LookupUpstream, SCAN_RECENT_SECONDS, WARM_RETRY_MS, WARM_WITHIN_MS } from '../src/lookups.ts';
 import { clock, FakeMailer, keys, MemoryKv } from './helpers.ts';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 300);
@@ -22,6 +22,17 @@ const STATUS = {
 
 class FakeUpstream implements LookupUpstream {
   calls: string[] = [];
+  /** Session warm-ups asked for, and whether the next ones fail. */
+  warms = 0;
+  warmFails = false;
+  warmGate: Promise<void> | null = null;
+  async warmSession({ withinMs }: { withinMs: number }): Promise<boolean> {
+    this.warms++;
+    expect(withinMs).toBe(WARM_WITHIN_MS);
+    if (this.warmGate) await this.warmGate;
+    if (this.warmFails) throw new Error('site down');
+    return true;
+  }
   fail = false;
   /** The rate limiter refuses, as when the hourly budget is spent. */
   limited = false;
@@ -55,12 +66,53 @@ async function setup() {
   const lookups = createLookups({ kv, upstream, log: silentLog, now: t.now });
   let ip = '203.0.113.5';
   const app = createApi({ kv, keys, mailer: new FakeMailer(), log: silentLog, publicBaseUrl: 'https://x.example', now: t.now, lookups, clientIp: () => ip });
-  const get = async (path: string) => {
-    const res = await app.request(path);
+  const get = async (path: string, userAgent?: string) => {
+    const res = await app.request(path, { headers: userAgent ? { 'user-agent': userAgent } : {} });
     return { status: res.status, body: (await res.json()) as Record<string, unknown> };
   };
-  return { t, kv, upstream, app, get, setIp: (next: string) => (ip = next) };
+  return { t, kv, upstream, app, lookups, get, setIp: (next: string) => (ip = next) };
 }
+
+const PHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+
+describe('a DFA session ready before the tap', () => {
+  it('is warmed when a person loads the page or opens an office, never for scripts', async () => {
+    const s = await setup();
+    const idle = () => new Promise((resolve) => setTimeout(resolve, 0)); // the warm-ups nobody waits for finish
+    await s.get('/api/status', PHONE);
+    await idle();
+    expect(s.upstream.warms).toBe(1);
+    await s.get('/api/offices/486/dates', PHONE);
+    await idle();
+    expect(s.upstream.warms).toBe(2);
+    await s.get('/api/status', 'curl/8.7.1');
+    await s.get('/api/offices/486/dates');
+    await idle();
+    expect(s.upstream.warms).toBe(2);
+    expect(s.upstream.calls).toEqual([]); // warming asks nothing else of the DFA
+  });
+
+  it('runs one warm-up at a time, and rests after one fails', async () => {
+    const s = await setup();
+    let open!: () => void;
+    s.upstream.warmGate = new Promise<void>((resolve) => (open = resolve));
+    const a = s.lookups.warm();
+    const b = s.lookups.warm();
+    expect(s.upstream.warms).toBe(1);
+    open();
+    await Promise.all([a, b]);
+
+    s.upstream.warmGate = null;
+    s.upstream.warmFails = true;
+    await expect(s.lookups.warm()).resolves.toBeUndefined(); // a failure is logged, never thrown
+    await s.lookups.warm();
+    expect(s.upstream.warms).toBe(2);
+    s.t.advance(WARM_RETRY_MS);
+    s.upstream.warmFails = false;
+    await s.lookups.warm();
+    expect(s.upstream.warms).toBe(3);
+  });
+});
 
 describe('office dates', () => {
   it('answers one person from a recent scan, without asking the DFA again', async () => {

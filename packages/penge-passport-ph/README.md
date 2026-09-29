@@ -179,7 +179,8 @@ date opens where you can get to.
   announced once; at most 3 alerts a day.
 - **Private.** Addresses are stored encrypted (AES-256-GCM), confirmed by double opt-in, and deleted on
   unsubscribe (daily backups, also encrypted, drop them within 14 days); every alert has a one-click
-  unsubscribe (RFC 8058). No trackers. [Where an address goes](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#where-a-subscribers-address-goes)
+  unsubscribe (RFC 8058). No trackers: visitors are counted on the server, without cookies, scripts or
+  stored addresses ([how](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#daily-numbers)). [Where an address goes](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#where-a-subscribers-address-goes)
   lists every place it exists, including the two where it is not encrypted.
 - **Self-hosted, free to run.** One small server: Caddy, Node.js, Valkey (Redis), and its own Postfix
   with DKIM.

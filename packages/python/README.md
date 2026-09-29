@@ -83,6 +83,7 @@ for event in penge.watch([486, 10], interval=600):
 | `find_sites(text, region_id=1, country_id=1)` | Sites whose name or description contains `text` |
 | `availability(site_id, *, applicants=1, from_date=None, to_date=None)` | `Availability`: `earliest`, `available_dates`, and every published `days` entry |
 | `time_slots(site_id, date, *, applicants=1)` | `list[TimeSlot]` for one date |
+| `warm_session(*, within=120)` | Opens a session now if there is none or it would lapse within `within` seconds, so the next call does not wait for one: one request, or none. `True` when it opened one |
 | `watch(site_ids, *, interval=300, applicants=None, stop=None)` | Iterator of `AvailabilityEvent` and `ErrorEvent`; set the `threading.Event` `stop`, or break, to end it |
 | `stats()` | The rate limiter's state: requests in the last hour, failures, pauses in seconds |
 

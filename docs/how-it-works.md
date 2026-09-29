@@ -45,13 +45,15 @@ No `ASP.NET_SessionId`, terms POST or site step is needed to read availability. 
 server's own "today" and last bookable date, which the package uses as the default date range.
 
 The site logs idle visitors out after 10 minutes, so the package refreshes its session after 9 idle
-minutes, and at the latest after an hour.
+minutes, and at the latest after an hour. Opening one costs a request, and the next request waits out the
+spacing after it, so `warmSession()` (`warm_session()` in Python) can open one ahead of time: the website
+does this while someone is on it, so a tap on a day costs one request.
 
 ## Quirks the package handles
 
 | The site does | The package does |
 |---|---|
-| Answers a missing or stale token with an **empty HTTP 200**, not an error | Refreshes the session once and retries; a second empty answer is a `SessionError` and counts as a failure |
+| Answers a missing or stale token with an **empty HTTP 200**, not an error | Refreshes the session once and retries; a second empty answer is a `SessionError` and counts as a failure. A day's hours can be empty for real (below), so there an empty answer is retried only when the token has not worked in the last 2 minutes |
 | Answers an unknown `siteId` with **HTTP 500** | Treats it as a failure for backoff; the error message suggests `sites()` |
 | Sends dates as epoch milliseconds at **UTC midnight** of the calendar date | Reads them as UTC dates, exactly as the site's own script does |
 | Publishes only working days inside its release window | Reports only published days; an absent date is "not published", not "booked" |

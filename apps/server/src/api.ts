@@ -109,6 +109,10 @@ export function createApi(deps: ApiDeps) {
 
   // The day's numbers (stats.ts), written after the answer and never waited for.
   const seen = (c: Context, abroad = false) => deps.stats?.visit(ipOf(c), c.req.header('user-agent'), { abroad });
+  // A person on the site may tap a day next: have a DFA session ready (lookups.ts), without waiting for it.
+  const warm = (c: Context) => {
+    if (isPerson(c.req.header('user-agent'))) void deps.lookups?.warm();
+  };
   const byPerson = (c: Context, name: Count) => {
     if (isPerson(c.req.header('user-agent'))) deps.stats?.count(name);
   };
@@ -138,6 +142,7 @@ export function createApi(deps: ApiDeps) {
   app.get('/api/status', async (c) => {
     if (await limited(c, API_LIMITS.readPerIp)) return fail(c, 429, TOO_MANY);
     seen(c);
+    warm(c);
     const raw = await kv.get(K.status);
     const stored = raw ? (JSON.parse(raw) as Omit<StatusResponse, 'mailLive'>) : null;
     return c.json<StatusResponse>({
@@ -190,6 +195,7 @@ export function createApi(deps: ApiDeps) {
     const applicants = peopleFrom(c.req.query('applicants'));
     if (applicants === null) return fail(c, 400, `Choose from 1 to ${LIMITS.maxApplicants} people.`);
     seen(c);
+    warm(c);
     if (applicants === 1) deps.stats?.officeView(office.site.id, c.req.header('user-agent'));
     else byPerson(c, 'groupChecks');
     // For one person the scans have the answer. While they keep up, the last

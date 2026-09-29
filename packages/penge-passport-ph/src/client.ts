@@ -24,6 +24,7 @@ import {
   SESSION_IDLE_MS,
   SESSION_MAX_AGE_MS,
   type Session,
+  TOKEN_TRUSTED_MS,
 } from './session.js';
 import type {
   Availability,
@@ -251,7 +252,7 @@ export class PengePassportPH {
       `timeslots:${query.siteId}:${query.date}:${applicants}`,
       this.availabilityTtlMs,
       // An empty body is a legitimate "no slots published yet" answer here,
-      // so only a reused session gets a second chance.
+      // so only a reused session that has not proved good lately gets a second chance.
       (signal) =>
         this.postWithToken(
           ENDPOINTS.timeSlots,
@@ -331,6 +332,24 @@ export class PengePassportPH {
     return this.gate.stats();
   }
 
+  /**
+   * Opens a session now if there is none, or the current one would lapse
+   * within `withinMs` (default 2 minutes), so the next call does not wait for
+   * one. One GET through the rate limiter, or nothing. True when it opened one.
+   */
+  async warmSession(opts: { withinMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+    const withinMs = opts.withinMs ?? 2 * 60 * 1000;
+    if (!Number.isFinite(withinMs) || withinMs < 0) throw new RangeError('withinMs must be 0 or more');
+    if (isFresh(this.session, Date.now() + withinMs)) return false;
+    opts.signal?.throwIfAborted();
+    const opening = !this.pendingSession;
+    this.pendingSession ??= this.bootstrap().finally(() => {
+      this.pendingSession = null;
+    });
+    await raceAbort(this.pendingSession, opts.signal);
+    return opening;
+  }
+
   private async postWithToken<T>(
     path: string,
     form: Form,
@@ -344,10 +363,15 @@ export class PengePassportPH {
       const result = await this.send('POST', path, { form, token: session.token, signal }, (text) =>
         text.trim() === '' ? EMPTY : parse(text),
       );
-      session.lastUsedAt = Date.now();
-      if (result !== EMPTY) return result;
+      const now = Date.now();
+      session.lastUsedAt = now;
+      if (result !== EMPTY) {
+        session.confirmedAt = now;
+        return result;
+      }
       // The server answers a rejected anti-forgery token with an empty 200.
-      if (attempt === 0 && (emptyMeansStaleSession || reused)) {
+      const doubtful = reused && now - session.confirmedAt >= TOKEN_TRUSTED_MS;
+      if (attempt === 0 && (emptyMeansStaleSession || doubtful)) {
         this.invalidateSession();
         continue;
       }
@@ -390,7 +414,7 @@ export class PengePassportPH {
       },
     );
     const now = Date.now();
-    this.session = { ...page, createdAt: now, lastUsedAt: now };
+    this.session = { ...page, createdAt: now, lastUsedAt: now, confirmedAt: now };
     return this.session;
   }
 

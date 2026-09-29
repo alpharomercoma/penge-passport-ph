@@ -4,6 +4,20 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `warmSession()` (`warm_session()` in Python) opens a session ahead of time when there is none or it would
+  lapse within 2 minutes, so the next call does not wait for one. One request through the rate limiter, or
+  none.
+
+### Changed
+
+- An empty answer for a day's hours from a token that worked in the last 2 minutes is taken as "no schedule
+  yet" and returned as `[]`, instead of opening a new session and asking again: that cost two more requests
+  and two waits for nothing. An older token still gets the second chance.
+
 ## [0.1.1] - 2026-09-27
 
 ### Changed
@@ -37,5 +51,6 @@ First release, on npm and PyPI.
 - A canary workflow that scrapes one real record (through both packages) and walks the booking UI
   every 6 hours, and opens an issue when the site changes.
 
+[Unreleased]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpharomercoma/penge-passport-ph/releases/tag/v0.1.0

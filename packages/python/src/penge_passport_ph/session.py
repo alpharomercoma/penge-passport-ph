@@ -14,6 +14,9 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 #: The site logs idle visitors out after 10 minutes; refresh a little before that.
 SESSION_IDLE_S = 9 * 60
 SESSION_MAX_AGE_S = 60 * 60
+#: A token that proved good this recently is not doubted: an empty answer about
+#: a day's hours then means no hours are published, not a rejected token.
+TOKEN_TRUSTED_S = 2 * 60
 
 
 class CookieJar:
@@ -68,6 +71,8 @@ class Session:
     max_date: str | None
     created_at: float
     last_used_at: float
+    #: When the token last proved good: when it was issued, or last got a non-empty answer.
+    confirmed_at: float
 
     def is_fresh(self, now: float) -> bool:
         return (

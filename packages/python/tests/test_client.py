@@ -274,6 +274,65 @@ def test_reads_time_slots_for_a_date(make_client: MakeClient, clock: FakeClock) 
     }
 
 
+def test_takes_an_empty_day_at_its_word_while_the_token_has_just_proved_good(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    # No hours published that day: the real site answers an empty 200, as for a rejected token.
+    site = FakeSite(overrides={"/appointment/timeslot": lambda c: html_response("")})
+    client = make_client(site)
+    client.availability(486)
+    clock.advance(90)
+    client.availability(486, applicants=2)  # the token works again
+    clock.advance(90)  # issued over 3 minutes ago, last worked 1.5 minutes ago
+    assert client.time_slots(486, "2026-10-11") == []
+    assert site.paths() == [
+        "/appointment",
+        "/appointment/timeslot/available",
+        "/appointment/timeslot/available",
+        "/appointment/timeslot",
+    ]
+
+
+def test_still_recovers_from_a_rejected_token_once_it_has_not_proved_good_for_a_while(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    site = FakeSite()
+    client = make_client(site)
+    client.availability(486)
+    clock.advance(3 * 60)  # fresh (under 9 minutes idle) but not recently proved
+    site.expire_token()
+    assert any(s.available for s in client.time_slots(486, "2026-10-05"))
+    assert site.paths() == [
+        "/appointment",
+        "/appointment/timeslot/available",
+        "/appointment/timeslot",
+        "/appointment",
+        "/appointment/timeslot",
+    ]
+
+
+def test_warms_a_session_ahead_of_time_only_when_one_is_due(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    site = FakeSite()
+    client = make_client(site)
+    assert client.warm_session() is True
+    assert client.warm_session() is False
+    assert site.paths() == ["/appointment"]
+
+    # 7 minutes 20 s idle: fresh still, but it would lapse within 2 minutes, so a new one is opened.
+    clock.advance(440)
+    assert client.warm_session() is True
+    assert site.paths().count("/appointment") == 2
+
+    # The next call finds it ready: one request, no bootstrap.
+    client.time_slots(486, "2026-10-05")
+    assert site.paths()[-1] == "/appointment/timeslot"
+    assert site.paths().count("/appointment") == 2
+    with pytest.raises(ValueError):
+        client.warm_session(within=-1)
+
+
 def test_validates_input_before_touching_the_network(
     make_client: MakeClient, clock: FakeClock
 ) -> None:

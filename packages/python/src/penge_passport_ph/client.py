@@ -48,7 +48,7 @@ from .rate_limit import (
     parse_retry_after,
     resolve_limits,
 )
-from .session import SESSION_IDLE_S, SESSION_MAX_AGE_S, CookieJar, Session
+from .session import SESSION_IDLE_S, SESSION_MAX_AGE_S, TOKEN_TRUSTED_S, CookieJar, Session
 
 T = TypeVar("T")
 
@@ -360,8 +360,8 @@ class PengePassportPH:
         value, _ = self._cache.get(
             f"timeslots:{site_id}:{date}:{applicants}",
             self._availability_ttl,
-            # An empty body is a legitimate "no slots published yet" answer
-            # here, so only a reused session gets a second chance.
+            # An empty body is a legitimate "no slots published yet" answer here,
+            # so only a reused session that has not proved good lately gets a second chance.
             lambda: self._post_with_token(
                 path,
                 {"preferredDate": date, "siteId": site_id, "requiredSlots": applicants},
@@ -471,11 +471,14 @@ class PengePassportPH:
                 form=form,
                 token=session.token,
             )
-            session.last_used_at = _clock.now()
+            now = _clock.now()
+            session.last_used_at = now
             if not isinstance(result, _Empty):
+                session.confirmed_at = now
                 return result
             # The site answers a rejected anti-forgery token with an empty 200.
-            if attempt == 0 and (empty_means_stale_session or reused):
+            doubtful = reused and now - session.confirmed_at >= TOKEN_TRUSTED_S
+            if attempt == 0 and (empty_means_stale_session or doubtful):
                 self._invalidate_session()
                 attempt += 1
                 continue
@@ -484,26 +487,41 @@ class PengePassportPH:
                 raise SessionError(f"{path} returned an empty body even with a new session")
             return parse("")
 
+    def warm_session(self, *, within: float = 120) -> bool:
+        """Open a session now if there is none, or the current one would lapse
+        within ``within`` seconds (default 2 minutes), so the next call does not
+        wait for one. One GET through the rate limiter, or nothing. True when it
+        opened one."""
+        if not math.isfinite(within) or within < 0:
+            raise ValueError(f"within must be 0 or more seconds (got {within})")
+        with self._session_lock:
+            if self._session is not None and self._session.is_fresh(_clock.now() + within):
+                return False
+            self._bootstrap()
+            return True
+
     def _ensure_session(self) -> Session:
         """One bootstrap at a time, shared by concurrent callers."""
         with self._session_lock:
             if self._session is not None and self._session.is_fresh(_clock.now()):
                 return self._session
-            self._jar.clear()
-            path = ENDPOINTS["bootstrap"]
+            return self._bootstrap()
 
-            def parse(text: str) -> Any:
-                page = parse_bootstrap(text)
-                if page is None:
-                    raise SessionError(
-                        f"No anti-forgery token on {path}; the site may have changed"
-                    )
-                return page
+    def _bootstrap(self) -> Session:
+        """A new session. Called with the session lock held."""
+        self._jar.clear()
+        path = ENDPOINTS["bootstrap"]
 
-            page = self._send("GET", path, parse, accept="text/html")
-            now = _clock.now()
-            self._session = Session(page.token, page.server_today, page.max_date, now, now)
-            return self._session
+        def parse(text: str) -> Any:
+            page = parse_bootstrap(text)
+            if page is None:
+                raise SessionError(f"No anti-forgery token on {path}; the site may have changed")
+            return page
+
+        page = self._send("GET", path, parse, accept="text/html")
+        now = _clock.now()
+        self._session = Session(page.token, page.server_today, page.max_date, now, now, now)
+        return self._session
 
     def _invalidate_session(self) -> None:
         with self._session_lock:

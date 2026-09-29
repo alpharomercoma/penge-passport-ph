@@ -260,6 +260,61 @@ describe('PengePassportPH', () => {
     });
   });
 
+  // These settle for 5 s, not the default 2 minutes: the timing is the point.
+  it('takes an empty day at its word while the token has just proved good', async () => {
+    // No hours published that day: the real site answers an empty 200, as it does for a rejected token.
+    const site = fakeSite({ '/appointment/timeslot': () => new Response('') });
+    const c = client(site);
+    await settle(c.availability({ siteId: 486 }), 5_000);
+    await vi.advanceTimersByTimeAsync(90_000);
+    await settle(c.availability({ siteId: 486, applicants: 2 }), 5_000); // the token works again
+    await vi.advanceTimersByTimeAsync(90_000); // issued over 3 minutes ago, last worked 1.5 minutes ago
+    await expect(settle(c.timeSlots({ siteId: 486, date: '2026-10-11' }), 5_000)).resolves.toEqual([]);
+    expect(site.calls.map((x) => x.path)).toEqual([
+      '/appointment',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot',
+    ]);
+  });
+
+  it('still recovers from a rejected token once it has not proved good for a while', async () => {
+    const site = fakeSite();
+    const c = client(site);
+    await settle(c.availability({ siteId: 486 }), 5_000);
+    await vi.advanceTimersByTimeAsync(3 * 60_000); // fresh (under 9 minutes idle) but not recently proved
+    site.expireToken();
+    const slots = await settle(c.timeSlots({ siteId: 486, date: '2026-10-05' }), 10_000);
+    expect(slots.some((s) => s.available)).toBe(true);
+    expect(site.calls.map((x) => x.path)).toEqual([
+      '/appointment',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot',
+      '/appointment',
+      '/appointment/timeslot',
+    ]);
+  });
+
+  it('warms a session ahead of time, only when one is due', async () => {
+    const site = fakeSite();
+    const c = client(site);
+    await expect(settle(c.warmSession(), 5_000)).resolves.toBe(true);
+    await expect(settle(c.warmSession(), 5_000)).resolves.toBe(false);
+    expect(site.calls.map((x) => x.path)).toEqual(['/appointment']);
+
+    // 7 minutes 20 s idle: fresh still, but it would lapse within 2 minutes, so a new one is opened.
+    await vi.advanceTimersByTimeAsync(430_000);
+    const both = await settle(Promise.all([c.warmSession(), c.warmSession()]), 5_000);
+    expect(both.sort()).toEqual([false, true]);
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(2);
+
+    // The next call finds it ready: one request, no bootstrap.
+    await settle(c.timeSlots({ siteId: 486, date: '2026-10-05' }), 5_000);
+    expect(site.calls.at(-1)!.path).toBe('/appointment/timeslot');
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(2);
+    await expect(c.warmSession({ withinMs: -1 })).rejects.toThrow(RangeError);
+  });
+
   it('validates input before touching the network', async () => {
     const site = fakeSite();
     const c = client(site);

@@ -61,11 +61,18 @@ export interface Session {
   maxDate: string | null;
   createdAt: number;
   lastUsedAt: number;
+  /** When the token last proved good: when it was issued, or last got a non-empty answer. */
+  confirmedAt: number;
 }
 
 /** The site logs idle visitors out after 10 minutes; refresh a little before that. */
 export const SESSION_IDLE_MS = 9 * 60 * 1000;
 export const SESSION_MAX_AGE_MS = 60 * 60 * 1000;
+/**
+ * A token that proved good this recently is not doubted: an empty answer about
+ * a day's hours then means no hours are published, not a rejected token.
+ */
+export const TOKEN_TRUSTED_MS = 2 * 60 * 1000;
 
 export function isFresh(session: Session | null, now = Date.now()): session is Session {
   return (
