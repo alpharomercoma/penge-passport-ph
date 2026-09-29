@@ -4,6 +4,7 @@ import { gunzipSync } from 'node:zlib';
 import { exportSubscribers, importSubscribers } from '../src/backup.ts';
 import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, PACE_SPACING_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob } from '../src/checker.ts';
 import type { Pace } from '@penge/contracts';
+import { parseStamp } from '../src/clock.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
 import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
@@ -675,9 +676,9 @@ describe('pace', () => {
     expect(PACE_SPACING_MS.asap).toBeLessThan(15 * 60_000); // checks start every 15 minutes
 
     // More in the same run (the posts abroad come minutes after): it joins the next email.
+    w.t.advance(-10 * 60_000); // back to the moment of the last email
     const job = { id: 'x', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
-    w.t.advance(-10 * 60_000); // back to the moment of the last email
     expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
   });
 
@@ -740,7 +741,8 @@ describe('pace', () => {
     };
     w.mailer.failNext = 1; // refused: nothing went out
     await w.run();
-    expect(atSend[0]).toEqual({ last: String(w.t.now() - 10 * 60_000), held: null }); // claimed first, like a popped outbox entry
+    expect(parseStamp(atSend[0]!.last)?.wall).toBe(w.t.now() - 10 * 60_000); // claimed first, like a popped outbox entry
+    expect(atSend[0]!.held).toBeNull();
     expect(await w.kv.get(K.lastAlert(id))).toBe(first); // undone
     expect(await w.kv.get(K.held(id))).not.toBeNull();
     await w.run(); // tried again
@@ -929,6 +931,297 @@ describe('pace', () => {
       { seed: 20260929, numRuns: RUNS },
     );
   }, 10_000 + RUNS * 10);
+});
+
+describe('clock steps', () => {
+  const datesIn = (text: string) => [...text.matchAll(/ {2}- (\w{3} \d+ \w{3} \d{4})/g)].map((m) => m[1]);
+
+  /** Real time moves on its own; the wall clock can be stepped away from it, and Redis expires keys by the wall clock. */
+  async function stepped(opts: { noUptime?: boolean } = {}) {
+    const t = clock();
+    let step = 0;
+    let boots = 1;
+    let boot = 'boot-1';
+    let bootAt = t.now() - 3600_000;
+    let uptimeFails = false;
+    const wall = () => t.now() + step;
+    const kv = new MemoryKv(wall);
+    const upstream = new FakeUpstream();
+    const mailer = new FakeMailer();
+    const { log } = recordingLog();
+    const deps: CheckDeps = {
+      kv, upstream, sink: new MemorySink(), mailer, keys, log,
+      publicBaseUrl: 'https://penge.example', mailDailyLimit: 300, alertsPerSubscriberPerDay: 96,
+      client: 'penge-passport-ph@test', now: wall, uptime: () => (opts.noUptime || uptimeFails ? null : { up: t.now() - bootAt, boot }),
+    };
+    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, wall());
+    await confirm(kv, token, wall());
+    let n = 0;
+    const run = async () => {
+      await runCheck({ ...deps, runId: `run${++n}` });
+      t.advance(10 * 60_000);
+    };
+    return {
+      upstream, mailer, run, kv, wall, id: (await kv.sMembers(K.allSubscribers))[0]!,
+      stepWall: (ms: number) => (step += ms),
+      reboot: () => {
+        boot = `boot-${++boots}`; // every boot has its own id
+        bootAt = t.now();
+      },
+      /** The data moves to another machine, which has already been up for `upMs`; returns how to move it back. */
+      moveTo: (upMs: number) => {
+        const back = { boot, bootAt };
+        boot = `machine-${++boots}`;
+        bootAt = t.now() - upMs;
+        return () => {
+          boot = back.boot; // the old machine, still on the same boot
+          bootAt = back.bootAt;
+        };
+      },
+      uptimeFails: (fails: boolean) => (uptimeFails = fails),
+      uptimeNow: () => ({ up: t.now() - bootAt, boot }),
+    };
+  }
+
+  it('does not let a clock stepped forward send the next email early', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T
+    w.stepWall(2 * 3600_000); // NTP, or a VM snapshot, jumps the clock two hours ahead
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // T + 10 minutes of real time
+    expect(w.mailer.sent).toHaveLength(1);
+    for (let i = 0; i < 5; i++) await w.run(); // T + 60
+    expect(w.mailer.sent).toHaveLength(2);
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026']);
+  });
+
+  it('does not let a clock stepped back hold the next email up', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T
+    w.stepWall(-24 * 3600_000); // a day back
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1); // not early, either
+    for (let i = 0; i < 5; i++) await w.run(); // T + 60 of real time
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('keeps a waiting date its 3 hours through a clock step', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // 6 Oct waits
+    w.stepWall(4 * 3600_000); // past its 3 hours by the wall clock, and past the old Redis expiry
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(2);
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026']);
+  });
+
+  it('counts the gap from a reboot, whichever way the clock came back', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T
+    w.reboot();
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // T + 10 by the wall clock: too soon
+    expect(w.mailer.sent).toHaveLength(1);
+    w.reboot(); // again, and this time the clock comes back a day behind
+    w.stepWall(-24 * 3600_000);
+    await w.run(); // how long it has been is unknown: the hour starts again now, not early and not a day late
+    expect(w.mailer.sent).toHaveLength(1);
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+    await w.run(); // an hour after that check
+    expect(w.mailer.sent).toHaveLength(2);
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026']); // the waiting date survived it
+  });
+
+  it('gives a date whose age a reboot made unknowable 3 hours from then, no more', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // 6 Oct waits
+    w.upstream.open.set('486', ['2026-10-05']); // and closes, for good
+    w.reboot();
+    w.stepWall(-24 * 3600_000);
+    for (let i = 0; i < 19; i++) await w.run(); // checks from 0 to 3 hours after the reboot
+    expect(await w.kv.get(K.held(w.id))).not.toBeNull();
+    await w.run(); // 3 hours 10 minutes
+    expect(await w.kv.get(K.held(w.id))).toBeNull();
+  });
+
+  it('does not announce a date again within 3 hours because the clock jumped', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // announced, at T
+    w.upstream.open.set('486', []);
+    await w.run(); // it closes
+    w.stepWall(4 * 3600_000); // past its 3-hour mark by the wall clock (and Redis's expiry)
+    w.upstream.open.set('486', ['2026-10-05']);
+    for (let i = 0; i < 7; i++) await w.run(); // it opens again, an hour and more of real time later
+    expect(w.mailer.sent).toHaveLength(1);
+  });
+
+  it('never lets a clock that comes back ahead after a reboot bring the next email forward', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T, in boot 1
+    w.reboot();
+    w.stepWall(2 * 3600_000); // the clock comes back two hours fast
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // T + 10 of real time, just after the reboot: held
+    for (let i = 0; i < 5; i++) await w.run(); // up to an hour after the reboot
+    expect(w.mailer.sent).toHaveLength(1);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('counts a date\'s announcement window from a reboot, and announces it again once that has passed', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // announced, in boot 1
+    w.reboot();
+    w.upstream.open.set('486', []);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // opens again: its mark is from before the reboot, so it is as old as the reboot
+    w.upstream.open.set('486', []);
+    await w.run();
+    for (let i = 0; i < 17; i++) await w.run(); // closed for 3 hours
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // opens again, more than 3 hours after the restart: news again
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('without an uptime clock, restarts a date\'s announcement window that the clock puts in the future', async () => {
+    const w = await stepped({ noUptime: true });
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // announced
+    w.stepWall(-24 * 3600_000);
+    w.upstream.open.set('486', []);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // opens again: its mark is "in the future", so its 3 hours start now
+    w.upstream.open.set('486', []);
+    for (let i = 0; i < 19; i++) await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    for (let i = 0; i < 7; i++) await w.run(); // announced again, and the next hourly email goes
+    expect(w.mailer.sent).toHaveLength(2);
+  });
+
+  it('restarts the gap after a move and after a move back, never counting time it cannot know', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, at T, on the old machine
+    const moveBack = w.moveTo(8 * 3600_000); // Valkey's data copied to a machine up for 8 hours
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // T + 10: held
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(1); // an hour is counted from the first run there
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(2); // sent on the new machine
+    moveBack();
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
+    await w.run(); // back on the old machine, whose boot was seen long ago: its email's time is unknown here
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(2);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(3);
+  });
+
+  it('keeps pace through a clock jump of days, which Redis would have expired keys over', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    w.stepWall(8 * 24 * 3600_000);
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+  });
+
+  it('does not fall back to the wall clock when reading the uptime fails once', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email, stamped with uptime
+    w.uptimeFails(true);
+    w.stepWall(2 * 3600_000);
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+  });
+
+  it('restarts a gap whose stamp is later than this boot\'s uptime (data from a restored snapshot)', async () => {
+    const w = await stepped();
+    await w.run();
+    const { up, boot } = w.uptimeNow();
+    await w.kv.set(K.lastAlert(w.id), JSON.stringify({ wall: w.wall(), up: up + 3600_000, boot }));
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // held, and the gap starts again now
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(w.mailer.sent).toHaveLength(0);
+    await w.run(); // an hour after, not two
+    expect(w.mailer.sent).toHaveLength(1);
+  });
+
+  it('treats a last-alert time from before uptimes as unknown, even from before this boot', async () => {
+    const w = await stepped();
+    await w.run();
+    w.reboot(); // up for a minute or so when the old value is read
+    await w.kv.set(K.lastAlert(w.id), String(w.wall() - 20 * 60_000)); // 20 minutes ago: before this boot
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // held: 20 minutes since the last email
+    expect(parseStamp(await w.kv.get(K.lastAlert(w.id)))?.boot).toBe('boot-2');
+    w.stepWall(3600_000);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(0);
+  });
+
+  it('gives a held alert written before uptimes its 3 hours from the upgrade, whatever the clock does', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email: the next is due in an hour
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    const legacy = { id: 'old', createdAt: w.wall(), subscriberId: w.id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
+    await w.kv.write([
+      { op: 'set', key: K.held(w.id), value: sealJob(legacy, keys.token) },
+      { op: 'sAdd', key: K.heldSubscribers, members: [w.id] },
+    ]);
+    await w.run(); // read, and its 3 hours start now
+    w.stepWall(4 * 3600_000);
+    for (let i = 0; i < 5; i++) await w.run();
+    expect(datesIn(w.mailer.sent[1]!.text)).toEqual(['Tue 6 Oct 2026']);
+  });
+
+  it('treats a last-alert time written before uptimes as unknown, so a clock step right after the upgrade does nothing', async () => {
+    const w = await stepped();
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    await w.run(); // the first email
+    await w.kv.set(K.lastAlert(w.id), String(w.wall() - 10 * 60_000)); // as the previous release wrote it: 10 minutes ago
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    await w.run(); // held, and the gap starts again on this boot
+    expect(parseStamp(await w.kv.get(K.lastAlert(w.id)))?.boot).toBe('boot-1');
+    w.stepWall(2 * 3600_000);
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+  });
 });
 
 describe('checker fuzz', () => {

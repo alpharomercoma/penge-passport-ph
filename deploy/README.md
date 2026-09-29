@@ -51,7 +51,18 @@ guardrails:
    after 30 minutes).
 6. Pace: at most one alert an hour per person, or one per check (every 15 minutes) if they chose "as soon
    as a check finds dates". What comes in between waits (`pp:held:*`, signed like the outbox) and joins
-   their next email. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (96) a person per Manila day;
+   their next email. The gap, the 3-hour life of a waiting date and the 3-hour announcement window are
+   measured on the kernel's uptime clock (`apps/server/src/clock.ts`), so a wall-clock step (NTP, a
+   restored snapshot) can neither shorten nor stretch them. Across a reboot, or a move of the data to
+   another machine (and back), nothing can tell how long it has been, so what a moment from another
+   boot was timing starts again: the first run of each boot restarts every person's gap there and then
+   (`pp:boot-seen:*` marks it), and anything else restarts when next seen. A reboot or a move can delay
+   someone's next email by one pace at most, and never brings it forward. Last-alert times have no Redis
+   expiry (Redis expires by the wall clock; they go on unsubscribing). Limits that remain: a server
+   that keeps rebooting within the hour keeps restarting hourly gaps, and a clock jump of more than a
+   week can let Redis drop a held alert or an announcement mark early (never send one early). Records
+   written before this (29 September 2026) kept wall-clock expiries of 2 to 4 hours until the first
+   run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (96) a person per Manila day;
    `MAIL_DAILY_LIMIT` (300) emails a day in total.
 7. Only dates open at the latest good look are sent; one that closed while it waited keeps waiting, in case
    it opens again. Alerts older than 3 hours are dropped.
@@ -168,6 +179,10 @@ Huawei's Debian image needed more than the usual steps:
 - Its internal DNS server (100.125.1.250) does not answer: public resolvers go in
   `/etc/resolvconf/resolv.conf.d/head`, plus `supersede domain-name-servers` in `dhclient.conf`.
 - The security group lets nothing in: allow TCP 22, 80, 443 and UDP 443.
+- The clock had no time source: the image's `chrony.conf` names only `ntp.myhuaweicloud.com`, which
+  does not resolve from the server, and never reads `/etc/chrony/sources.d`. It had drifted 2.4 s
+  in two days. `provision.sh` adds public sources (Cloudflare and `asia.pool.ntp.org`) and the
+  `sourcedir` line; `timedatectl show -p NTPSynchronized` should say `yes`.
 - The server only sees its private address (1:1 NAT), so the mail scripts need
   `PUBLIC_IP=213.250.173.234` once; `setup-mail.sh` remembers it.
 - The clock starts on Asia/Shanghai: `timedatectl set-timezone UTC`. Set a hostname in `/etc/hosts`,

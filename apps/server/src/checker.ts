@@ -45,6 +45,7 @@ import { K, manilaDay } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
 import type { Logger } from './log.ts';
 import { type Mailer, wasRefused } from './mailer.ts';
+import { elapsed, parseStamp, type Stamp, stampAt, systemUptime, type Uptime } from './clock.ts';
 import type { SnapshotSink } from './r2.ts';
 import { reportOncePerDay, type Stats } from './stats.ts';
 import {
@@ -84,10 +85,24 @@ export interface CheckDeps {
   stats?: Stats;
   statsEmail?: string | null;
   now?: () => number;
+  /** The kernel's uptime, for paces and ages no wall-clock step can move (clock.ts). */
+  uptime?: Uptime;
+  /** Reads now as a stamp (clock.ts); runCheck sets it. */
+  stampNow?: () => Stamp;
   runId?: string;
 }
 
 export const ANNOUNCE_WINDOW_SECONDS = 3 * 3600;
+/**
+ * Only for tidying up (there can be thousands of marks): the window is measured
+ * with the mark's stamp (clock.ts), not by Redis's expiry, which follows the
+ * wall clock. A clock jump of more than a week could still expire one early.
+ */
+const ANNOUNCE_MARK_TTL_SECONDS = 7 * 24 * 3600;
+/** First runs of boots: one a reboot. Lost early, a boot's gaps restart once more, which only delays. */
+const BOOT_SEEN_TTL_SECONDS = 90 * 24 * 3600;
+/** Only for tidying up a held alert that nothing points to any more; a wall-clock jump beyond it can drop one, never send one early. */
+const HELD_TTL_SECONDS = 7 * 24 * 3600;
 /** Alerts waiting longer than this are dropped, even about dates still open: by then they are not news. */
 export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
 /**
@@ -98,8 +113,27 @@ export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
  * from the posts abroad later in it), with a 5-minute floor between checks.
  */
 export const PACE_SPACING_MS: Record<Pace, number> = { hourly: 60 * 60_000, asap: 5 * 60_000 };
-const HELD_TTL_SECONDS = OUTBOX_MAX_AGE_MS / 1000 + 3600;
-const LAST_ALERT_TTL_SECONDS = 2 * 3600;
+// Last-alert times have no expiry in Redis, which would follow the wall clock:
+// a clock jump could erase one and let an email go early. They go on unsubscribing.
+
+/**
+ * On the first run of a boot, every gap from before it starts again now: how
+ * long ago an earlier boot's email was cannot be known (clock.ts), and
+ * restarting here, not when each person next has news, makes a reboot cost them
+ * at most one pace from the reboot. Under the checker lock; the boot is marked
+ * seen only once every gap is restarted, so a crash part-way means another go.
+ */
+async function restartGapsOnNewBoot(deps: CheckDeps, stamp: () => Stamp) {
+  const at = stamp();
+  if (at.boot === undefined || at.up === undefined || (await deps.kv.get(K.bootSeen(at.boot))) !== null) return;
+  for (const id of await deps.kv.sMembers(K.allSubscribers)) {
+    const last = parseStamp(await deps.kv.get(K.lastAlert(id)));
+    if (last && elapsed(last, at) === null) {
+      await deps.kv.write([{ op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) }]);
+    }
+  }
+  await deps.kv.set(K.bootSeen(at.boot), String(at.up), { ttlSeconds: BOOT_SEEN_TTL_SECONDS });
+}
 /** Extra lookups per run for group sizes; each is one more request to the site (budget.ts has the sum). */
 export const GROUP_QUERY_CAP = 10;
 /** Offices that answered with an error are tried once more, this many at most per run. */
@@ -134,8 +168,10 @@ export interface AlertJob {
   openings: Opening[];
   /** Refused sends so far, for every date in it (entries written before `tries` existed). */
   attempts?: number;
-  /** When each "siteId:date" was first queued, once alerts have been merged; otherwise `createdAt`. */
-  dateAt?: Record<string, number>;
+  /** When it was queued (clock.ts); entries from before stamps existed have only `createdAt`. */
+  queuedAt?: Stamp;
+  /** When each "siteId:date" was first queued, once alerts have been merged (a stamp, or a wall-clock number). */
+  dateAt?: Record<string, Stamp | number>;
   /** Refused sends so far, per "siteId:date", once alerts have been merged. */
   tries?: Record<string, number>;
 }
@@ -211,9 +247,11 @@ function subscriberCache(kv: Kv) {
 
 type LoadSubscriber = ReturnType<typeof subscriberCache>;
 
-export async function runCheck(deps: CheckDeps): Promise<RunReport> {
+export async function runCheck(given: CheckDeps): Promise<RunReport> {
+  const now = given.now ?? Date.now;
+  const uptime = given.uptime ?? systemUptime;
+  const deps: CheckDeps = { ...given, stampNow: given.stampNow ?? (() => stampAt(now(), uptime)) };
   const { kv, log } = deps;
-  const now = deps.now ?? Date.now;
   const started = now();
   const runId = deps.runId ?? newRunId(started);
 
@@ -226,6 +264,7 @@ export async function runCheck(deps: CheckDeps): Promise<RunReport> {
     return { runId, skipped: 'locked', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null, abroad: null };
   }
   try {
+    await restartGapsOnNewBoot(deps, deps.stampNow!);
     const holdLock = async () => {
       if ((await kv.get(K.checkLock)) !== runId) throw new Error('lost the checker lock; stopping this run');
       await kv.set(K.checkLock, runId, { ttlSeconds: LOCK_TTL_SECONDS });
@@ -590,6 +629,7 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
   const { kv, log } = deps;
   const ops: WriteOp[] = [];
   const openings: { site: SiteObservation; applicants: number; dates: string[] }[] = [];
+  const queued = (deps.stampNow ?? (() => stampAt(now(), deps.uptime)))();
 
   for (const site of scan.sites) {
     if (!site.ok || site.publishedDays === 0) continue;
@@ -622,12 +662,26 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
       const fresh: string[] = [];
       for (const date of dates ?? []) {
         // Safe to check, then set: only one checker runs at a time (the lock).
-        if ((await kv.get(K.announced(site.id, applicants, date))) === null) fresh.push(date);
+        const key = K.announced(site.id, applicants, date);
+        const mark = await kv.get(key);
+        if (mark === null) {
+          fresh.push(date);
+          continue;
+        }
+        const stamp = parseStamp(mark);
+        if (stamp === null) continue; // written before marks had stamps: its 3-hour expiry decides
+        const age = elapsed(stamp, queued);
+        if (age === null) {
+          // Its age cannot be known (clock.ts), so its 3 hours start again now.
+          ops.push({ op: 'set', key, value: JSON.stringify(queued), ttlSeconds: ANNOUNCE_MARK_TTL_SECONDS });
+        } else if (age >= ANNOUNCE_WINDOW_SECONDS * 1000) {
+          fresh.push(date);
+        }
       }
       if (fresh.length === 0) continue;
       openings.push({ site, applicants, dates: fresh });
       for (const date of fresh) {
-        ops.push({ op: 'set', key: K.announced(site.id, applicants, date), value: scan.runId, ttlSeconds: ANNOUNCE_WINDOW_SECONDS });
+        ops.push({ op: 'set', key: K.announced(site.id, applicants, date), value: JSON.stringify(queued), ttlSeconds: ANNOUNCE_MARK_TTL_SECONDS });
       }
     }
   }
@@ -640,7 +694,7 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
       if (!sub || sub.applicants !== applicants || !sub.siteIds.includes(site.id)) continue;
       let job = jobs.get(id);
       if (!job) {
-        job = { id: `${scan.runId}:${id}`, createdAt: now(), subscriberId: id, applicants, openings: [] };
+        job = { id: `${scan.runId}:${id}`, createdAt: now(), queuedAt: queued, subscriberId: id, applicants, openings: [] };
         jobs.set(id, job);
       }
       job.openings.push({ id: site.id, name: site.name, dates });
@@ -757,19 +811,25 @@ async function consider(
     if (waiting && waiting.subscriberId === id) parts.unshift(waiting);
     else if (raw !== null) report.dropped++;
   }
-  // When each date was first queued: each is dropped on its own once older than OUTBOX_MAX_AGE_MS.
-  const firstAt = new Map<string, number>();
+  const at = (deps.stampNow ?? (() => stampAt(now(), deps.uptime)))();
+  // When each date was first queued: each is dropped on its own once older than
+  // OUTBOX_MAX_AGE_MS. One whose age cannot be known (clock.ts) starts its 3 hours again now.
+  const firstAt = new Map<string, Stamp>();
   for (const p of parts) {
     for (const o of p.openings) {
       for (const d of o.dates) {
         const key = dateKey(o.id, d);
-        firstAt.set(key, Math.min(firstAt.get(key) ?? Infinity, p.dateAt?.[key] ?? p.createdAt));
+        const stored = parseStamp(p.dateAt?.[key]) ?? p.queuedAt ?? { wall: p.createdAt };
+        const when = elapsed(stored, at) === null ? at : stored;
+        const seen = firstAt.get(key);
+        if (!seen || elapsed(when, at)! > elapsed(seen, at)!) firstAt.set(key, when);
       }
     }
   }
-  const fresh = (siteId: number, date: string) => now() - (firstAt.get(dateKey(siteId, date)) ?? 0) <= OUTBOX_MAX_AGE_MS;
+  const young = (when: Stamp | undefined) => when !== undefined && elapsed(when, at)! <= OUTBOX_MAX_AGE_MS;
+  const fresh = (siteId: number, date: string) => young(firstAt.get(dateKey(siteId, date)));
   for (const p of parts) if (!p.openings.some((o) => o.dates.some((d) => fresh(o.id, d)))) report.dropped++;
-  if (![...firstAt.keys()].some((key) => now() - firstAt.get(key)! <= OUTBOX_MAX_AGE_MS)) {
+  if (![...firstAt.values()].some(young)) {
     await clearHeld(kv, id);
     return 'next';
   }
@@ -801,7 +861,7 @@ async function consider(
     }
   }
   const jobOf = (openings: Opening[]): AlertJob => {
-    const dateAt: Record<string, number> = {};
+    const dateAt: Record<string, Stamp> = {};
     const tried: Record<string, number> = {};
     for (const o of openings) {
       for (const d of o.dates) {
@@ -812,7 +872,7 @@ async function consider(
     }
     return {
       id: job.id,
-      createdAt: Math.min(...Object.values(dateAt)),
+      createdAt: Math.min(...Object.values(dateAt).map((w) => w.wall)),
       subscriberId: id,
       applicants: sub.applicants,
       openings,
@@ -833,7 +893,19 @@ async function consider(
 
   // Their pace: too soon after their last alert, or emailed already in this check, it waits.
   const lastRaw = await kv.get(K.lastAlert(id));
-  if (run.emailed.has(id) || now() - Number(lastRaw ?? 0) < PACE_SPACING_MS[sub.pace]) {
+  const found = parseStamp(lastRaw);
+  const lastValue = found ? JSON.stringify(found) : null;
+  // After a reboot this is the reboot's age, the least it can have been (clock.ts).
+  const since = found === null ? Infinity : elapsed(found, at);
+  if (since === null) {
+    // How long ago cannot be known (written before stamps had boots): their gap starts again now.
+    await kv.write([
+      { op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) },
+      ...holdOps(jobOf(wanted)),
+    ]);
+    return 'next';
+  }
+  if (run.emailed.has(id) || since < PACE_SPACING_MS[sub.pace]) {
     await hold(deps, jobOf(wanted));
     return 'next';
   }
@@ -873,7 +945,7 @@ async function consider(
   // Marked sent before it goes out, as an outbox entry is popped before it is
   // sent: a crash after the send can lose this alert, never send it twice.
   await kv.write([
-    { op: 'set', key: K.lastAlert(id), value: String(now()), ttlSeconds: LAST_ALERT_TTL_SECONDS },
+    { op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) },
     ...holdOps(leftover),
   ]);
   run.emailed.add(id);
@@ -909,9 +981,9 @@ async function consider(
       await kv.write([
         { op: 'decr', key: K.mailSentToday(day) },
         { op: 'decr', key: K.alertsToday(id, day) },
-        lastRaw === null
+        lastValue === null
           ? { op: 'del', key: K.lastAlert(id) }
-          : { op: 'set', key: K.lastAlert(id), value: lastRaw, ttlSeconds: LAST_ALERT_TTL_SECONDS },
+          : { op: 'set', key: K.lastAlert(id), value: lastValue },
         ...holdOps(retry.length > 0 ? jobOf(retry) : null),
       ]);
       log.error('alert email refused', { job: next.id, err: err as Error });

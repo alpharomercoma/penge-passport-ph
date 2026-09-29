@@ -25,6 +25,8 @@ export const K = {
   heldSubscribers: `${P}held-subs`,
   /** When a person was last sent an alert, for their pace. */
   lastAlert: (subscriberId: string) => `${P}last-alert:${subscriberId}`,
+  /** Set by the first run of each boot, which restarts every person's gap (checker.ts). */
+  bootSeen: (bootId: string) => `${P}boot-seen:${bootId}`,
   checkLock: `${P}lock:check`,
   /** Set after a scan the site struggled with: scans wait until it expires. */
   scanCooldown: `${P}scan:cooldown`,

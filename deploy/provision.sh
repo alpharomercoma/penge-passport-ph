@@ -64,6 +64,35 @@ MaxRetentionSec=14day
 JOURNAL
 systemctl restart systemd-journald
 
+echo "== clock (public NTP sources)"
+# A cloud image may leave its NTP client pointed only at the provider's internal
+# server (Huawei's ntp.myhuaweicloud.com does not even resolve here), and then the
+# clock drifts until something steps it. Alert paces do not use the wall clock
+# (apps/server/src/clock.ts); logs, Manila day boundaries and TLS do.
+if dpkg-query -W -f '${Status}' chrony 2>/dev/null | grep -q 'install ok installed'; then
+  install -d /etc/chrony/sources.d
+  install -o root -g root -m 0644 /dev/stdin /etc/chrony/sources.d/penge.sources <<'NTP'
+server time.cloudflare.com iburst
+pool asia.pool.ntp.org iburst maxsources 3
+NTP
+  # Huawei's image replaces Debian's chrony.conf with one that never reads sources.d.
+  grep -q '^sourcedir /etc/chrony/sources.d' /etc/chrony/chrony.conf ||
+    echo 'sourcedir /etc/chrony/sources.d' >> /etc/chrony/chrony.conf
+  # Running or not, it runs from now on, with these sources. On start it may step a large offset
+  # once (makestep); alert paces do not notice (apps/server/src/clock.ts).
+  systemctl enable -q chrony
+  systemctl restart chrony
+else
+  apt-get install -y -qq --no-install-recommends systemd-timesyncd >/dev/null
+  install -d /etc/systemd/timesyncd.conf.d
+  install -o root -g root -m 0644 /dev/stdin /etc/systemd/timesyncd.conf.d/penge.conf <<'NTP'
+[Time]
+NTP=time.cloudflare.com
+FallbackNTP=0.asia.pool.ntp.org 1.asia.pool.ntp.org 2.asia.pool.ntp.org
+NTP
+  systemctl restart systemd-timesyncd
+fi
+
 echo "== automatic security updates (Debian, and Caddy's repository)"
 install -o root -g root -m 0644 /dev/stdin /etc/apt/apt.conf.d/20auto-upgrades <<'APT'
 APT::Periodic::Update-Package-Lists "1";
