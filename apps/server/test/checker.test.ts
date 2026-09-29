@@ -42,6 +42,8 @@ async function world(overrides: Partial<CheckDeps> = {}) {
     mailDailyLimit: 300,
     alertsPerSubscriberPerDay: 3,
     client: 'penge-passport-ph@test',
+    // The fake clock, not this machine's uptime (Linux has one, macOS does not): the same on every machine.
+    uptime: () => null,
     now: t.now,
     ...overrides,
   };

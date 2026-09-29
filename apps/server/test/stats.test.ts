@@ -334,6 +334,8 @@ describe('what the checker counts', () => {
       mailDailyLimit: 300,
       alertsPerSubscriberPerDay: 1,
       client: 'penge-passport-ph@test',
+      // The fake clock, not this machine's uptime (Linux has one, macOS does not): the same on every machine.
+      uptime: () => null,
       now: t.now,
       stats,
     };
