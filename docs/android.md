@@ -3,14 +3,15 @@
 The Google Play app is the website itself, shown full screen by the phone's browser. It is a
 [Trusted Web Activity](https://developer.chrome.com/docs/android/trusted-web-activity), built with
 [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap). The app is a thin launcher, so a change to
-the website reaches the app when the site deploys. Only a new name, icon, colour or Android target needs
-a new upload.
+the website reaches the app when the site deploys. A change to the Android side needs a rebuild and a new
+upload: `android/twa-manifest.json` (name, start page, scope, colours, icons, target), `android/res/`,
+`android/patch.cjs` or the pinned Bubblewrap version.
 
 | What | Where |
 | --- | --- |
 | The app's settings: package name, name, colours, icons, start page, version | [`android/twa-manifest.json`](../android/twa-manifest.json) |
 | The build | [`android/build.sh`](../android/build.sh), which generates the Android project into `android/project/` (not in git) and writes to `android/out/` (not in git) |
-| What Bubblewrap cannot express: the dark-mode splash and the themed icon | [`android/res/`](../android/res), copied over the generated project on every build |
+| What Bubblewrap cannot express: the dark-mode splash, the themed icon, the splash's scaling | [`android/res/`](../android/res) and [`android/patch.cjs`](../android/patch.cjs), applied to the generated project on every build |
 | The website as an app: manifest, icons, service worker | `apps/web/public/manifest.webmanifest`, `apps/web/public/icons/`, `apps/web/src/sw.js` (built by `apps/web/sw-plugin.ts`) |
 | The proof the app and the site belong together | [`apps/web/public/.well-known/assetlinks.json`](../apps/web/public/.well-known/assetlinks.json), served at `https://alphaexperiments.com/.well-known/assetlinks.json` |
 | The upload key | `.secrets/android/` (not in git) |
@@ -57,12 +58,20 @@ Android's own splash does not appear before ours.
   - So the image is the icon with transparent corners (`android/res/drawable-*/splash.png`, from
     `apps/web/scripts/icons.mjs`). On white the tile disappears and only the mark shows; on the dark
     background it is the app's icon. Checked in both modes and in both orders.
+  - The image is 300dp. The helper centres it at that size by default, which crops it in a window
+    shorter than that (split screen, a small free-form window). `android/patch.cjs` makes it shrink to
+    fit instead (`CENTER_INSIDE`); checked in a 200dp-tall free-form window on a tablet.
+- **The navigation bar's divider** matches the bar: white in light mode, `#101412` in dark mode.
+  Bubblewrap drops the alpha from colours, so a transparent divider (`#00000000`) came out as a black
+  line above the navigation bar.
 - **The launcher icon** is Bubblewrap's adaptive icon from `maskable-512.png`, with a monochrome layer
   added for Android 13+ themed icons (`android/res/drawable/ic_launcher_monochrome.xml`).
   - The monochrome layer is the mark in one colour, with the full days faint and the one open day
     solid, as in the favicon.
-  - Bubblewrap uses a monochrome icon only for notifications, so `build.sh` adds the layer to its
-    `ic_launcher.xml`.
+  - It is 50×51dp in the 108dp layer, inside the 66dp safe zone: Android asks for a logo of at least
+    48×48dp.
+  - Bubblewrap uses a monochrome icon only for notifications, so `android/patch.cjs` adds the layer to
+    its `ic_launcher.xml`.
   - It is compiled into the APK, but hasn't yet been seen in a launcher with themed icons turned on.
 - **The name under the icon** is "PassportPH" (`launcherName`): Bubblewrap allows 12 characters, and
   launchers cut longer names short.
@@ -165,14 +174,26 @@ add its entry to this same file.
 
 ## Google Play
 
-**The developer account.** Its contact email is shown to the public on the listing, so use an address
-made for this app, not a personal one.
+**The developer account and what it makes public**
+([Google](https://support.google.com/googleplay/android-developer/answer/13628312)). A personal account
+has two email addresses:
+- **Contact email:** private; Google uses it to reach you.
+- **Developer email:** public, shown on your developer profile on Google Play.
+
+Your **legal name and country** are also shown publicly on a personal account's profile. Each app's
+listing also needs a **support email**, which is public too. Use addresses made for this app for both
+public ones, never a personal one.
 
 **Testing first, for new personal accounts.** A personal Play Console account created after 13 November
 2023 must run a closed test first. At least 12 testers have to stay opted in for 14 days in a row. Only
 then can you apply for production access from the Dashboard, and that review "typically takes seven days
 or less"
 ([Google](https://support.google.com/googleplay/android-developer/answer/14151465)).
+
+**Device verification, for new personal accounts.** A new personal account must also show it has a real
+Android phone, through the Play Console mobile app, before an app can go live on Google Play: any
+non-rooted physical phone running Android 10 or later
+([Google](https://support.google.com/googleplay/android-developer/answer/14316361)).
 
 **Target API.** From 31 August 2026, new apps and updates must target Android 16, API level 36
 ([Google](https://support.google.com/googleplay/android-developer/answer/11926878)). The build does.

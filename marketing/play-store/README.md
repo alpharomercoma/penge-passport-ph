@@ -16,7 +16,7 @@ release the app is in [`docs/android.md`](../../docs/android.md).
 | Tags (5 at most) | Chosen in the Console from its own fixed list, which Google does not publish; see below |
 | Website | https://alphaexperiments.com/pengepassportph/ |
 | Privacy policy | https://alphaexperiments.com/pengepassportph/privacy |
-| Contact email | Required, and **shown publicly** on the listing: use an address made for this app, not a personal one |
+| Contact email | **Not filled in here: you must supply it before submitting.** Required and shown publicly on the listing, so use an address made for this app and watched, not a personal one |
 | External marketing | Leave on: it is Google advertising the listing outside Play, with no data from the app |
 
 **The name.** The app name is what people see first in search results, and "PengePassportPH" alone
@@ -32,7 +32,7 @@ it with "Unofficial". The plain "PengePassportPH" works too if you'd rather keep
 **Tags.** Google's rule is that a tag's relevance should be obvious to someone who doesn't know the
 app, from its listing or its first screen. Pick only those, even if that's fewer than five.
 
-Full description (1,511 of 4,000 characters). Google requires an app that shows government
+Full description (1,502 of 4,000 characters). Google requires an app that shows government
 information without being run by a government to say so and to name its sources in the description,
 which is why both come first and last:
 
@@ -49,7 +49,7 @@ What it does
 • Booking for a group of 2 to 5? You only hear about dates with room for everyone
 
 What it doesn't do
-• It never selects, holds or books a slot, and never sells one. You book for free at passport.gov.ph yourself.
+• It never selects, holds or books a slot, and never sells one. You book at passport.gov.ph yourself.
 • No account, no ads, no tracking scripts.
 
 Open source (MIT license): https://github.com/alpharomercoma/penge-passport-ph
@@ -91,8 +91,8 @@ build before a deploy.
 Google doesn't allow price or promotional words ("Free", "Best", "New", "#1" and so on) on screenshots
 and graphics, in the app name or in the short description, nor price or promotional offers in the full
 description ([listing guidance](https://support.google.com/googleplay/android-developer/answer/13393723)).
-So no field offers the app as "free". The one "free" left, in the full description, says booking on
-passport.gov.ph costs nothing, which is the DFA's, not an offer from this app.
+So no field says "free" at all, the app's price or anyone else's. The screenshots leave out the site's
+footer for the same reason: it calls the project, and booking, free.
 
 Every screenshot is 9:16, since Play refuses one whose long side is more than twice the short one (and
 any side over 3840 px). Google's rules
@@ -109,12 +109,27 @@ Five per set meets all of these. Each screenshot has a caption above the screen:
 | `01-offices` | Every office, soonest date first. *All 43 DFA offices in the Philippines, checked every 15 minutes* |
 | `02-calendar` | Open days at a glance. *Each office's calendar, from the latest check* |
 | `03-hours` | Tap a day for its hours. *Places left each hour, straight from passport.gov.ph* |
-| `04-alert` | An email when dates open. *Up to 10 offices, with a one-click unsubscribe* |
+| `04-alert` | An email when dates open. *You choose how often; unsubscribing deletes your address* |
 | `05-abroad` | Embassies and consulates too. *133 posts in 67 countries* |
 
 The counts are read from the live API each time the script runs. The alert form is filled in with the
 placeholder `juan@example.com` and never sent. The office shown is the one with the soonest open date
 that day.
+
+**They are a snapshot.** The counts, dates and places left on screen are the live site's at the moment of
+capture (last run 30 September 2026), and change within hours. Rerun the script before each listing
+update so the pictures stay close to what people will see.
+
+**Alt text**, which Google asks for with every graphic and screenshot (140 characters at most):
+
+| Image | Alt text |
+| --- | --- |
+| Feature graphic | PengePassportPH: know when a passport appointment opens. A month of full days with one open day. Unofficial. |
+| `01-offices` | The list of DFA offices in the Philippines, each with its soonest open date and how many days are open. |
+| `02-calendar` | An office's calendar for the month, with its open days in green, and buttons to book or get an email. |
+| `03-hours` | One day's hours at an office, showing which are open, which are full and how many places are left. |
+| `04-alert` | The form to get an email when dates open: an email address, who you are booking for, and how often. |
+| `05-abroad` | Philippine embassies and consulates abroad, by country, each with its soonest open date. |
 
 **The tablet shots came with a fix.** At a 10-inch tablet's 900dp, an office's page was a 640px
 column pinned to the left with empty space beside it. The office page is now centred, like the privacy
@@ -128,9 +143,10 @@ and confirmation pages, and the screenshots show that.
 | Ads | No ads |
 | App access | All functionality is available without special access: there is no sign-in |
 | Target audience | 18 and over. The people booking are adults, and parents book for children; choosing ages under 13 brings in the Families policy |
-| Government apps | The app is not affiliated with a government entity. It communicates government information (the DFA's appointment calendar), and names its sources in the description |
+| Government apps | "Is the app developed by or on behalf of a government?" **No.** It is not affiliated with any government. It does communicate government information (the DFA's appointment calendar), which is why the description says it is unofficial and names its sources |
 | News app | No |
-| Financial features, health | None |
+| Financial features | "The app does not provide any financial features" |
+| Health apps | None of the health features listed apply: choose the answer that says so |
 | Advertising ID | No. The app declares one permission, which AndroidX adds for its own receivers (`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`), and no `AD_ID` (`aapt2 dump badging` on the APK) |
 
 **Content rating questionnaire.** For the answers: there is no violence, sexual content, crude
@@ -155,26 +171,29 @@ runbook's inventory ([`deploy/README.md`](../../deploy/README.md#where-a-subscri
 | --- | --- |
 | Does the app collect or share any of the required user data types? | Yes |
 | Is all of the user data collected by the app encrypted in transit? | Yes: from the phone, HTTPS only (plain HTTP is redirected, HSTS for a year). The alert emails the server sends out use TLS when the recipient's mail server offers it (`smtp_tls_security_level = may`), as the privacy page says; that is delivery to the user, not collection from the phone |
-| Can users request that their data be deleted? | Yes: the unsubscribe link in every alert email deletes it at once. A sign-up that is never confirmed is deleted after 48 hours |
+| Can users request that their data be deleted? | Yes: the unsubscribe link in every alert email removes the address and its choices from the database at once. The last copies, in the encrypted backups and the mail server's logs, are gone within 14 days. A sign-up that is never confirmed is deleted after 48 hours |
+| Does the app let users create an account? | **No**, on Google's definition of an account ("a unique user identity that developers provide as a user-facing feature"): there is no sign-in, username, password or profile. Signing up for alerts stores an email address to send alerts to. If Play reads that as an account, it will also want an in-app way to delete it (the unsubscribe page) and a web page where someone can ask for deletion without the email, which the site doesn't have yet ([requirement](https://support.google.com/googleplay/android-developer/answer/13327111)) |
 
 | Data type | Collected | Shared | Ephemeral | Required | Purpose |
 | --- | --- | --- | --- | --- | --- |
 | Personal info: Email address | Yes | No | No | Optional (only for alerts) | App functionality; Fraud prevention, security, and compliance (confirmation emails per address are counted under a keyed hash for about two days, so the form can't flood an inbox) |
 | App activity: Other actions (the offices, group size and pace chosen for alerts) | Yes | No | No | Optional | App functionality |
-| Device or other IDs (the network address every request comes from) | Yes | No | No | Required | Fraud prevention, security, and compliance |
+| Device or other IDs (the network address every request comes from) | Yes | No | No | Required | Fraud prevention, security, and compliance; Analytics |
+| App activity: App interactions (pages visited, offices opened, days' hours looked up) | Yes | No | No | Required | Analytics |
 
 The network address is declared because the server uses it:
 - the rate limits count requests under a keyed hash of it, not the address, for about two hours;
-- the web server's error log may record the address itself when a request fails, and keeps it 14 days.
+- the web server's error log may record the address itself when a request fails, and keeps it 14 days;
+- the daily visitor count hashes it with the browser's user agent and a salt that is deleted within 25
+  hours, and keeps only an estimate of how many different hashes it saw.
 
-Play's guide asks for data to be declared by what it is used for, and pseudonymous data can still count.
+Play's guide asks for data to be declared by what it is used for, and says pseudonymous data can still
+count. So the visitor count and the counts of what people open are declared as Analytics, although
+they keep no one's details: the cautious reading, since the count starts from each visitor's address.
 
 Not declared, and why:
 - **Service providers aren't sharing.** Huawei Cloud runs the server, and Cloudflare R2 holds the
   encrypted backups. Play's guide exempts service providers acting on the developer's behalf.
-- **Anonymized counts.** The daily visitor count keeps an estimate from salted hashes, and the salt is
-  deleted within 25 hours. Views are counted per office, never per person. Play exempts fully
-  anonymized data.
 - **The saved office list stays on the phone** (browser storage), so it isn't collected.
 - **Location.** No location is inferred from the network address.
 - **Failed lookups.** When passport.gov.ph fails to answer, the log (kept 14 days) notes the office, day
@@ -186,11 +205,13 @@ Google Play's policy on government information bars apps that "falsely claim aff
 government entity or offer, or facilitate government services without proper authorization"
 ([requirements](https://support.google.com/googleplay/android-developer/answer/9514050)).
 
-If a reviewer reads this app as facilitating the DFA's service, the answer is what it does and doesn't
-do:
-- It only reads the public calendar anyone can open.
-- It never selects, holds or books a slot.
-- It sends people to passport.gov.ph to book.
-- It says it is unofficial on every page, in the listing and in the app's description.
+**This is an open question, not a settled one.** The facts in the app's favour:
+- it only reads the public calendar anyone can open;
+- it never selects, holds or books a slot;
+- it sends people to passport.gov.ph to book;
+- it says it is unofficial on every page, in the listing and in the app's description.
 
-[`docs/legal/README.md`](../../docs/legal/README.md) has the longer case.
+Against them, the DFA's own FAQ calls "passport appointment assistance services" illegal. The project's
+legal notes ([`docs/legal/README.md`](../../docs/legal/README.md), "Open question") say a lawyer should
+decide whether a free service that only tells people when dates open counts as "assistance". A reviewer
+could read it that way too. Whether to submit before that is answered is the owner's decision.

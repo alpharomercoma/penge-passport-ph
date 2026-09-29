@@ -69,7 +69,7 @@ Check it with `timedatectl show -p NTPSynchronized` (should say `yes`) and `chro
 
 ## What the reviews found
 
-Both changes were reviewed by codex (`gpt-6-luna`, `model_reasoning_effort="xhigh"`, read-only) before they
+Both changes were reviewed by codex (`gpt-6-luna`, `model_reasoning_effort="xhigh"`) before they
 were committed, pass after pass until nothing it raised was left unanswered. Every finding accepted was first
 reproduced by a test that failed, then fixed, then the fix was broken on purpose to show the test catches it.
 

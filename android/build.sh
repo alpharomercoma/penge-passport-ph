@@ -65,19 +65,11 @@ cd "$project"
 # The version comes from twa-manifest.json as it is: raise appVersionCode there for each upload.
 npx --yes "$BUBBLEWRAP" update --skipVersionUpgrade --manifest="$manifest" --directory="$project" --config="$config"
 
-# What Bubblewrap cannot express, from android/res/: a splash for dark mode as well (a
+# What Bubblewrap cannot express: from android/res/, a splash for dark mode as well (a
 # night background, and an image with transparent corners that suits both; Bubblewrap's
-# has the light background baked in), and the launcher icon's monochrome layer for
-# Android 13+ themed icons (Bubblewrap only uses one for notifications).
+# has the light background baked in) and the themed icon's layer; then android/patch.cjs.
 cp -R "$here/res/." "$project/app/src/main/res/"
-node -e '
-  const fs = require("fs");
-  const file = process.argv[1];
-  const icon = fs.readFileSync(file, "utf8");
-  if (icon.includes("<monochrome")) process.exit(0);
-  if (!icon.includes("</adaptive-icon>")) throw new Error(file + " is not an adaptive icon any more");
-  fs.writeFileSync(file, icon.replace("</adaptive-icon>", "    <monochrome android:drawable=\"@drawable/ic_launcher_monochrome\" />\n</adaptive-icon>"));
-' "$project/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"
+node "$here/patch.cjs" "$project" "$manifest"
 
 npx --yes "$BUBBLEWRAP" build --manifest="$manifest" --directory="$project" --config="$config" --signingKeyPath="$key"
 

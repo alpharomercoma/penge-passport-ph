@@ -83,7 +83,7 @@ function framed(png, canvas, title, sub) {
     '02-calendar': ['Open days at a glance', "Each office's calendar, from the latest check"],
     '03-hours': ['Tap a day for its hours', 'Places left each hour, straight from passport.gov.ph'],
     // No "free" or other price words on the pictures: Google's rule for screenshots and graphics.
-    '04-alert': ['An email when dates open', 'Up to 10 offices, with a one-click unsubscribe'],
+    '04-alert': ['An email when dates open', 'You choose how often; unsubscribing deletes your address'],
     '05-abroad': ['Embassies and consulates too', `${posts} posts in ${countries} countries`],
   };
 
@@ -118,8 +118,26 @@ ${MARK.replace('<svg ', '<svg width="358" height="358" ')}</div></body>`);
       });
     }
     const page = await b.newPage({ viewport: device.canvas, deviceScaleFactor: 1 });
+    // Scrolls only as far as it takes to show the whole element: phones scroll, tablets
+    // keep what is above it.
+    const reveal = (selector, index = 0) =>
+      p.evaluate(
+        ([sel, i]) => {
+          const el = document.querySelectorAll(sel)[i];
+          if (!el) throw new Error(`nothing matches ${sel} [${i}]`);
+          const over = el.getBoundingClientRect().bottom + 16 - innerHeight;
+          if (over > 0) scrollBy(0, over);
+        },
+        [selector, index],
+      );
     const shot = async (name) => {
       await p.evaluate(() => document.activeElement?.blur());
+      // The site's footer calls the project free and booking free: Google allows no price
+      // words on screenshots. The listing and the feature graphic carry its disclaimer.
+      await p.evaluate(() => {
+        const footer = document.querySelector('.site-footer');
+        if (footer) footer.style.display = 'none';
+      });
       await p.waitForTimeout(500);
       const [title, sub] = CAPTIONS[name];
       await page.setContent(framed(await p.screenshot(), device.canvas, title, sub));
@@ -141,6 +159,13 @@ ${MARK.replace('<svg ', '<svg width="358" height="358" ')}</div></body>`);
     });
     await p.locator('.office-head').first().evaluate((el) => el.scrollIntoView({ block: 'start' }));
     await p.evaluate(() => scrollBy(0, -16));
+    await reveal('.legend'); // the whole month, not cut mid-row
+    // If that pushed the office's name off the top, start at a clean edge instead: the
+    // "Booking for" row above the calendar.
+    await p.evaluate(() => {
+      if (document.querySelector('.office-head').getBoundingClientRect().top >= 0) return;
+      scrollBy(0, document.querySelector('.office-controls').getBoundingClientRect().top - 16);
+    });
     await shot('02-calendar');
     await day.click();
     await p.locator('.times').getByText(/\d:\d\d/).first().waitFor({ timeout: 30000 });
@@ -153,11 +178,19 @@ ${MARK.replace('<svg ', '<svg width="358" height="358" ')}</div></body>`);
     await p.getByRole('button', { name: /Email me when dates open here/ }).first().click();
     const sheet = p.getByRole('dialog');
     await sheet.getByLabel('Your email').fill(EMAIL);
+    // From the address typed in down to the send button and the line about unsubscribing,
+    // which the caption mentions: the sheet scrolls under its own title.
+    await p.locator('.sheet').evaluate((el) => {
+      const label = [...el.querySelectorAll('label')].find((l) => l.textContent.trim() === 'Your email');
+      const head = el.querySelector('.sheet-head').getBoundingClientRect().bottom;
+      el.scrollTop += label.getBoundingClientRect().top - head - 12;
+    });
     await shot('04-alert');
 
     // The posts abroad.
     await p.goto(`${SITE}?in=abroad`, { waitUntil: 'networkidle' });
     await p.locator('.country-name').first().waitFor();
+    await reveal('ul.rows button.row', 1); // the first posts, not just a country's name
     await shot('05-abroad');
   }
 

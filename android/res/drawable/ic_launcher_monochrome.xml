@@ -2,17 +2,18 @@
 <!-- The launcher icon's monochrome layer, for Android 13+ themed icons: the site's mark
      (apps/web/public/favicon.svg) in one colour. The system tints it and reads only its
      alpha, so the full days stay faint and the one open day is solid, as in the mark.
-     android/build.sh adds it to Bubblewrap's ic_launcher.xml. -->
+     50x51dp in the 108dp layer: Android asks for at least 48x48 inside the 66dp safe zone.
+     android/patch.cjs adds it to Bubblewrap's ic_launcher.xml. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.60976"
-        android:scaleY="0.60976"
-        android:translateX="25.3415"
-        android:translateY="25.3415">
+        android:scaleX="0.67568"
+        android:scaleY="0.67568"
+        android:translateX="22.2432"
+        android:translateY="21.5676">
         <path
             android:pathData="M23,18 H71 A11,11 0 0 1 82,29 V73 A11,11 0 0 1 71,84 H23 A11,11 0 0 1 12,73 V29 A11,11 0 0 1 23,18 Z"
             android:strokeColor="#FF000000"
