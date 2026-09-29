@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash's background in dark mode: the site's dark background, so opening the app
+     at night does not flash white. Bubblewrap sets the light one (backgroundColor in
+     twa-manifest.json); android/build.sh copies this over its project. The splash image
+     (drawable-*/splash.png) is one for both modes: see apps/web/scripts/icons.mjs. -->
+<resources>
+    <color name="backgroundColor">#101412</color>
+</resources>

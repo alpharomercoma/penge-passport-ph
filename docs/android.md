@@ -10,6 +10,7 @@ a new upload.
 | --- | --- |
 | The app's settings: package name, name, colours, icons, start page, version | [`android/twa-manifest.json`](../android/twa-manifest.json) |
 | The build | [`android/build.sh`](../android/build.sh), which generates the Android project into `android/project/` (not in git) and writes to `android/out/` (not in git) |
+| What Bubblewrap cannot express: the dark-mode splash and the themed icon | [`android/res/`](../android/res), copied over the generated project on every build |
 | The website as an app: manifest, icons, service worker | `apps/web/public/manifest.webmanifest`, `apps/web/public/icons/`, `apps/web/src/sw.js` (built by `apps/web/sw-plugin.ts`) |
 | The proof the app and the site belong together | [`apps/web/public/.well-known/assetlinks.json`](../apps/web/public/.well-known/assetlinks.json), served at `https://alphaexperiments.com/.well-known/assetlinks.json` |
 | The upload key | `.secrets/android/` (not in git) |
@@ -34,6 +35,37 @@ never change: a different name is a different app, with no installs or reviews.
   goes to the network. `apps/web/test/pwa.test.ts` runs the worker's rules against a fake cache.
 - **Nothing extra is collected.** The app has no permissions of its own and no SDKs; notifications are
   off (`enableNotifications: false`). Its data is the website's, as the privacy page says.
+
+## What it shows at launch
+
+Recorded on an Android 16 emulator (the `ow-test` AVD, read-only, Chrome 133), launching from the home
+screen. On a cold start:
+1. the splash shows for about a second;
+2. then the site appears full screen, with no address bar (Digital Asset Links verified);
+3. Chrome shows a one-line "Running in Chrome" notice, which a Trusted Web Activity cannot turn off.
+Android's own splash does not appear before ours.
+
+- **The splash** is the app's icon on the site's background: white in light mode, `#101412` in dark
+  mode.
+  - Bubblewrap takes one background colour, so the dark one is a night resource
+    (`android/res/values-night/colors.xml`). Without it, a phone in dark mode flashed a white screen
+    before the dark page.
+  - The image is the same in both modes. The helper library that shows the splash saves the image the
+    first time the app opens and reuses it until the app is updated (`twa_splash/splash_image.png` in
+    androidbrowserhelper 2.6.2), whatever the mode. A separate dark image showed on white after
+    switching modes; the colour, read on every launch, did follow.
+  - So the image is the icon with transparent corners (`android/res/drawable-*/splash.png`, from
+    `apps/web/scripts/icons.mjs`). On white the tile disappears and only the mark shows; on the dark
+    background it is the app's icon. Checked in both modes and in both orders.
+- **The launcher icon** is Bubblewrap's adaptive icon from `maskable-512.png`, with a monochrome layer
+  added for Android 13+ themed icons (`android/res/drawable/ic_launcher_monochrome.xml`).
+  - The monochrome layer is the mark in one colour, with the full days faint and the one open day
+    solid, as in the favicon.
+  - Bubblewrap uses a monochrome icon only for notifications, so `build.sh` adds the layer to its
+    `ic_launcher.xml`.
+  - It is compiled into the APK, but hasn't yet been seen in a launcher with themed icons turned on.
+- **The name under the icon** is "PassportPH" (`launcherName`): Bubblewrap allows 12 characters, and
+  launchers cut longer names short.
 
 ## Tools
 
@@ -102,7 +134,9 @@ $sdk/aapt2 dump badging android/out/pengepassportph-1.apk | grep -E "^package|ta
 
 ## Try it on a phone
 
-With USB debugging on, `adb install android/out/pengepassportph-1.apk`.
+With USB debugging on, `adb install android/out/pengepassportph-1.apk`. An emulator works as well: start
+it with `-read-only` and nothing it installs is kept. The first launch on a device where Chrome was never
+opened shows Chrome's own welcome screen before the app; that is Chrome's, and happens once.
 
 - **The app opens with no address bar:** Digital Asset Links verified.
 - **There is an address bar at the top:** Chrome could not verify the app. Check the file with Google's

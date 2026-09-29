@@ -187,7 +187,7 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .swatch-full { border: 1px solid var(--line-strong); background: var(--full); }
 
 /* one office */
-.office { display: grid; gap: 16px; max-width: 640px; padding-top: 8px; }
+.office { display: grid; gap: 16px; max-width: 640px; margin: 0 auto; padding-top: 8px; }
 .back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-left: -8px; padding: 6px 12px 6px 4px; border: 0; border-radius: var(--r); background: transparent; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
 .back:hover { background: var(--surface); }
 .back .icon { transform: rotate(90deg); }

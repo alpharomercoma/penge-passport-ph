@@ -1,6 +1,7 @@
 # Google Play listing
 
-What to enter in Play Console for the Android app (29 September 2026). Same rules as the rest of
+What to enter in Play Console for the Android app (29 September 2026; graphics and metadata
+revised 30 September against the Play kit in the sibling mobile-inference project). Same rules as the rest of
 `marketing/`: every claim checked against the live site, the code or a cited page. How to build and
 release the app is in [`docs/android.md`](../../docs/android.md).
 
@@ -8,14 +9,30 @@ release the app is in [`docs/android.md`](../../docs/android.md).
 
 | Field | Value |
 | --- | --- |
-| App name (30 at most) | PengePassportPH (15) |
-| Short description (80 at most) | Open DFA passport appointment dates, with free email alerts. Unofficial app. (76) |
+| App name (30 at most) | PengePassportPH: Slot Alerts (28) |
+| Short description (80 at most) | Open DFA passport appointment dates, with email alerts. Unofficial app. (71) |
+| Default language | English (United States), en-US |
 | Category | Travel & Local |
+| Tags (5 at most) | Chosen in the Console from its own fixed list, which Google does not publish; see below |
 | Website | https://alphaexperiments.com/pengepassportph/ |
 | Privacy policy | https://alphaexperiments.com/pengepassportph/privacy |
 | Contact email | Required, and **shown publicly** on the listing: use an address made for this app, not a personal one |
+| External marketing | Leave on: it is Google advertising the listing outside Play, with no data from the app |
 
-Full description (1,520 of 4,000 characters). Google requires an app that shows government
+**The name.** The app name is what people see first in search results, and "PengePassportPH" alone
+uses 15 of its 30 characters to say nothing about what the app does. "Slot" is the DFA's own word ("slots are made available at 12:00 noon
+and 9:00 p.m.", its passport FAQ) and "alerts" is what the app sends. "DFA" stays out of the name so
+that it cannot read as the Department's app; the short description, which is also searched, carries
+it with "Unofficial". The plain "PengePassportPH" works too if you'd rather keep the brand alone.
+
+**The launcher label is separate and stays "PassportPH"** (`launcherName` in
+`android/twa-manifest.json`, and `short_name` in the web manifest): under an icon, anything past about
+12 characters is cut short. The listing name and the label differing is normal.
+
+**Tags.** Google's rule is that a tag's relevance should be obvious to someone who doesn't know the
+app, from its listing or its first screen. Pick only those, even if that's fewer than five.
+
+Full description (1,511 of 4,000 characters). Google requires an app that shows government
 information without being run by a government to say so and to name its sources in the description,
 which is why both come first and last:
 
@@ -35,7 +52,7 @@ What it doesn't do
 • It never selects, holds or books a slot, and never sells one. You book for free at passport.gov.ph yourself.
 • No account, no ads, no tracking scripts.
 
-Free and open source (MIT license): https://github.com/alpharomercoma/penge-passport-ph
+Open source (MIT license): https://github.com/alpharomercoma/penge-passport-ph
 
 Sources
 • Appointment dates and hours: the DFA's Online Passport Appointment System, https://passport.gov.ph/appointment
@@ -60,16 +77,48 @@ Department's own domain.
 ## Graphics
 
 All made by `node marketing/play-store/capture.cjs` (needs Playwright's Chromium and Python's Pillow).
-The screenshots are of the live site, so rerun it when the site changes.
+The screenshots are of the live site, so rerun it when the site changes; `SITE=` points it at a local
+build before a deploy.
 
 | File | Play Console field | Size and format |
 | --- | --- | --- |
 | [`icon-512.png`](icon-512.png) | App icon | 512×512, 32-bit PNG, every pixel opaque, full square: Play rounds the corners |
-| [`feature-graphic.png`](feature-graphic.png) | Feature graphic | 1024×500, 24-bit PNG ([`feature.html`](feature.html)) |
-| [`phone-1-offices.png`](phone-1-offices.png) … [`phone-5-abroad.png`](phone-5-abroad.png) | Phone screenshots | 1080×1920 (9:16; Play refuses sides more than 2:1), 24-bit PNG |
+| [`feature-graphic.png`](feature-graphic.png) | Feature graphic | 1024×500, 24-bit PNG ([`feature.html`](feature.html)), no screenshot in it: Play crops it on some surfaces |
+| [`screenshots-phone/`](screenshots-phone) | Phone screenshots | Five at 1080×1920, 24-bit PNG |
+| [`screenshots-tablet-7/`](screenshots-tablet-7) | 7-inch tablet screenshots | Five at 1200×2133 (the site at 600dp) |
+| [`screenshots-tablet-10/`](screenshots-tablet-10) | 10-inch tablet screenshots | Five at 1800×3200 (the site at 900dp) |
 
-The screenshots show the offices, an office's calendar, a day's hours, the alert form (filled in with
-the placeholder `juan@example.com`, never sent) and the posts abroad.
+Google doesn't allow price or promotional words ("Free", "Best", "New", "#1" and so on) on screenshots
+and graphics, in the app name or in the short description, nor price or promotional offers in the full
+description ([listing guidance](https://support.google.com/googleplay/android-developer/answer/13393723)).
+So no field offers the app as "free". The one "free" left, in the full description, says booking on
+passport.gov.ph costs nothing, which is the DFA's, not an offer from this app.
+
+Every screenshot is 9:16, since Play refuses one whose long side is more than twice the short one (and
+any side over 3840 px). Google's rules
+([screenshots](https://support.google.com/googleplay/android-developer/answer/9866151)):
+- at most 8 per device type;
+- at least 2 in all to publish;
+- at least 4 for tablets;
+- at least 4 at 1080 px or more for an app to be eligible for Play's recommendation formats.
+
+Five per set meets all of these. Each screenshot has a caption above the screen:
+
+| Screen | Caption |
+| --- | --- |
+| `01-offices` | Every office, soonest date first. *All 43 DFA offices in the Philippines, checked every 15 minutes* |
+| `02-calendar` | Open days at a glance. *Each office's calendar, from the latest check* |
+| `03-hours` | Tap a day for its hours. *Places left each hour, straight from passport.gov.ph* |
+| `04-alert` | An email when dates open. *Up to 10 offices, with a one-click unsubscribe* |
+| `05-abroad` | Embassies and consulates too. *133 posts in 67 countries* |
+
+The counts are read from the live API each time the script runs. The alert form is filled in with the
+placeholder `juan@example.com` and never sent. The office shown is the one with the soonest open date
+that day.
+
+**The tablet shots came with a fix.** At a 10-inch tablet's 900dp, an office's page was a 640px
+column pinned to the left with empty space beside it. The office page is now centred, like the privacy
+and confirmation pages, and the screenshots show that.
 
 ## App content
 
@@ -82,11 +131,18 @@ the placeholder `juan@example.com`, never sent) and the posts abroad.
 | Government apps | The app is not affiliated with a government entity. It communicates government information (the DFA's appointment calendar), and names its sources in the description |
 | News app | No |
 | Financial features, health | None |
+| Advertising ID | No. The app declares one permission, which AndroidX adds for its own receivers (`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`), and no `AD_ID` (`aapt2 dump badging` on the APK) |
 
 **Content rating questionnaire.** For the answers: there is no violence, sexual content, crude
 language, drugs, alcohol or tobacco, and no gambling. Users can't talk to or share anything with each
 other. There is no location sharing and nothing to buy. The app shows one website and doesn't browse
 the web: links to other sites open in the browser.
+
+**Release notes** ("What's new", 500 characters at most) for version 1:
+
+```text
+First release: open DFA passport appointment dates at every office in the Philippines and posts abroad, and email alerts when dates open.
+```
 
 ## Data safety
 
