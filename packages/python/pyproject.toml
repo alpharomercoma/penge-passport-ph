@@ -1,6 +1,6 @@
 [project]
 name = "penge-passport-ph"
-version = "0.1.1"
+version = "0.2.0"
 description = "PengePassportPH: read-only, rate-limited checker for DFA Philippine passport appointment availability on passport.gov.ph. Library and CLI."
 readme = "README.md"
 requires-python = ">=3.11"

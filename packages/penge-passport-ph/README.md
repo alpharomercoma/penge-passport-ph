@@ -41,7 +41,7 @@ takes it away from real applicants.
 - **Watched.** A scheduled [canary](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/canary.md) scrapes a real record every 6 hours and fails loudly when
   the site changes.
 - **Email alerts, too.** The same repository runs a free website that checks every office in the
-  Philippines every 15 minutes, and the posts abroad about hourly, and emails you when a date opens where
+  Philippines every 5 minutes, and the posts abroad about hourly, and emails you when a date opens where
   you want it ([how it runs](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md)).
 
 ## Contents
@@ -172,8 +172,9 @@ golden files, and share one rate-limit state file, so they can run side by side.
 consulates abroad, each one's calendar and hourly times for one person or a group, and an email when a
 date opens where you can get to.
 
-- **Checks every office in the Philippines every 15 minutes, and each of about 130 posts abroad about
-  hourly,** through this package's rate limiter, and stores every scan in Cloudflare R2 for later analysis.
+- **Checks every office in the Philippines every 5 minutes, and each of about 130 posts abroad about
+  hourly,** through this package's rate limiter, and stores what changes in Cloudflare R2 for later
+  analysis: after each day's first record, which holds everything, a scan that saw nothing new stores nothing.
 - **Emails only on trustworthy news.** A scan that looks broken (too many offices failing, no dates
   anywhere, an office list suddenly cut short) sends nothing and changes nothing; the first look is never news; a flickering date is
   announced once; at most one email an hour (or one per check, for those who ask), each with everything
@@ -192,7 +193,8 @@ date opens where you can get to.
 | `packages/python/` | The Python port (PyPI) |
 | `packages/contracts/` | Validation and shapes shared by the website and the server |
 | `apps/server/` | The checker, the mailer and the website's API |
-| `apps/web/` | The website (React) |
+| `apps/web/` | The website (React), installable as an app |
+| `android/` | The Android app for Google Play: the website in a Trusted Web Activity ([how](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/android.md)) |
 | `deploy/` | Provisioning, releases, mail setup and the [runbook](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md) |
 
 ## Rate limits and responsible use
@@ -259,8 +261,10 @@ The canary has its own `PENGE_PASSPORT_PH_*` variables, listed in [docs/canary.m
 ## Documentation
 
 - [How it works](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/how-it-works.md): the endpoints, the session, the site's quirks and the limiter design.
+- [Alert timing](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/alert-timing.md): when alerts go out, how time is measured, and what the reviews found.
 - [Canary runbook](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/canary.md): what each check means and how to respond when one fails.
 - [Website runbook](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md): how the alerts website runs, deploys, sends mail and stores scans.
+- [Android app](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/android.md): building, signing and releasing the Google Play app.
 - [Law and responsible use](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/legal/README.md): the DFA's rules, Philippine law, and why the limits are what they are.
 - [Contributing](https://github.com/alpharomercoma/penge-passport-ph/blob/main/CONTRIBUTING.md): layout, development, fuzzing, naming and the ground rules.
 - [Changelog](https://github.com/alpharomercoma/penge-passport-ph/blob/main/packages/penge-passport-ph/CHANGELOG.md)

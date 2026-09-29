@@ -37,7 +37,7 @@ ffmpeg. About 3 minutes on an M5.
 | Refresh, refresh, "Full na naman?!" | 0–2 | 0–3.75 |
 | New slots drop at 12:00 NN & 9:00 PM, gone in minutes (riser, then silence) | 2–4 | 3.75–7.5 |
 | The drop: logo, Free, Open source, Not a fixer | 4–6 | 7.5–11.25 |
-| Every DFA office in the Philippines: 43, every 15 minutes | 6–9 | 11.25–16.88 |
+| Every DFA office in the Philippines: 43, every 5 minutes | 6–9 | 11.25–16.88 |
 | "Kabayan, nasa abroad ka?": 133 posts in 67 countries | 9–12 | 16.88–22.5 |
 | Tap a day, see the hours | 12–15 | 22.5–28.13 |
 | Pick offices, add your email; the chime, the notification, the email | 15–19 | 28.13–35.63 |
@@ -64,4 +64,4 @@ ffmpeg. About 3 minutes on an M5.
   or affiliated with the Department of Foreign Affairs.
 - Every claim traceable. The 12 noon and 9 PM releases are the DFA's own notice (quoted in
   [docs/legal/README.md](../../docs/legal/README.md)); 43 offices, 133 posts in 67 countries and the
-  15-minute checks are the live site's; the npm and pip lines are what those installs really print.
+  5-minute checks are the live site's; the npm and pip lines are what those installs really print.

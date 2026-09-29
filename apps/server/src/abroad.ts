@@ -1,7 +1,7 @@
 // Posts abroad: the embassies and consulates, and their outreach missions,
 // that book passport appointments on passport.gov.ph too. There are about 130,
 // three times the offices at home, so they are not all asked on every run.
-// Each run checks the 36 that are most overdue, on their own rate limiter
+// Each run checks the 12 that are most overdue, on their own rate limiter
 // (budget.ts): a post that publishes dates, or that someone follows, about
 // once an hour; one that publishes none every few hours. The list of posts is
 // itself read again once a week, a few countries per run.
@@ -19,14 +19,14 @@ export interface AbroadUpstream {
   availability(query: { siteId: number; applicants: number }): Promise<Availability>;
 }
 
-/** Posts checked in one run. 4 runs an hour x 36 covers every post about hourly. */
-export const ABROAD_POSTS_PER_RUN = 36;
+/** Posts checked in one run. 12 runs an hour x 12 covers every post about hourly. */
+export const ABROAD_POSTS_PER_RUN = 12;
 /** Steps of the weekly reading of the list (one region or one country each) in one run. */
 export const CATALOG_STEPS_PER_RUN = 6;
 /**
  * The posts and the list share this many requests a run. While the list has
  * never been read in full, all of them go to reading it, so a new server shows
- * its posts within half an hour instead of one.
+ * its posts within about half an hour instead of over an hour.
  */
 export const ABROAD_REQUESTS_PER_RUN = ABROAD_POSTS_PER_RUN + CATALOG_STEPS_PER_RUN;
 /** Extra lookups per run for group sizes at posts abroad. */
@@ -35,10 +35,18 @@ export const ACTIVE_EVERY_MINUTES = 60;
 export const QUIET_EVERY_MINUTES = 6 * 60;
 export const CATALOG_MAX_AGE_MS = 7 * 24 * 3600_000;
 /**
- * Posts abroad are left for the next run once a run is this old, so it ends
- * before the next starts (runs are 15 minutes apart; systemd stops one at 15).
+ * Posts abroad (and their group lookups) are left for the next run once a run
+ * is this old, counted from its start. Runs start 5 minutes apart and the scan
+ * at home takes 2.5 to 3.7 of them: this leaves the dozen posts their 3 seconds
+ * each even after the slowest scan, unless its emails took long too or the
+ * weekly reading of the list of posts takes its steps first, and time for the R2
+ * records (stored last) before the next run is due (a run still going then makes systemd skip
+ * the next one). A run that checks fewer leaves the rest, most overdue first, to
+ * the next.
  */
-export const ABROAD_DEADLINE_MS = 12 * 60_000;
+export const ABROAD_DEADLINE_MS = 4.5 * 60_000;
+/** A sweep of every post by hand has this long: the scheduled runs wait for it. */
+export const ABROAD_SWEEP_DEADLINE_MS = 12 * 60_000;
 /** The Philippines is region 1, country 1 on passport.gov.ph: its offices are the main scan. */
 const HOME = { regionId: 1, countryId: 1 };
 

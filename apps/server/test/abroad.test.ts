@@ -1,4 +1,3 @@
-import { gunzipSync } from 'node:zlib';
 import type { Site } from 'penge-passport-ph';
 import { describe, expect, it } from 'vitest';
 import {
@@ -15,6 +14,7 @@ import { createApi } from '../src/api.ts';
 import { type CheckDeps, runCheck } from '../src/checker.ts';
 import { K } from '../src/keys.ts';
 import { silentLog } from '../src/log.ts';
+import { rebuild } from '../src/record.ts';
 import { createLookups } from '../src/lookups.ts';
 import { confirm, createPending } from '../src/subscribers.ts';
 import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES } from './helpers.ts';
@@ -130,14 +130,15 @@ describe('posts abroad', () => {
       2,
       Array.from({ length: 50 }, (_, i) => ({ id: 100 + i, name: `Country ${i}` })),
     );
-    // 2 regions + 51 countries = 53 steps. The first reading takes a run's whole
+    // 2 regions + 51 countries = 53 steps. The first reading takes each run's whole
     // allowance (and checks no posts meanwhile); the posts follow once it is done.
-    const first = (await w.run()).abroad!;
-    expect(first).toMatchObject({ catalogSteps: ABROAD_REQUESTS_PER_RUN, checked: 0 });
-    const second = (await w.run()).abroad!;
-    expect(second.catalogSteps).toBe(53 - ABROAD_REQUESTS_PER_RUN);
-    // The rest of the allowance checks posts: here only Japan's two (the new countries list none).
-    expect(second.checked).toBe(2);
+    const whole = Math.floor(53 / ABROAD_REQUESTS_PER_RUN);
+    for (let i = 0; i < whole; i++) expect((await w.run()).abroad).toMatchObject({ catalogSteps: ABROAD_REQUESTS_PER_RUN, checked: 0 });
+    const last = (await w.run()).abroad!;
+    expect(last.catalogSteps).toBe(53 - whole * ABROAD_REQUESTS_PER_RUN);
+    // What is left of that run's allowance checks posts: here Japan's two (the new
+    // countries list none), as many of them as it has room for.
+    expect(last.checked).toBe(Math.min(2, ABROAD_REQUESTS_PER_RUN - last.catalogSteps));
     expect(await w.kv.get(K.abroadCatalogAt)).not.toBeNull();
     expect((await w.run()).abroad!.catalogSteps).toBe(0);
 
@@ -212,6 +213,25 @@ describe('posts abroad', () => {
     expect(w.mailer.sent[0]!.text).toContain('Tue 6 Oct');
   });
 
+  it('checks the posts and sends their alerts before storing either record, so a slow R2 holds up neither', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [497]);
+    await w.run();
+    w.abroad.open.set('497', ['2026-10-06']);
+    w.upstream.open.set('486', ['2026-10-07']);
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    const store = w.sink.store.bind(w.sink);
+    const atStore: { key: string; sent: number; calls: number }[] = [];
+    w.sink.store = async (key, body) => {
+      atStore.push({ key, sent: w.mailer.sent.length, calls: w.abroad.calls.length });
+      return store(key, body);
+    };
+    await w.run();
+    expect(w.mailer.sent).toHaveLength(1);
+    expect(atStore.map((s) => s.key.split('/')[0])).toEqual(['scans', 'scans-abroad']);
+    for (const s of atStore) expect(s).toMatchObject({ sent: 1, calls: w.abroad.calls.length });
+  });
+
   it('checks group sizes that followers asked for, on the posts\' own limiter', async () => {
     const w = await world();
     await w.subscribe('ana@example.com', [497], 3);
@@ -238,6 +258,156 @@ describe('posts abroad', () => {
     expect((await w.run()).abroad!.queued).toBe(1);
   });
 
+  it('still checks its dozen posts after the slowest scan at home', async () => {
+    const w = await world();
+    w.abroad.posts.set(62, Array.from({ length: 2 * ABROAD_POSTS_PER_RUN }, (_, i) => post(500 + i, `PE Post ${i}`)));
+    await w.run(); // reads the list, checks the first posts
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000); // every post due again
+    // The home scan takes 3.7 minutes, the slowest seen; each post abroad 3 seconds, the limiter's pace.
+    const home = w.upstream.availability.bind(w.upstream);
+    w.upstream.availability = async (q) => {
+      w.t.advance((3.7 * 60_000) / SITES.length);
+      return home(q);
+    };
+    const abroad = w.abroad.availability.bind(w.abroad);
+    w.abroad.availability = async (q) => {
+      w.t.advance(3_000);
+      return abroad(q);
+    };
+    expect((await w.run()).abroad!.checked).toBe(ABROAD_POSTS_PER_RUN);
+  });
+
+  it('sends the spool after the posts abroad, with only the time left before the next run', async () => {
+    const w = await world();
+    const home = w.upstream.availability.bind(w.upstream);
+    w.upstream.availability = async (q) => {
+      w.t.advance((3.7 * 60_000) / SITES.length);
+      return home(q);
+    };
+    const abroad = w.abroad.availability.bind(w.abroad);
+    const order: string[] = [];
+    w.abroad.availability = async (q) => {
+      order.push('post');
+      w.t.advance(3_000);
+      return abroad(q);
+    };
+    const flush = w.sink.flush.bind(w.sink);
+    w.sink.flush = async (budgetMs?: number) => {
+      order.push('flush');
+      return flush(budgetMs);
+    };
+    await w.run();
+    expect(order.at(-1)).toBe('flush');
+    expect(w.sink.flushBudgets[0]).toBeLessThanOrEqual(30_000);
+    expect(w.sink.flushBudgets[0]).toBeLessThan(60_000);
+  });
+
+  it('records no post as removed while the list of posts is being read again', async () => {
+    const w = await world();
+    await w.run();
+    // A weekly reading in progress, more steps planned than a run takes, with some
+    // countries not read again yet (as a post moving countries would look for a while).
+    const countries = Object.keys(await w.kv.hGetAll(K.abroadCountries));
+    await w.kv.write([
+      { op: 'rPush', key: K.abroadPlan, values: Array.from({ length: 3 * CATALOG_STEPS_PER_RUN }, () => JSON.stringify({ regionId: 99 })) },
+      { op: 'hDel', key: K.abroadCountries, fields: countries.slice(1) },
+    ]);
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    await w.run();
+    for (const { record } of w.sink.recordsOf('scans-abroad')) expect(record.removed).toEqual([]);
+  });
+
+  it('notes the run as lost when its record abroad could not be made, so the gap shows', async () => {
+    const w = await world();
+    const hGetAll = w.kv.hGetAll.bind(w.kv);
+    w.kv.hGetAll = async (key) => {
+      if (key === K.recordSites('scans-abroad')) throw new Error('redis blinked');
+      return hGetAll(key);
+    };
+    const report = await w.run();
+    expect(report.abroad!.checked).toBeGreaterThan(0);
+    const lost = await w.kv.sMembers(K.recordLost('scans-abroad'));
+    expect(lost).toHaveLength(1);
+    expect(lost[0]).toMatch(/^scans-abroad\/v2\/date=2026-09-27\/.+_run1\.run$/);
+  });
+
+  it('notes no gap when the record abroad was stored and only saying so failed', async () => {
+    const w = await world();
+    const write = w.kv.write.bind(w.kv);
+    w.kv.write = async (ops) => {
+      // The write after the store, which clears the record's own key.
+      if (ops.some((op) => op.op === 'sRem' && op.key === K.recordLost('scans-abroad') && op.members.some((m) => m.endsWith('.json.gz')))) throw new Error('redis blinked');
+      return write(ops);
+    };
+    await w.run();
+    w.kv.write = write;
+    const [stored] = w.sink.recordsOf('scans-abroad');
+    // Still said lost: the next record holds everything and names it, and it is there, so no gap.
+    expect(await w.kv.sMembers(K.recordLost('scans-abroad'))).toEqual([stored!.key]);
+    w.t.advance((QUIET_EVERY_MINUTES + 1) * 60_000);
+    await w.run();
+    const records = w.sink.recordsOf('scans-abroad');
+    expect(records.at(-1)!.record).toMatchObject({ kind: 'full', lost: [stored!.key] });
+    expect(rebuild(records).gaps).toEqual([]);
+    expect(await w.kv.sMembers(K.recordLost('scans-abroad'))).toEqual([]);
+  });
+
+  it('notes a record abroad as lost when Redis failed before it was stored', async () => {
+    const w = await world();
+    const write = w.kv.write.bind(w.kv);
+    w.kv.write = async (ops) => {
+      if (ops.some((op) => op.key === K.recordHead('scans-abroad'))) throw new Error('redis blinked');
+      return write(ops);
+    };
+    await w.run();
+    w.kv.write = write;
+    expect(w.sink.recordsOf('scans-abroad')).toEqual([]);
+    const lost = await w.kv.sMembers(K.recordLost('scans-abroad'));
+    expect(lost).toEqual([expect.stringMatching(/^scans-abroad\/v2\/date=.+_run1\.run$/)]);
+    w.t.advance((QUIET_EVERY_MINUTES + 1) * 60_000);
+    await w.run();
+    const records = w.sink.recordsOf('scans-abroad');
+    expect(rebuild(records).gaps).toEqual([`${records[0]!.key} says ${lost[0]} could not be stored`]);
+  });
+
+  it('says no run is missing after one with no post due', async () => {
+    const w = await world();
+    let report = await w.run();
+    for (let i = 0; i < 6 && report.abroad!.checked > 0; i++) report = await w.run();
+    expect(report.abroad!.checked).toBe(0);
+    expect(await w.kv.sMembers(K.recordLost('scans-abroad'))).toEqual([]);
+  });
+
+  it('checks no group sizes abroad once the run has run out of time', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [497], 3);
+    w.abroad.open.set('497', ['2026-10-06']);
+    w.abroad.open.set('497:3', ['2026-10-06']);
+    const abroad = w.abroad.availability.bind(w.abroad);
+    w.abroad.availability = async (q) => {
+      if (q.siteId === 497 && q.applicants === 1) w.t.advance(ABROAD_DEADLINE_MS);
+      return abroad(q);
+    };
+    await w.run();
+    expect(w.abroad.calls).toContain('497:1');
+    expect(w.abroad.calls).not.toContain('497:3');
+  });
+
+  it('gives a sweep by hand the time to reach every post', async () => {
+    const w = await world();
+    w.abroad.posts.set(62, Array.from({ length: 2 * ABROAD_POSTS_PER_RUN + 6 }, (_, i) => post(500 + i, `PE Post ${i}`)));
+    await w.run();
+    // Longer than a scheduled run allows the posts, in all.
+    const abroad = w.abroad.availability.bind(w.abroad);
+    w.abroad.availability = async (q) => {
+      w.t.advance(ABROAD_DEADLINE_MS / (ABROAD_POSTS_PER_RUN + 6));
+      return abroad(q);
+    };
+    const report = await runCheck({ ...w.deps, abroadSweep: true, runId: 'sweep' });
+    expect(report.abroad!.checked).toBe((await catalogPosts(w.kv)).length);
+    expect(report.abroad!.checked).toBeGreaterThan(ABROAD_POSTS_PER_RUN + 6);
+  });
+
   it('leaves posts for the next run when the run is getting long', async () => {
     const w = await world();
     // Each post takes 60% of the time a run has for them: the third waits for the next run, due still.
@@ -254,11 +424,10 @@ describe('posts abroad', () => {
   it('stores what each run saw at the posts in R2, beside the scans', async () => {
     const w = await world();
     await w.run();
-    const [key] = [...w.objects.keys()].filter((k) => k.startsWith('scans-abroad/'));
-    expect(key).toMatch(/^scans-abroad\/v1\/date=2026-09-27\/.+_run1\.json\.gz$/);
-    const stored = JSON.parse(gunzipSync(w.objects.get(key!)!).toString()) as { sites: { name: string; post: { country: string } }[] };
-    expect(stored.sites.map((s) => s.name)).toContain('PE Copenhagen');
-    expect(stored.sites.find((s) => s.name === 'PE Copenhagen')!.post.country).toBe('Denmark');
+    const [first] = w.sink.recordsOf<{ id: number; fetchedAt: string | null; name: string; post: { country: string } }>('scans-abroad');
+    expect(first!.key).toMatch(/^scans-abroad\/v2\/date=2026-09-27\/.+_run1\.full\.json\.gz$/);
+    expect(first!.record.sites.map((s) => s.name)).toContain('PE Copenhagen');
+    expect(first!.record.sites.find((s) => s.name === 'PE Copenhagen')!.post.country).toBe('Denmark');
   });
 });
 

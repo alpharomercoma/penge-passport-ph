@@ -4,8 +4,10 @@ import { CircuitOpenError } from 'penge-passport-ph';
 import type { MailMode } from '../src/config.ts';
 import { MemoryKv } from '../src/kv.ts';
 import type { Mail, Mailer, SendResult } from '../src/mailer.ts';
+import { gunzipSync } from 'node:zlib';
 import type { SnapshotSink } from '../src/r2.ts';
-import type { Scan } from '../src/snapshot.ts';
+import { type Observed, rebuild, type ScanRecord, type Stored, type Stream } from '../src/record.ts';
+import type { SiteObservation } from '../src/snapshot.ts';
 import type { Keys } from '../src/subscribers.ts';
 
 export const keys: Keys = { email: randomBytes(32), index: randomBytes(32), token: randomBytes(32) };
@@ -36,13 +38,38 @@ export class FakeMailer implements Mailer {
 }
 
 export class MemorySink implements SnapshotSink {
-  scans: Scan[] = [];
+  /** Every scan record stored (record.ts), by key. */
+  records = new Map<string, Uint8Array>();
+  /** How the next stores go, one each; after these, every store is uploaded. */
+  outcomes: Stored[] = [];
   putObject?: (key: string, body: Uint8Array, contentType: string) => Promise<void>;
   deleteObject?: (key: string) => Promise<void>;
   listObjects?: (prefix: string) => Promise<string[]>;
-  async put(scan: Scan) {
-    this.scans.push(scan);
-    return true;
+  /** How many times a run asked for the spool to be sent, and for how long each time. */
+  flushes = 0;
+  flushBudgets: (number | undefined)[] = [];
+  async flush(budgetMs?: number) {
+    this.flushes++;
+    this.flushBudgets.push(budgetMs);
+  }
+  /** The time each store was given to upload its record. */
+  storeTimeouts: (number | undefined)[] = [];
+  async store(key: string, body: Uint8Array, timeoutMs?: number): Promise<Stored> {
+    this.storeTimeouts.push(timeoutMs);
+    const outcome = this.outcomes.shift() ?? 'uploaded';
+    if (outcome !== 'lost') this.records.set(key, body);
+    return outcome;
+  }
+  /** A stream's records, decoded, in the order their keys sort (oldest first). */
+  recordsOf<S extends Observed = SiteObservation>(stream: Stream): { key: string; record: ScanRecord<S> }[] {
+    return [...this.records.keys()]
+      .filter((key) => key.startsWith(`${stream}/`))
+      .sort()
+      .map((key) => ({ key, record: JSON.parse(gunzipSync(this.records.get(key)!).toString()) as ScanRecord<S> }));
+  }
+  /** What each run that stored a record saw at home, rebuilt in full from the records. */
+  get scans() {
+    return rebuild(this.recordsOf('scans')).states;
   }
 }
 

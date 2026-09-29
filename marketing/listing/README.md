@@ -3,6 +3,9 @@
 What went into the "Submit an app" form on AppBuildersPH (2026-09-28). Same rules as the rest of
 `marketing/`: every claim checked against the live site and the code.
 
+**Since then:** on 30 September 2026 the offices in the Philippines went to being checked every 5 minutes.
+The submission below says 15, as it was sent; the live listing's description needs the same change.
+
 | Field | Value |
 | --- | --- |
 | App name | PengePassportPH |

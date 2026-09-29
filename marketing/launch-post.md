@@ -32,7 +32,8 @@ Even the video is code: Playwright captures of the live site, animated frame by 
 ```
 
 Where the numbers come from, for the next post: 43 offices and 133 posts in 67 countries are what the
-site lists; offices at home are checked on `deploy/systemd/penge-check.timer` (every 15 minutes), posts
+site lists; offices at home are checked on `deploy/systemd/penge-check.timer` (every 5 minutes since 30
+September 2026; the post above went out when it was every 15), posts
 abroad hourly while they publish dates and every 6 hours while they don't (`apps/server/src/abroad.ts`);
 up to 10 offices is `LIMITS.sitesPerSubscription` in `packages/contracts`; the server size and price are
 the Huawei Cloud FlexusL plan in use.

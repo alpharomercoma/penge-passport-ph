@@ -15,7 +15,7 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
                       │                                                                      │
                       │ Valkey (Redis, 127.0.0.1 only): subscribers, status, outbox, caches  │
                       └──────────────────────────────────────────────────────────────────────┘
-                              │ one file per scan, and a daily copy of the subscribers
+                              │ what changed in each scan, and a daily copy of the subscribers
                               ▼
                          Cloudflare R2 (pengepassportph)
 ```
@@ -31,11 +31,12 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
 
 ## What the checker does, and when it refuses to email
 
-Every 15 minutes (a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
-`penge-check.service` asks every office for its calendar for one person, looks up group sizes that
-subscribers asked for, and stores the scan in R2. Then, only if the scan passes its checks,
+Every 5 minutes (a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
+`penge-check.service` asks every office for its calendar for one person, and looks up group sizes that
+subscribers asked for. Then, only if the scan passes its checks,
 it compares each office with its last good look and emails whoever was waiting for a date that just
-opened. After that, the same run checks the 36 most overdue of the ~130 posts abroad (below). The
+opened. After that, the same run checks the 12 most overdue of the ~130 posts abroad (below). Last, once
+every alert is out, it stores in R2 what changed since the last scan ([Data in R2](#data-in-r2)). The
 guardrails:
 
 1. One run at a time, enforced in Redis, so a laptop pointed at the same Redis cannot race the server.
@@ -50,7 +51,7 @@ guardrails:
 5. A date is announced at most once every 3 hours, however often it flickers (held slots are released
    after 30 minutes).
 6. Pace ([why, and what the reviews found](../docs/alert-timing.md)): at most one alert an hour per
-   person, or one per check (every 15 minutes) if they chose "as soon as a check finds dates". What
+   person, or one per check (every 5 minutes) if they chose "as soon as a check finds dates". What
    comes in between waits (`pp:held:*`, signed like the outbox) and joins
    their next email. The gap, the 3-hour life of a waiting date and the 3-hour announcement window are
    measured on the kernel's uptime clock (`apps/server/src/clock.ts`), so a wall-clock step (NTP, a
@@ -63,7 +64,7 @@ guardrails:
    that keeps rebooting within the hour keeps restarting hourly gaps, and a clock jump of more than a
    week can let Redis drop a held alert or an announcement mark early (never send one early). Records
    written before this (29 September 2026) kept wall-clock expiries of 2 to 4 hours until the first
-   run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (96) a person per Manila day;
+   run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (288) a person per Manila day;
    `MAIL_DAILY_LIMIT` (300) emails a day in total.
 7. Only dates open at the latest good look are sent; one that closed while it waited keeps waiting, in case
    it opens again. Alerts older than 3 hours are dropped.
@@ -72,8 +73,8 @@ guardrails:
    part-way through may already have gone out, so it stays charged and is never sent twice.
 9. A Redis flag pauses all delivery at once (below).
 10. **The checker rests when the site struggles.** If, after the retries, 3 or more offices still
-    answer with errors, or the rate limiter had to pause, the next scans wait 20 minutes: the next run
-    is skipped, so the site is asked every 30 minutes instead of every 15. A run still going when the next is due is
+    answer with errors, or the rate limiter had to pause, the next scans wait 10 minutes: the next two runs
+    are skipped, so the site is asked every 15 minutes instead of every 5. A run still going when the next is due is
     skipped by systemd, so a slow site also slows the scans.
 
 Exit code 3 means the scan failed its checks and nothing was emailed; `systemctl --failed` shows it.
@@ -83,19 +84,24 @@ for a group, and the hours of a day. Each answer is shared with everyone for 3 m
 
 **Posts abroad** (`apps/server/src/abroad.ts`): the embassies, consulates and outreach missions that
 book on passport.gov.ph too, 133 in 67 countries in September 2026. They are not all asked on every
-run. Each run, after the scan at home and its emails, checks the 36 most overdue on their own
+run. Each run, after the scan at home and its emails, checks the 12 most overdue on their own
 rate limiter: a post that publishes dates, or that someone follows, about once an hour; one that
 publishes none, every 6 hours. The list of posts is read again once a week, a few countries per run
-(all 42 of a run's requests the first time, so a new server lists them within half an hour, checking none meanwhile).
+(all 18 of a run's requests the first time, so a new server lists them within about half an hour, checking none
+meanwhile). The posts, and their group lookups, stop once the run is 4.5 minutes old. That leaves the dozen
+their time even after the slowest scan at home (unless its emails took long too, or the weekly reading of the
+list takes its steps first), and the R2 records their time before the next run; posts left over go first in
+the next.
 Alerts follow the same rules as at home; a run where most of its posts failed sends nothing from them,
-and each post that failed keeps what was known. What each run saw goes to R2 under `scans-abroad/`.
+and each post that failed keeps what was known. What changed at them goes to R2 under `scans-abroad/`
+([Data in R2](#data-in-r2)).
 
 **Three budgets that never compete** (`apps/server/src/budget.ts`, checked by `test/budget.test.ts`):
 
 | | Rate limiter state | Most in any rolling hour | What fills it |
 |---|---|---|---|
-| Scans | `/var/lib/penge/limiter/scans` | 300 | 4 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 232 at most, leaving room for one run by hand |
-| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 4 runs × (a session, 42 shared by 36 posts and 6 steps of reading the list, 4 group checks) = 188 at most, leaving room for a sweep by hand (about 135) |
+| Scans | `/var/lib/penge/limiter/scans` | 720 | 12 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 696 at most |
+| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 12 runs × (a session, 18 shared by 12 posts and 6 steps of reading the list, 4 group checks) = 276 at most, usually about 156; a sweep by hand (about 135) waits for room |
 | Visitors' lookups | `/var/lib/penge/limiter/lookups` | 1000 | Fresh dates, group dates, hours of a day, and the API's own sessions |
 
 All are enforced by the library over an exact rolling hour, each request at least 3 seconds after
@@ -110,18 +116,18 @@ All times are Manila time; the server's clock is UTC.
 
 | What | When | Notes |
 |---|---|---|
-| Every office's dates, for one person | A scan starts at :02, :17, :32 and :47 and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker skips a run after a scan the site struggled with |
+| Every office's dates, for one person | A scan starts every 5 minutes, at :02, :07, :12 and so on, and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker skips a run after a scan the site struggled with |
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
-| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | 36 posts each run, after the scan at home and its emails; alerts in the same run. The list of posts is read again weekly |
+| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | Up to 12 posts each run, after the scan at home and its emails (fewer after a slow scan; the most overdue go first, so later runs catch up); alerts in the same run. The list of posts is read again weekly |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | The site's copy on a phone (installed from the browser, or the [Android app](../docs/android.md)) | Each page load asks the server first, so a deploy shows on the next visit | The service worker (`apps/web/src/sw.js`) keeps the last deploy's page, code and icons to open offline; appointment data is never kept |
-| An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 8 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
+| An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 9 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA, in one request: while a person has the site open, a DFA session is kept ready (at most one request every 7 minutes or so, none while nobody visits); shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
-| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 96 a person and 300 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
+| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 288 a person and 300 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
 | Debian and Caddy security updates | Daily | Restart at 04:30 only when an update needs it |
 | Node.js security releases | Weekly, Tuesday 04:10–04:40 | Signature-checked; runs at the next boot if the server was off |
 | HTTPS certificate | Caddy renews it before it expires | |
-| Scans to R2 | Every scan | If R2 cannot be reached, they wait on disk (up to 5,000, about 17 days) and are sent later. What each run saw at the posts abroad goes to `scans-abroad/`, and is not kept for later if R2 is down |
+| Scans to R2 | Every scan that saw a change, as a record of only what changed; a scan that saw nothing new stores nothing ([Data in R2](#data-in-r2)) | If R2 cannot be reached, records wait on disk (up to 5,000) and are sent later; the posts abroad's too, under `scans-abroad/` |
 | Subscriber backup to R2 | Once a day, on the first scan after midnight | |
 | Daily numbers to R2 and by email | Once a day, on the first scan after 07:00 (Manila), for the day before | `stats/v1/`; emailed to `STATS_EMAIL` when set ([Daily numbers](#daily-numbers)) |
 | Valkey to disk | Continuously | Append-only file, flushed every second. Rewritten hourly (`penge-valkey-compact.timer`), which drops deleted and expired data from it: Valkey by itself would wait until the file passed 64 MB |
@@ -304,9 +310,11 @@ systemctl start penge-check                      # scan now
 curl -s https://alphaexperiments.com/pengepassportph/api/status | head -c 400
 ```
 
-**Check every post abroad now** (a sweep, for testing; about 135 requests on their own limiter, so at
-most about once an hour). It is a normal run, under the same lock, with the posts abroad all checked
-whether due or not; the rotation then carries on from there:
+**Check every post abroad now** (a sweep, for testing): about 135 requests on the posts' own limiter,
+which has room for them only when the scheduled runs have used little of the hour, so it may wait. It is a
+normal run, under the same lock, with the posts abroad all checked whether due or not and 12 minutes for
+them instead of 4.5. The scheduled runs are skipped while it lasts, so the scans at home pause as long; the
+rotation then carries on from there:
 
 ```sh
 systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env -E PENGE_ABROAD_SWEEP=1 \
@@ -414,17 +422,67 @@ FROM read_json('r2://pengepassportph/stats/v1/*/stats.json') ORDER BY day;
 
 ## Data in R2
 
-Each scan is one gzipped JSON file, partitioned by UTC date:
-`scans/v1/date=YYYY-MM-DD/<started>_<run id>.json.gz`. The schema is `Scan` in
-`apps/server/src/snapshot.ts`: every office's published days and whether each had room for one person,
-the group-size lookups, whether the run passed its health checks, and why not. With DuckDB:
+Scans are stored as changes (`apps/server/src/record.ts`), partitioned by UTC date:
+`scans/v2/date=YYYY-MM-DD/<started>_<run id>.<full|changes>.json.gz`. A run writes a record only when
+what it saw differs from the last record stored. A run that saw nothing new writes nothing.
+
+- **A `full` record** is the first of each UTC day, and the first after a record that may be missing. It
+  holds every office, so a day can be rebuilt from its own folder.
+- **A `changes` record** holds:
+  - the offices whose observation changed, each in full (when an office was fetched doesn't count);
+  - the offices gone from the list (`removed`);
+  - the run's own fields: health, problems, group lookups;
+  - `after`, the key of the record it follows.
+- **The posts abroad** are stored the same way under `scans-abroad/v2/`. A run checks a dozen posts, so a
+  post it didn't check is unchanged, not removed, unless the list of posts (once read in full) no longer
+  has it. The day's first record carries every post as last seen.
+- **A site's `fetchedAt`** is when what it shows was fetched, which can be an earlier run's: a fetch that
+  found nothing new is not recorded. Each record's `observed` lists the sites its run saw itself; a full
+  record can carry others over as last recorded (posts not checked that run, offices after a list that
+  failed).
+- **What was last recorded** is kept in Redis (`pp:record:<stream>:head` and `…:sites`). Redis moves on
+  first, with the record's key in `pp:record:<stream>:lost` until the record is in R2 or in the spool. A
+  record that could be kept nowhere (R2 and the disk both failing), or whose run stopped before saying it
+  was kept, stays listed there. The next record then holds everything, including what the missing one saw,
+  and names it under `lost`; the rebuild reports it as a gap unless it turns up in R2 after all. So a record
+  only follows one that was kept. A run is listed there from its start, as `…_<run id>.run`, until its record
+  is made (or found not needed): a run that stops before then (after its alerts, say) is named the same way.
+- **The spool** is sent at the end of each run, oldest first by when they ran, for the time left before the
+  next run (30 seconds at most). Past 5,000 records it drops the oldest and notes them as lost, so the next
+  record names them and the rebuild reports the gap.
+- **The posts abroad fill in** from the switch to this layout (30 September 2026): a post is in the picture
+  once a run has checked it, which takes up to an hour for a post that publishes dates or that someone
+  follows, and up to 6 hours for one that publishes none. Each day's full record carries every post
+  checked so far, so the first day that starts 6 hours or more after the switch has them all. A state's
+  `complete` says no record is missing, not that every post is in it.
+
+**The full picture at each record,** a line of JSON each, as the run saw it:
+
+```sh
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs scans 2026-10-01' > 2026-10-01.jsonl
+# records still in the spool are read too
+# … scans 2026-10-01 abroad   for the posts abroad
+```
+
+It says on stderr how many records and states there were. Today's picture is as of when the command ran: a
+record written while it read comes after it, or is named by a later one, which shows as a gap. If a record is missing (a spool that
+filled up in a long outage dropped it), the next one's `after` names it. The command then lists the gap
+and exits 1, and marks the states up to the next full record `"complete": false`. The states come out in the
+order of the server's clock: should it ever be set back, a full record can come out before one made earlier
+(each state still holds what its own run knew).
+
+**The changes themselves** are the events, and DuckDB reads them straight from R2. For example, when
+each office's open dates changed on a day:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 CREATE SECRET r2 (TYPE r2, KEY_ID '…', SECRET '…', ACCOUNT_ID '…');
-SELECT s.name, d.date, count(*) FILTER (WHERE d.available) AS scans_open
-FROM read_json('r2://pengepassportph/scans/v1/*/*.json.gz', hive_partitioning = true) AS scan,
-     unnest(scan.sites) AS t(s), unnest(s.days) AS u(d)
-WHERE scan.healthy
-GROUP BY ALL ORDER BY scans_open DESC LIMIT 20;
+SELECT r.startedAt, s.name, s.openDates
+FROM read_json('r2://pengepassportph/scans/v2/date=2026-10-01/*.json.gz', hive_partitioning = true) AS r,
+     unnest(r.sites) AS t(s)
+WHERE r.healthy
+ORDER BY r.startedAt, s.name;
 ```
+
+Until the change on 30 September 2026 (Manila time), every scan was stored whole, under `scans/v1/` (the
+schema is `Scan` in `apps/server/src/snapshot.ts`) and `scans-abroad/v1/`.

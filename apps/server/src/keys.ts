@@ -18,6 +18,12 @@ export const K = {
   /** Set once a date has been announced, so a date that flickers is announced once. */
   announced: (siteId: number, applicants: number, date: string) => `${P}announced:${siteId}:${applicants}:${date}`,
   sites: `${P}sites`,
+  /** The last scan record stored in R2 for a stream (record.ts): its day, key and run fields. */
+  recordHead: (stream: string) => `${P}record:${stream}:head`,
+  /** Hash: site id → that site's observation as last recorded in R2 (record.ts). */
+  recordSites: (stream: string) => `${P}record:${stream}:sites`,
+  /** Set: keys of records that could be kept nowhere, named in the next record stored (record.ts). */
+  recordLost: (stream: string) => `${P}record:${stream}:lost`,
   status: `${P}status`,
   outbox: `${P}outbox`,
   /** One person's alerts waiting for their next email (signed, like the outbox), and who has any. */

@@ -32,7 +32,7 @@ it with "Unofficial". The plain "PengePassportPH" works too if you'd rather keep
 **Tags.** Google's rule is that a tag's relevance should be obvious to someone who doesn't know the
 app, from its listing or its first screen. Pick only those, even if that's fewer than five.
 
-Full description (1,502 of 4,000 characters). Google requires an app that shows government
+Full description (1,501 of 4,000 characters). Google requires an app that shows government
 information without being run by a government to say so and to name its sources in the description,
 which is why both come first and last:
 
@@ -42,7 +42,7 @@ PengePassportPH is unofficial. It is not run by, affiliated with or endorsed by 
 The DFA releases new passport appointment dates at 12 noon and 9 PM, Monday to Saturday, except holidays. PengePassportPH checks for you and emails you when dates open at the offices you can get to.
 
 What it does
-• Checks all 43 DFA offices in the Philippines every 15 minutes
+• Checks all 43 DFA offices in the Philippines every 5 minutes
 • Checks 133 embassies, consulates and outreach posts in 67 countries: hourly while they publish dates, every 6 hours while they don't
 • Tap an open day to see its hours and how many places are left, live from passport.gov.ph
 • Pick up to 10 offices and get an email when a date opens: at most once an hour, or as soon as a check finds dates
@@ -106,7 +106,7 @@ Five per set meets all of these. Each screenshot has a caption above the screen:
 
 | Screen | Caption |
 | --- | --- |
-| `01-offices` | Every office, soonest date first. *All 43 DFA offices in the Philippines, checked every 15 minutes* |
+| `01-offices` | Every office, soonest date first. *All 43 DFA offices in the Philippines, checked every 5 minutes* |
 | `02-calendar` | Open days at a glance. *Each office's calendar, from the latest check* |
 | `03-hours` | Tap a day for its hours. *Places left each hour, straight from passport.gov.ph* |
 | `04-alert` | An email when dates open. *You choose how often; unsubscribing deletes your address* |

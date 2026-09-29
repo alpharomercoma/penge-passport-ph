@@ -24,7 +24,7 @@ export interface Config {
   mailDailyLimit: number;
   /**
    * Most alert emails one person gets in a day: a safety net that never binds
-   * below their pace (one an hour, 24 a day; or one per check, 96 a day).
+   * below their pace (one an hour, 24 a day; or one per check, 288 a day).
    */
   alertsPerSubscriberPerDay: number;
   /** Who gets the daily numbers by email (stats.ts); without it they only go to R2. */
@@ -130,7 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl,
     mailMode,
     mailDailyLimit: int('MAIL_DAILY_LIMIT', 300, 0, 100_000),
-    alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 96, 1, 200),
+    alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 288, 1, 1000),
     statsEmail,
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',
     spoolDir: env.SPOOL_DIR?.trim() || '/var/lib/penge/spool',

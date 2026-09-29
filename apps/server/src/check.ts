@@ -9,6 +9,7 @@ import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
 import { createMailer } from './mailer.ts';
 import { r2Sink } from './r2.ts';
+import { noteLost } from './record.ts';
 import { createStats } from './stats.ts';
 
 const config = loadConfig();
@@ -38,7 +39,8 @@ try {
     abroad,
     // Every post abroad in this run, due or not (deploy/README.md: a sweep by hand).
     abroadSweep: process.env.PENGE_ABROAD_SWEEP === '1',
-    sink: r2Sink({ ...r2, spoolDir: config.spoolDir, log }),
+    // Records a full spool drops are noted as lost, for the next record to name.
+    sink: r2Sink({ ...r2, spoolDir: config.spoolDir, log, onDropped: (keys) => noteLost(kv, keys) }),
     mailer,
     keys: config.keys,
     log,

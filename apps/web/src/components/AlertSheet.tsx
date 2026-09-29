@@ -259,7 +259,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
               <p className="hint">
                 {pace === 'hourly'
                   ? 'One email with everything new since the last one, at most once an hour.'
-                  : 'One email from each check that finds dates; checks run every 15 minutes.'}{' '}
+                  : 'One email from each check that finds dates; checks run every 5 minutes.'}{' '}
                 Dates that closed in the meantime are left out.
               </p>
               {errors.pace && <p className="error">{errors.pace}</p>}

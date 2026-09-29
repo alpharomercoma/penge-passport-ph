@@ -32,6 +32,7 @@ import {
   ABROAD_GROUP_CAP,
   ABROAD_POSTS_PER_RUN,
   ABROAD_REQUESTS_PER_RUN,
+  ABROAD_SWEEP_DEADLINE_MS,
   type AbroadUpstream,
   CATALOG_STEPS_PER_RUN,
   catalogPosts,
@@ -47,6 +48,7 @@ import type { Logger } from './log.ts';
 import { type Mailer, wasRefused } from './mailer.ts';
 import { elapsed, parseStamp, type Stamp, stampAt, systemUptime, type Uptime } from './clock.ts';
 import type { SnapshotSink } from './r2.ts';
+import { beginRecord, type Recorded, type RecordSink, recordRun, skipRecord } from './record.ts';
 import { reportOncePerDay, type Stats } from './stats.ts';
 import {
   assessHealth,
@@ -107,12 +109,15 @@ const HELD_TTL_SECONDS = 7 * 24 * 3600;
 export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
 /**
  * The least time between two alerts to one person. "hourly" is a full hour:
- * checks start every 15 minutes, so the next email goes at the first check an
+ * checks start every 5 minutes, so the next email goes at the first check an
  * hour or more after the last one. "asap" is one email per check at most (a
  * check emails a person once, whether their dates came from the Philippines or
- * from the posts abroad later in it), with a 5-minute floor between checks.
+ * from the posts abroad later in it), with a 2-minute floor. Checks start 5
+ * minutes apart but email at different points in their run (a scan takes 2 to
+ * 4 minutes), so two checks' emails can come less than 5 minutes apart: the
+ * floor has to be below that, or "asap" would skip every other check.
  */
-export const PACE_SPACING_MS: Record<Pace, number> = { hourly: 60 * 60_000, asap: 5 * 60_000 };
+export const PACE_SPACING_MS: Record<Pace, number> = { hourly: 60 * 60_000, asap: 2 * 60_000 };
 // Last-alert times have no expiry in Redis, which would follow the wall clock:
 // a clock jump could erase one and let an email go early. They go on unsubscribing.
 
@@ -141,11 +146,11 @@ export const RETRY_CAP = 3;
 /**
  * A scan that still has this many offices answering with errors (after the
  * retries), or that the rate limiter paused, makes the next scans wait
- * COOLDOWN_SECONDS: the next run is skipped, so a struggling site is asked
- * every 30 minutes, not every 15.
+ * COOLDOWN_SECONDS: the next two runs are skipped, so a struggling site is
+ * asked every 15 minutes, not every 5.
  */
 export const COOLDOWN_ERRORS = 3;
-export const COOLDOWN_SECONDS = 20 * 60;
+export const COOLDOWN_SECONDS = 10 * 60;
 export const LOCK_TTL_SECONDS = 20 * 60;
 /** More offices than this and the list itself is suspect (there are 43 in 2026). */
 export const MAX_SITES = 150;
@@ -155,6 +160,12 @@ export const MAX_SITES = 150;
  * good list stays.
  */
 export const MIN_KEPT_FRACTION = 0.8;
+/**
+ * How long a run may spend sending the spool, and how far into the run it may
+ * still do so, or upload its own records (after that they go to the spool).
+ */
+export const SPOOL_FLUSH_MS = 30_000;
+export const SPOOL_UNTIL_MS = 4.75 * 60_000;
 /** Offices not reached within this are recorded as skipped (the systemd timeout is 15 min). */
 export const SCAN_BUDGET_MS = 10 * 60_000;
 const MAX_MAIL_ATTEMPTS = 3;
@@ -205,7 +216,8 @@ export interface RunReport {
   skipped: 'locked' | 'cooling down' | null;
   healthy: boolean;
   problems: string[];
-  uploaded: boolean;
+  /** What happened to the run's scan record in R2 (record.ts): null when the run was skipped. */
+  recorded: Recorded | null;
   queued: number;
   delivery: DeliveryReport | null;
   abroad: AbroadReport | null;
@@ -257,11 +269,11 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
 
   if (await kv.get(K.scanCooldown)) {
     log.info('the site had trouble on a recent scan; resting before the next', { runId });
-    return { runId, skipped: 'cooling down', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null, abroad: null };
+    return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null };
   }
   if (!(await kv.set(K.checkLock, runId, { nx: true, ttlSeconds: LOCK_TTL_SECONDS }))) {
     log.warn('another check is running; skipping this one', { runId });
-    return { runId, skipped: 'locked', healthy: false, problems: [], uploaded: false, queued: 0, delivery: null, abroad: null };
+    return { runId, skipped: 'locked', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null };
   }
   try {
     await restartGapsOnNewBoot(deps, deps.stampNow!);
@@ -270,7 +282,9 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       await kv.set(K.checkLock, runId, { ttlSeconds: LOCK_TTL_SECONDS });
     };
     const loadSubscriber = subscriberCache(kv);
-    const scan = await scanAll(deps, runId, now, loadSubscriber, holdLock);
+    // Said missing until its record is made: a run that stops before then is named by the next (record.ts).
+    const begun = await beginRecord(kv, 'scans', runId, new Date(started).toISOString());
+    const { scan, listComplete } = await scanAll(deps, runId, now, loadSubscriber, holdLock);
     deps.stats?.count('runs');
     if (scan.healthy) deps.stats?.count('healthyRuns');
     const siteErrors = scan.sites.filter((s) => !s.ok && !s.error?.startsWith('skipped:')).length;
@@ -280,7 +294,6 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       log.warn('the site struggled; the next scans wait', { runId, siteErrors, paused, seconds: COOLDOWN_SECONDS });
     }
     await holdLock();
-    const uploaded = await deps.sink.put(scan);
     await writeStatus(kv, scan);
     let queued = 0;
     if (scan.healthy) {
@@ -294,14 +307,36 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     let delivery = await deliver(deps, now, emailed);
     // Posts abroad come after the Philippines' alerts are out, so they never delay them.
     let abroad: AbroadReport | null = null;
+    let recordAbroad: ((sink: RecordSink) => Promise<void>) | null = null;
     if (deps.abroad) {
-      abroad = await abroadPass(deps, deps.abroad, scan.runId, now, started + ABROAD_DEADLINE_MS, loadSubscriber, holdLock);
+      // A sweep by hand gets its time from when the posts begin; a scheduled run's posts
+      // stop at a time counted from the run's start, to end before the next run.
+      const deadline = deps.abroadSweep ? now() + ABROAD_SWEEP_DEADLINE_MS : started + ABROAD_DEADLINE_MS;
+      ({ report: abroad, record: recordAbroad } = await abroadPass(deps, deps.abroad, scan.runId, now, deadline, loadSubscriber, holdLock));
       if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now, emailed));
     }
+    // The records come after every alert is out and every post checked, so a slow R2
+    // delays neither. Only what changed since the last record (record.ts); nothing at
+    // all if nothing did. A run that stops before this is named by the next record.
+    // Each upload gets the time left before the next run is due; past that, the record
+    // goes to the spool, and up with a later run's.
+    const sink: RecordSink = { store: (key, body) => deps.sink.store(key, body, Math.max(0, started + SPOOL_UNTIL_MS - now())) };
+    await holdLock();
+    let recorded: Recorded | null = null;
+    try {
+      recorded = await recordRun({ kv, log, sink }, 'scans', scan, { complete: listComplete }, begun);
+    } catch (err) {
+      log.error('the scan record failed', { runId, err: err as Error });
+    }
+    await recordAbroad?.(sink);
+    // Records spooled while R2 was down go up last, whether or not this run stored
+    // one, with the time left before the next run is due (SPOOL_FLUSH_MS at most).
+    const left = started + SPOOL_UNTIL_MS - now();
+    if (left > 0) await deps.sink.flush?.(Math.min(SPOOL_FLUSH_MS, left));
     await backupOncePerDay(deps, now, runId);
     await deps.stats?.settled();
     await reportOncePerDay(deps, now());
-    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, uploaded, queued, delivery, abroad };
+    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, recorded, queued, delivery, abroad };
   } finally {
     if ((await kv.get(K.checkLock)) === runId) await kv.write([{ op: 'del', key: K.checkLock }]);
   }
@@ -350,28 +385,37 @@ async function scanAll(
   now: () => number,
   loadSubscriber: LoadSubscriber,
   holdLock: () => Promise<void>,
-): Promise<Scan> {
+): Promise<{ scan: Scan; listComplete: boolean }> {
   const started = now();
   const startedAt = new Date(started).toISOString();
   const problems: string[] = [];
   let list: Site[] = [];
   let loaded = false;
+  // Whether the office list can be taken as every office there is: an office
+  // missing from it has then been removed (record.ts). Not when it failed to
+  // load, was too long to scan, or came back cut short.
+  let listComplete = true;
   try {
     list = await deps.upstream.sites();
     loaded = true;
   } catch (err) {
     problems.push(`site list: ${message(err)}`);
+    listComplete = false;
   }
   if (list.length > MAX_SITES) {
+    listComplete = false;
     // Scanning them all would blow the request budget; distrust the list instead.
     problems.push(`the site list has ${list.length} offices, more than the ${MAX_SITES} expected`);
     list = [];
   }
+  // A list that loads but lists no office is no more complete than one that failed.
+  if (loaded && list.length === 0) listComplete = false;
   if (loaded && list.length > 0) {
     const known = await deps.kv.get(K.sites);
     const before = known ? (JSON.parse(known) as unknown[]).length : 0;
     if (list.length < before * MIN_KEPT_FRACTION) {
       problems.push(`the site list shrank from ${before} to ${list.length} offices`);
+      listComplete = false;
     }
   }
 
@@ -437,7 +481,7 @@ async function scanAll(
   const health = assessHealth(loaded, sites);
   const healthy = health.healthy && problems.length === 0;
   const groups = healthy && !circuitOpen ? await scanGroups(deps.kv, deps.upstream, sites, loadSubscriber, GROUP_QUERY_CAP) : [];
-  return {
+  const scan: Scan = {
     schema: SCAN_SCHEMA,
     runId,
     startedAt,
@@ -448,6 +492,7 @@ async function scanAll(
     sites,
     groups,
   };
+  return { scan, listComplete: listComplete && loaded };
 }
 
 /**
@@ -461,6 +506,8 @@ async function scanGroups(
   sites: SiteObservation[],
   loadSubscriber: LoadSubscriber,
   cap: number,
+  /** False once the run is out of time: the lookups left are recorded as skipped. */
+  more: () => boolean = () => true,
 ) {
   const groups: GroupObservation[] = [];
   let budget = cap;
@@ -480,6 +527,10 @@ async function scanGroups(
       }
       if (budget-- <= 0) {
         skip(`skipped: more than ${cap} group lookups this run`);
+        continue;
+      }
+      if (!more()) {
+        skip('skipped: the run ran out of time');
         continue;
       }
       try {
@@ -511,10 +562,11 @@ async function abroadPass(
   deadline: number,
   loadSubscriber: LoadSubscriber,
   holdLock: () => Promise<void>,
-): Promise<AbroadReport> {
+): Promise<{ report: AbroadReport; record: (sink: RecordSink) => Promise<void> }> {
   const { kv, log } = deps;
   const more = () => now() < deadline;
   const startedAt = new Date(now()).toISOString();
+  const begun = await beginRecord(kv, 'scans-abroad', runId, startedAt);
   // The list and the posts share ABROAD_REQUESTS_PER_RUN; until the list is first read in full, it takes them all.
   const firstReading = (await kv.get(K.abroadCatalogAt)) === null;
   const catalog = await stepCatalog(kv, upstream, now, more, log, firstReading ? ABROAD_REQUESTS_PER_RUN : CATALOG_STEPS_PER_RUN);
@@ -532,7 +584,7 @@ async function abroadPass(
     const d = describePost(post.name, post.country);
     return { ...o, name: `${d.place} (${d.detail})` };
   });
-  const groups = trusted ? await scanGroups(kv, upstream, sites, loadSubscriber, ABROAD_GROUP_CAP) : [];
+  const groups = trusted ? await scanGroups(kv, upstream, sites, loadSubscriber, ABROAD_GROUP_CAP, more) : [];
   const scan: Scan = {
     schema: SCAN_SCHEMA,
     runId,
@@ -551,15 +603,28 @@ async function abroadPass(
   } else if (observations.length > 0) {
     log.warn('posts abroad: too many failed this run; no alerts from them', { runId, failed, circuitOpen });
   }
-  if (observations.length > 0 && deps.sink.putObject) {
-    const stamp = startedAt.replace(/[:.]/g, '-');
-    // Kept with the posts' own names and places, for analysis.
-    const stored = { ...scan, sites: observations };
-    await deps.sink
-      .putObject(`scans-abroad/v${SCAN_SCHEMA}/date=${startedAt.slice(0, 10)}/${stamp}_${runId}.json.gz`, gzipSync(JSON.stringify(stored)), 'application/gzip')
-      .catch((err: unknown) => log.warn('posts abroad: the record did not reach R2', { runId, err: err as Error }));
-  }
-  return { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems };
+  // Kept with the posts' own names and places, for analysis, once every alert is out (runCheck).
+  const record = async (sink: RecordSink) => {
+    if (observations.length === 0) {
+      // No post was due: nothing is missing. Should this fail, the next record names a run that saw nothing.
+      await skipRecord(kv, 'scans-abroad', begun).catch((err: unknown) => log.warn('posts abroad: could not clear the run\'s mark', { runId, err: err as Error }));
+      return;
+    }
+    // A run checks a dozen posts: the others are unchanged, not gone, unless the
+    // list of posts, once read in full, no longer has them (record.ts).
+    try {
+      // The list of posts says which are gone only once read in full, and not while it is
+      // being read again (steps still planned): part old, part new, it could drop a post.
+      // Nor when it read as empty: as at home, more likely a fault than every post gone.
+      const listRead = (await kv.get(K.abroadCatalogAt)) !== null && (await kv.lLen(K.abroadPlan)) === 0;
+      const known = listRead ? (await catalogPosts(kv)).map((p) => p.id) : [];
+      await recordRun({ kv, log, sink }, 'scans-abroad', { ...scan, sites: observations }, known.length > 0 ? { complete: false, known } : { complete: false }, begun);
+    } catch (err) {
+      // The alerts stand, and the next record names this one (record.ts).
+      log.warn('posts abroad: the record failed', { runId, err: err as Error });
+    }
+  };
+  return { report: { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems }, record };
 }
 
 function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {

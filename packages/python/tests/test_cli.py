@@ -23,12 +23,12 @@ def site(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clock: FakeClock) -> F
 def test_help_and_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["--help"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("PengePassportPH 0.1.1: penge ng slot? Tingnan muna natin.\n")
+    assert out.startswith("PengePassportPH 0.2.0: penge ng slot? Tingnan muna natin.\n")
     assert "  penge <command> [options]    (short alias)" in out
     assert cli.main(["-v"]) == 0
-    assert capsys.readouterr().out == "0.1.1\n"
+    assert capsys.readouterr().out == "0.2.0\n"
     assert cli.main([]) == 2  # no command: a usage error, help on stderr
-    assert capsys.readouterr().err.startswith("PengePassportPH 0.1.1")
+    assert capsys.readouterr().err.startswith("PengePassportPH 0.2.0")
 
 
 def test_help_text_matches_the_node_cli() -> None:
@@ -36,7 +36,7 @@ def test_help_text_matches_the_node_cli() -> None:
     body = ts.split("const HELP = `", 1)[1].split("`;", 1)[0]
     rendered = (
         body.replace("${DISPLAY_NAME}", "PengePassportPH")
-        .replace("${VERSION}", "0.1.1")
+        .replace("${VERSION}", "0.2.0")
         .replace("${NAME}", "penge-passport-ph")
         .replace("${CLI_ALIAS}", "penge")
         .replace("${HOMEPAGE}", "https://alphaexperiments.com/pengepassportph/")

@@ -6,6 +6,8 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
 
 - `warmSession()` (`warm_session()` in Python) opens a session ahead of time when there is none or it would
@@ -17,6 +19,9 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 - An empty answer for a day's hours from a token that worked in the last 2 minutes is taken as "no schedule
   yet" and returned as `[]`, instead of opening a new session and asking again: that cost two more requests
   and two waits for nothing. An older token still gets the second chance.
+- The READMEs say how the website built on this package now runs: it checks every office in the
+  Philippines every 5 minutes (the posts abroad still about hourly), and stores in Cloudflare R2 only what
+  changed since its last scan, after each day's first record, which holds everything.
 
 ## [0.1.1] - 2026-09-27
 
@@ -51,6 +56,7 @@ First release, on npm and PyPI.
 - A canary workflow that scrapes one real record (through both packages) and walks the booking UI
   every 6 hours, and opens an issue when the site changes.
 
-[Unreleased]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/alpharomercoma/penge-passport-ph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpharomercoma/penge-passport-ph/releases/tag/v0.1.0

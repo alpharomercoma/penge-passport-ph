@@ -285,7 +285,7 @@ scene(bar(6), bar(9), 'light', (r) => {
   const h = line(r, 'Every DFA office.', 'h1', 140, 250, 120);
   const h2 = line(r, 'One list.', 'h1', 140, 370, 120);
   const s1 = el('div', 'stat abs', r, '<b>0</b><span>offices, all in one place</span>');
-  const s2 = el('div', 'stat abs', r, '<b>15<small style="font-size:60px;letter-spacing:-0.02em"> min</small></b><span>between checks</span>');
+  const s2 = el('div', 'stat abs', r, '<b>5<small style="font-size:60px;letter-spacing:-0.02em"> min</small></b><span>between checks</span>');
   const chips = ['NCR', 'Luzon', 'Visayas', 'Mindanao'].map((w) => el('div', 'chip line abs', r, w));
   const ph = phone(r); screenImg(ph, 'ph-full');
   return { kick, h, h2, s1, s2, chips, ph };
@@ -531,7 +531,7 @@ scene(bar(21), bar(22), 'dark', (r) => {
   let out = `<span class="p">$</span> ${cmd1.slice(0, n1)}`;
   if (t > t0 + 0.75) out += `\n<span class="o">added 1 package, and audited 2 packages in 954ms</span>`;
   if (t > t0 + 0.9) out += `\n<span class="p">$</span> ${cmd2.slice(0, n2)}`;
-  if (t > t0 + 1.62) out += `\n<span class="o">Successfully installed penge-passport-ph-0.1.1</span>`;
+  if (t > t0 + 1.62) out += `\n<span class="o">Successfully installed penge-passport-ph-0.2.0</span>`;
   c.term.querySelector('pre').innerHTML = out;
 });
 

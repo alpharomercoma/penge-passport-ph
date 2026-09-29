@@ -1,6 +1,6 @@
 {
   "name": "penge-passport-ph",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Read-only, rate-limited checker for DFA Philippine passport appointment availability on passport.gov.ph. Library and CLI.",
   "keywords": [
     "philippines",

@@ -52,7 +52,7 @@ const UNOFFICIAL = `${DISPLAY_NAME} is a free, unofficial service, not run by or
 /** How often a person hears from us, in their words. */
 export const PACE_PROMISE: Record<Pace, string> = {
   hourly: 'at most once an hour, with everything new since the last email',
-  asap: 'as soon as a check finds dates (one email per check; checks run every 15 minutes), with everything new since the last email',
+  asap: 'as soon as a check finds dates (one email per check; checks run every 5 minutes), with everything new since the last email',
 };
 
 export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[]; applicants: number; pace: Pace }): Rendered {

@@ -7,6 +7,7 @@ export type WriteOp =
   | { op: 'set'; key: string; value: string; ttlSeconds?: number }
   | { op: 'del'; key: string }
   | { op: 'hSet'; key: string; fields: Record<string, string> }
+  | { op: 'hDel'; key: string; fields: string[] }
   | { op: 'sAdd'; key: string; members: string[] }
   | { op: 'sRem'; key: string; members: string[] }
   | { op: 'rPush'; key: string; values: string[] }
@@ -87,7 +88,10 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
             multi.del(op.key);
             break;
           case 'hSet':
-            multi.hSet(op.key, op.fields);
+            if (Object.keys(op.fields).length) multi.hSet(op.key, op.fields);
+            break;
+          case 'hDel':
+            if (op.fields.length) multi.hDel(op.key, op.fields);
             break;
           case 'sAdd':
             if (op.members.length) multi.sAdd(op.key, op.members);
@@ -249,8 +253,15 @@ export class MemoryKv implements Kv {
           this.data.delete(op.key);
           break;
         case 'hSet': {
+          if (Object.keys(op.fields).length === 0) break;
           const map = this.typed(op.key, () => new Map<string, string>(), (v) => v instanceof Map);
           for (const [k, v] of Object.entries(op.fields)) map.set(k, v);
+          break;
+        }
+        case 'hDel': {
+          const entry = this.entry(op.key);
+          if (entry?.value instanceof Map) for (const f of op.fields) entry.value.delete(f);
+          this.tidy(op.key);
           break;
         }
         case 'sAdd': {

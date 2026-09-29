@@ -6,7 +6,7 @@ DISPLAY_NAME = "PengePassportPH"
 NAME = "penge-passport-ph"
 #: Short CLI command installed alongside NAME.
 CLI_ALIAS = "penge"
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 #: A live page about the project: shown in the CLI help and the User-Agent.
 HOMEPAGE = "https://alphaexperiments.com/pengepassportph/"
 #: Source, issues and changelog. It must exist before a release is published.

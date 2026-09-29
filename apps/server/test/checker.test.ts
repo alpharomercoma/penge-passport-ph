@@ -2,11 +2,12 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { gunzipSync } from 'node:zlib';
 import { exportSubscribers, importSubscribers } from '../src/backup.ts';
-import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, PACE_SPACING_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob } from '../src/checker.ts';
+import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECONDS, deliver, MAX_SITES, MIN_KEPT_FRACTION, openJob, OUTBOX_MAX_AGE_MS, PACE_SPACING_MS, RETRY_CAP, runCheck, SCAN_BUDGET_MS, sealJob, SPOOL_UNTIL_MS } from '../src/checker.ts';
 import type { Pace } from '@penge/contracts';
 import { parseStamp } from '../src/clock.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
+import { rebuild } from '../src/record.ts';
 import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
 import { signUnsubscribe } from '../src/crypto.ts';
 import { formatDate } from '../src/templates.ts';
@@ -71,7 +72,7 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
 
     const first = await w.run();
-    expect(first).toMatchObject({ healthy: true, queued: 0, uploaded: true });
+    expect(first).toMatchObject({ healthy: true, queued: 0, recorded: 'uploaded' });
     expect(w.mailer.sent).toHaveLength(0);
     expect(w.sink.scans[0]!.sites).toHaveLength(5);
     const status = JSON.parse((await w.kv.get(K.status))!);
@@ -93,6 +94,80 @@ describe('checker', () => {
 
     // Nothing new: nothing sent.
     expect((await w.run()).queued).toBe(0);
+  });
+
+  it('sends the alerts before storing the record, so a slow R2 never holds them up', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-07']);
+    const store = w.sink.store.bind(w.sink);
+    const sentBefore: number[] = [];
+    w.sink.store = async (key, body) => {
+      if (key.startsWith('scans/')) sentBefore.push(w.mailer.sent.length);
+      return store(key, body);
+    };
+    await w.run();
+    expect(sentBefore).toEqual([1]);
+  });
+
+  it('names a run that stopped after its alerts went out, before its record', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-07']);
+    const send = w.mailer.send.bind(w.mailer);
+    w.mailer.send = async (mail) => {
+      const result = await send(mail);
+      // Another run took the lock: this one stops at its next look at it.
+      await w.kv.write([{ op: 'del', key: K.checkLock }]);
+      return result;
+    };
+    await expect(w.run()).rejects.toThrow(/lost the checker lock/);
+    w.mailer.send = send;
+    w.t.advance(10 * 60_000);
+    expect(w.mailer.sent).toHaveLength(1);
+    // The date is gone again before the next run: only the run that stopped saw it.
+    w.upstream.open.set('486', []);
+    await w.run();
+    const records = w.sink.recordsOf('scans');
+    expect(records.at(-1)!.record).toMatchObject({ kind: 'full', lost: [expect.stringMatching(/_run2\.run$/)] });
+    expect(rebuild(records).gaps).toHaveLength(1);
+  });
+
+  it('still sends the alerts, and names the run, when its record fails in Redis', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-07']);
+    const write = w.kv.write.bind(w.kv);
+    w.kv.write = async (ops) => {
+      if (ops.some((op) => op.key === K.recordHead('scans'))) throw new Error('redis blinked');
+      return write(ops);
+    };
+    const report = await w.run();
+    w.kv.write = write;
+    expect(report).toMatchObject({ recorded: null, delivery: { sent: 1 } });
+    await w.run();
+    expect(w.sink.recordsOf('scans').at(-1)!.record).toMatchObject({ kind: 'full', lost: [expect.stringMatching(/_run2\.run$/)] });
+  });
+
+  it('gives each record upload only the time left before the next run is due', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486]);
+    await w.run();
+    expect(w.sink.storeTimeouts[0]).toBeGreaterThan(0);
+    expect(w.sink.storeTimeouts[0]).toBeLessThanOrEqual(SPOOL_UNTIL_MS);
+    w.upstream.open.set('486', ['2026-10-07']);
+    const send = w.mailer.send.bind(w.mailer);
+    w.mailer.send = async (mail) => {
+      // The emails take the run to its time.
+      w.t.advance(SPOOL_UNTIL_MS);
+      return send(mail);
+    };
+    await w.run();
+    expect(w.sink.storeTimeouts).toHaveLength(2);
+    expect(w.sink.storeTimeouts[1]).toBe(0);
   });
 
   it('sends nothing and keeps every baseline when the scan is unhealthy', async () => {
@@ -481,6 +556,34 @@ describe('checker, found by adversarial review', () => {
     expect((await runCheck({ ...w.deps, runId: 'next' })).skipped).toBeNull();
   });
 
+  it('sends what waits in the spool on every run, even one with nothing new to store', async () => {
+    const w = await world();
+    await w.run();
+    expect((await w.run()).recorded).toBe('unchanged');
+    expect(w.sink.flushes).toBe(2);
+  });
+
+  it('records no office as removed from a list it distrusts', async () => {
+    const w = await world();
+    await w.run();
+    const full = w.upstream.sitesList;
+    w.upstream.sitesList = full.slice(0, 2); // cut short: fewer than MIN_KEPT_FRACTION of the last good list
+    await w.run();
+    const records = w.sink.recordsOf('scans');
+    expect(records).toHaveLength(2);
+    expect(records[1]!.record).toMatchObject({ kind: 'changes', healthy: false, removed: [] });
+    // Rebuilt, every office is still there: the list was cut short, not the offices closed.
+    expect(w.sink.scans.at(-1)!.sites.map((s) => s.id).sort((a, b) => a - b)).toEqual(full.map((s) => s.id).sort((a, b) => a - b));
+  });
+
+  it('records no office as removed from an office list that came back empty', async () => {
+    const w = await world();
+    await w.run();
+    w.upstream.sitesList = [];
+    await w.run();
+    expect(w.sink.recordsOf('scans')[1]!.record).toMatchObject({ kind: 'changes', healthy: false, removed: [] });
+  });
+
   it('distrusts an office list cut short, and keeps the last good one', async () => {
     const w = await world();
     await w.run();
@@ -675,13 +778,28 @@ describe('pace', () => {
     w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
     await w.run();
     expect(w.mailer.sent).toHaveLength(2);
-    expect(PACE_SPACING_MS.asap).toBeLessThan(15 * 60_000); // checks start every 15 minutes
+    expect(PACE_SPACING_MS.asap).toBeLessThan(5 * 60_000); // checks start every 5 minutes
 
     // More in the same run (the posts abroad come minutes after): it joins the next email.
     w.t.advance(-10 * 60_000); // back to the moment of the last email
     const job = { id: 'x', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
     expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
+  });
+
+  it('emails an "asap" subscriber from consecutive checks whose emails come less than 5 minutes apart', async () => {
+    // Checks start 5 minutes apart, but a scan takes 2 to 4 minutes: one check can
+    // email 4 minutes into its run and the next 2 minutes into its own, 3 apart.
+    const w = await world();
+    await w.subscribe('ana@example.com', [486], 1, 'asap');
+    await runCheck({ ...w.deps, runId: 'baseline' });
+    w.upstream.open.set('486', ['2026-10-05']);
+    w.t.advance(5 * 60_000);
+    await runCheck({ ...w.deps, runId: 'late-in-its-run' });
+    w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
+    w.t.advance(3 * 60_000);
+    await runCheck({ ...w.deps, runId: 'early-in-its-run' });
+    expect(w.mailer.sent).toHaveLength(2);
   });
 
   it('drops a held alert that was altered, and forgets what waited on unsubscribing', async () => {

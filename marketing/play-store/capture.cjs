@@ -79,7 +79,7 @@ function framed(png, canvas, title, sub) {
   const posts = abroad.posts.length;
   const countries = new Set(abroad.posts.map((p) => p.country)).size;
   const CAPTIONS = {
-    '01-offices': ['Every office, soonest date first', `All ${offices} DFA offices in the Philippines, checked every 15 minutes`],
+    '01-offices': ['Every office, soonest date first', `All ${offices} DFA offices in the Philippines, checked every 5 minutes`],
     '02-calendar': ['Open days at a glance', "Each office's calendar, from the latest check"],
     '03-hours': ['Tap a day for its hours', 'Places left each hour, straight from passport.gov.ph'],
     // No "free" or other price words on the pictures: Google's rule for screenshots and graphics.
