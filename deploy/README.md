@@ -49,8 +49,9 @@ guardrails:
 4. The first look at anything is a baseline, never an alert.
 5. A date is announced at most once every 3 hours, however often it flickers (held slots are released
    after 30 minutes).
-6. Pace: at most one alert an hour per person, or one per check (every 15 minutes) if they chose "as soon
-   as a check finds dates". What comes in between waits (`pp:held:*`, signed like the outbox) and joins
+6. Pace ([why, and what the reviews found](../docs/alert-timing.md)): at most one alert an hour per
+   person, or one per check (every 15 minutes) if they chose "as soon as a check finds dates". What
+   comes in between waits (`pp:held:*`, signed like the outbox) and joins
    their next email. The gap, the 3-hour life of a waiting date and the 3-hour announcement window are
    measured on the kernel's uptime clock (`apps/server/src/clock.ts`), so a wall-clock step (NTP, a
    restored snapshot) can neither shorten nor stretch them. Across a reboot, or a move of the data to

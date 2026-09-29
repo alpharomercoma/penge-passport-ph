@@ -259,6 +259,7 @@ The canary has its own `PENGE_PASSPORT_PH_*` variables, listed in [docs/canary.m
 ## Documentation
 
 - [How it works](docs/how-it-works.md): the endpoints, the session, the site's quirks and the limiter design.
+- [Alert timing](docs/alert-timing.md): when alerts go out, how time is measured, and what the reviews found.
 - [Canary runbook](docs/canary.md): what each check means and how to respond when one fails.
 - [Website runbook](deploy/README.md): how the alerts website runs, deploys, sends mail and stores scans.
 - [Law and responsible use](docs/legal/README.md): the DFA's rules, Philippine law, and why the limits are what they are.
