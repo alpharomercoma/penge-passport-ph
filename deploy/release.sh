@@ -34,6 +34,12 @@ ship() {
   id=$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | head -1)
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || { echo "no release found in $dir" >&2; exit 2; }
   chmod -R u=rwX,go=rX "$dir/$id" # CI artifacts do not keep permissions
+  # Without any of these the site or the Android app breaks. (CI moves the release
+  # between jobs as an artifact, which leaves hidden files out unless told not to.)
+  local need
+  for need in web/index.html web/sw.js web/manifest.webmanifest web/.well-known/assetlinks.json server/server.mjs server/check.mjs; do
+    [[ -f "$dir/$id/$need" ]] || { echo "the release has no $need" >&2; exit 2; }
+  done
   # A plain gzipped tar over SSH works the same from macOS and Linux (no rsync
   # flavours involved); the server's gate hands it to penge-receive.
   COPYFILE_DISABLE=1 tar --no-xattrs -C "$dir/$id" -cz . | $SSH "$host" penge-receive "$id"

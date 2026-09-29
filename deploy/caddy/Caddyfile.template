@@ -41,6 +41,9 @@ __PATH_ALIASES__
 			header @assets Cache-Control "public, max-age=31536000, immutable"
 			@pages not path /assets/*
 			header @pages Cache-Control "no-cache"
+			# Caddy knows no type for it, and would send none (or text/plain, compressed).
+			@manifest path *.webmanifest
+			header @manifest Content-Type application/manifest+json
 			try_files {path} /index.html
 			file_server
 		}

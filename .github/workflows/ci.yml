@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - run: shellcheck -x deploy/*.sh deploy/mail/*.sh
+      - run: shellcheck -x deploy/*.sh deploy/mail/*.sh android/*.sh
 
   python:
     name: Python ${{ matrix.python }}
