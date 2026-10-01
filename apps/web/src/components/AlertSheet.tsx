@@ -1,5 +1,6 @@
 import { type Field, LIMITS, PACE_LABELS, PACES, type Pace, validateSubscribe } from '@penge/contracts';
-import { type FormEvent, type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { type Api, ApiFailure, errorText } from '../api.ts';
 import { AREAS } from '../areas.ts';
 import { matches, type Office, PARTY_SIZES, partyLabel } from '../office.ts';
@@ -24,6 +25,8 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([t
 export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSelectedChange, onClose }: Props) {
   const id = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const emailRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState('');
   const [applicants, setApplicants] = useState(initialApplicants);
@@ -51,12 +54,50 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
 
   // Focus moves into the sheet, the page behind stops scrolling, and focus goes back on close.
   useEffect(() => {
+    const sheet = sheetRef.current!;
     const opener = document.activeElement as HTMLElement | null;
     const first = sheetRef.current?.querySelector<HTMLElement>(picking ? 'input[type="search"]' : 'input[type="email"]');
     first?.focus();
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    // The sheet lives inside main: disable siblings at each ancestor level,
+    // including the header/footer, without disabling the sheet itself.
+    const background: { element: HTMLElement; inert: boolean }[] = [];
+    for (let branch: HTMLElement | null = sheet.parentElement; branch?.parentElement; branch = branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (sibling !== branch && sibling instanceof HTMLElement) {
+          background.push({ element: sibling, inert: sibling.inert });
+          sibling.inert = true;
+        }
+      }
+      if (branch.parentElement === document.body) break;
+    }
+    const items = () => [...sheet.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.closest('[hidden]'));
+    const keepFocus = (event: FocusEvent) => {
+      if (!sheet.contains(event.target as Node)) (items()[0] ?? sheet).focus();
+    };
+    const keys = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRef.current();
+      } else if (event.key === 'Tab') {
+        const focusable = items();
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        const active = document.activeElement;
+        if (!sheet.contains(active) || active === sheet || (event.shiftKey && active === first) || (!event.shiftKey && active === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+      }
+    };
+    document.addEventListener('focusin', keepFocus);
+    document.addEventListener('keydown', keys, true);
     return () => {
+      document.removeEventListener('focusin', keepFocus);
+      document.removeEventListener('keydown', keys, true);
+      for (const { element, inert } of background) element.inert = inert;
       document.body.style.overflow = overflow;
       opener?.focus?.();
     };
@@ -64,25 +105,10 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      onClose();
-      return;
-    }
-    if (e.key !== 'Tab' || !sheetRef.current) return;
-    const items = [...sheetRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.closest('[hidden]'));
-    if (items.length === 0) return;
-    const first = items[0]!;
-    const last = items.at(-1)!;
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
+  useEffect(() => {
+    const selector = sent ? '.sheet-done button' : picking ? 'input[type="search"]' : 'input[type="email"]';
+    sheetRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [picking, sent]);
 
   function toggle(officeId: number) {
     if (selected.includes(officeId)) {
@@ -117,9 +143,9 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
     }
   }
 
-  return (
+  return createPortal(
     <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={sheetRef} className="sheet" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={onKeyDown}>
+      <div ref={sheetRef} className="sheet" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} tabIndex={-1}>
         <div className="sheet-head">
           <h2 id={`${id}-title`}>{sent ? 'Check your email' : 'Email me when dates open'}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
@@ -285,6 +311,7 @@ export function AlertSheet({ api, offices, selected, initialApplicants = 1, onSe
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

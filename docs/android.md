@@ -222,3 +222,13 @@ The first release, in order:
 
 **Later updates.** Most changes need no update: they are website changes, and they deploy as usual. For
 the app itself, raise `appVersionCode`, build, and upload the new `.aab` to the same track.
+
+## Verify production inputs
+
+Before submitting production, run:
+
+```sh
+node android/check-play-release.mjs --play-sha256 '<Play app signing certificate SHA-256>' --support-email '<monitored public support address>'
+```
+
+Use the **App signing key certificate**, not the upload certificate. The check only reads the live site and local settings. Missing inputs or a certificate absent from the live asset links fail it. Verify the actual Play-installed app and pre-launch report afterward: a successful sideload does not prove Play signing or physical-device behaviour. For the optional account/data deletion URL in Console, use `https://alphaexperiments.com/pengepassportph/delete-data`; it works without a previous alert.

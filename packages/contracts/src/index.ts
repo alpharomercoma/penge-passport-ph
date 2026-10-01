@@ -380,6 +380,8 @@ export interface OfficeDates {
   windowEnd: string | null;
   /** When the DFA was asked. */
   checkedAt: string;
+  /** A refresh failed; checkedAt still belongs to the saved observation. */
+  warning?: string;
 }
 
 /** One hour on one day, as the DFA shows it. `remaining` is given for some hours only ("Available Slots: 20"). */
@@ -396,6 +398,7 @@ export interface OfficeTimes {
   applicants: number;
   slots: HourSlot[];
   checkedAt: string;
+  warning?: string;
 }
 
 const isHHMM = (v: unknown): v is string => typeof v === 'string' && /^\d{2}:\d{2}$/.test(v);
@@ -414,7 +417,8 @@ export function isOfficeDates(v: unknown): v is OfficeDates {
     v.fullDates.length <= 1000 &&
     v.fullDates.every(isDate) &&
     (v.windowEnd === null || isDate(v.windowEnd)) &&
-    isIso(v.checkedAt)
+    isIso(v.checkedAt) &&
+    (v.warning === undefined || (typeof v.warning === 'string' && v.warning.length > 0 && v.warning.length <= 300))
   );
 }
 
@@ -425,6 +429,7 @@ export function isOfficeTimes(v: unknown): v is OfficeTimes {
     isDate(v.date) &&
     isApplicants(v.applicants) &&
     isIso(v.checkedAt) &&
+    (v.warning === undefined || (typeof v.warning === 'string' && v.warning.length > 0 && v.warning.length <= 300)) &&
     Array.isArray(v.slots) &&
     v.slots.length <= 48 &&
     v.slots.every(

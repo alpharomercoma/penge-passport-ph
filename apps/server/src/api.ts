@@ -9,6 +9,7 @@ import {
   isToken,
   isUnsubscribeToken,
   LIMITS,
+  normalizeEmail,
   type OfficeDates,
   type SiteStatus,
   type SiteSummary,
@@ -29,8 +30,8 @@ import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
 import { type Count, isPerson, type Stats } from './stats.ts';
-import { confirm, createPending, type Keys, unsubscribe } from './subscribers.ts';
-import { confirmationEmail } from './templates.ts';
+import { confirm, createDeletion, createPending, deleteWithToken, type Keys, unsubscribe } from './subscribers.ts';
+import { confirmationEmail, deletionEmail } from './templates.ts';
 
 export interface ApiDeps {
   kv: Kv;
@@ -49,6 +50,7 @@ export interface ApiDeps {
 
 export const SUBSCRIBE_MESSAGE =
   'Check your inbox for a confirmation link. It can take a few minutes; look in spam too. The alerts start once you confirm.';
+export const DELETION_MESSAGE = 'Check your inbox for a link to stop alerts and delete your address. It can take a few minutes; look in spam too. Nothing changes until you press the button in the link.';
 
 const LOOPBACK = /^(?:127\.|::1$|::ffff:127\.)/;
 const SITES_CACHE_MS = 60_000;
@@ -209,6 +211,7 @@ export function createApi(deps: ApiDeps) {
         fullDates: office.site.fullDates ?? [],
         windowEnd: office.site.windowEnd ?? null,
         checkedAt: office.checkedAt,
+        ...(!office.site.ok ? { warning: 'The latest scan could not verify this office. Showing its last known dates.' } : {}),
       };
       if (!deps.lookups) return c.json(scan);
       const newer = (other: OfficeDates | null) => (other && other.checkedAt >= scan.checkedAt ? other : scan);
@@ -218,7 +221,7 @@ export function createApi(deps: ApiDeps) {
       try {
         return c.json(newer(await deps.lookups.dates(office.site.id, 1)));
       } catch (err) {
-        if (err instanceof LookupUnavailable) return office.never ? lookupFailed(c, err) : c.json(scan);
+        if (err instanceof LookupUnavailable) return office.never ? lookupFailed(c, err) : c.json({ ...scan, warning: err.message });
         throw err;
       }
     }
@@ -295,6 +298,7 @@ export function createApi(deps: ApiDeps) {
     const chosen = list.filter((s) => request.siteIds.includes(s.id));
     const content = confirmationEmail({
       confirmUrl: `${deps.publicBaseUrl}/confirm#token=${token}`,
+      deletionUrl: `${deps.publicBaseUrl}/delete-data`,
       sites: chosen,
       applicants: request.applicants,
       pace: request.pace,
@@ -321,6 +325,43 @@ export function createApi(deps: ApiDeps) {
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
     return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace });
+  });
+
+  app.post('/api/deletion-request', async (c) => {
+    if (mailer.mode !== 'live') return fail(c, 503, 'Email links are not switched on yet. Try again soon.');
+    if (await kv.get(K.mailPaused)) return fail(c, 503, 'Email is paused for maintenance. Try again later.');
+    if (await limited(c, API_LIMITS.subscribePerIp)) return fail(c, 429, TOO_MANY);
+    const parsed = await jsonBody(c);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.body as { email?: unknown; website?: unknown } | null;
+    const email = normalizeEmail(body?.email);
+    if (!email) return fail(c, 400, 'Enter a valid email address, like juan@example.com.', { email: 'Enter a valid email address, like juan@example.com.' });
+    const accepted = () => c.json({ message: DELETION_MESSAGE }, 202);
+    if (body?.website) return accepted();
+    // Share the confirmation limits: requesting deletion cannot double what
+    // either public form can send to an address or in an hour.
+    if (!(await hit(kv, API_LIMITS.confirmationsPerEmail, emailIndex(email, keys.index), now()))) return accepted();
+    if (!(await hit(kv, API_LIMITS.confirmationsPerHour, 'all', now()))) return fail(c, 503, 'We are sending a lot of emails right now. Try again in an hour.');
+    const token = await createDeletion(kv, keys, email);
+    try {
+      await mailer.send({ ...deletionEmail({ deletionUrl: `${deps.publicBaseUrl}/delete-data#token=${token}` }), to: email, kind: 'deletion' });
+    } catch (err) {
+      log.error('deletion email failed', { err: err as Error });
+      return fail(c, 503, 'We could not send the deletion link. Try again later.');
+    }
+    return accepted();
+  });
+
+  app.post('/api/delete-data', async (c) => {
+    if (await limited(c, API_LIMITS.tokenPerIp)) return fail(c, 429, TOO_MANY);
+    const parsed = await jsonBody(c);
+    if (!parsed.ok) return parsed.res;
+    const token = (parsed.body as { token?: unknown } | null)?.token;
+    if (!isToken(token)) return fail(c, 400, 'That deletion link is not valid. Request a new link.');
+    const result = await deleteWithToken(kv, token);
+    if (!result.valid) return fail(c, 404, 'That deletion link has expired or was already used. Request a new link.');
+    if (result.removed) deps.stats?.count('unsubscribed');
+    return c.json({ ok: true });
   });
 
   // Some mail apps open the List-Unsubscribe link instead of POSTing to it:

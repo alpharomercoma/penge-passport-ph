@@ -24,7 +24,11 @@ interface Props {
   onAlert: (officeId: number) => void;
 }
 
-type Load<T> = { state: 'idle' } | { state: 'loading' } | { state: 'ready'; data: T } | { state: 'error'; message: string };
+type Load<T> = { state: 'idle'; data?: undefined } | { state: 'loading'; data?: T | undefined } | { state: 'ready'; data: T } | { state: 'error'; message: string; data?: T | undefined };
+
+// Shared server lookups are fresh for three minutes. Polling at that cadence
+// keeps a page left open current without spending the upstream budget faster.
+const REFRESH_MS = 180_000;
 
 const smooth = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
 
@@ -39,6 +43,7 @@ export function OfficeView(props: Props) {
   // The hours of a picked day are brought into view, so a tap never needs a scroll to see its answer.
   const [reveal, setReveal] = useState(initialDate !== null);
   const timesRef = useRef<HTMLElement>(null);
+  const [retry, setRetry] = useState(0);
 
   // The dates are asked for when the office opens (and for each group size).
   // For one person the server answers from a recent scan, asking the DFA only
@@ -46,25 +51,48 @@ export function OfficeView(props: Props) {
   // with its time.
   useEffect(() => {
     let live = true;
-    setFresh({ state: 'loading' });
-    api.officeDates(office.id, applicants).then(
-      (data) => live && setFresh({ state: 'ready', data }),
-      (err: unknown) => live && setFresh({ state: 'error', message: errorText(err) }),
-    );
+    let busy = false;
+    const refresh = async () => {
+      if (busy || document.visibilityState === 'hidden') return;
+      busy = true;
+      setFresh((prev) => ({ state: 'loading', data: prev.data?.applicants === applicants ? prev.data : undefined }));
+      try {
+        const data = await api.officeDates(office.id, applicants);
+        if (live) setFresh({ state: 'ready', data });
+      } catch (err) {
+        if (live) setFresh((prev) => ({ state: 'error', message: errorText(err), data: prev.data }));
+      } finally {
+        busy = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       live = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
-  }, [api, office.id, applicants]);
+  }, [api, office.id, office.checkedAt, applicants, retry]);
 
+  const snapshotAt = office.checkedAt ?? lastCheck;
+  const freshData = fresh.data?.applicants === applicants ? fresh.data : undefined;
+  const useSnapshot = applicants === 1 && office.ok && snapshotAt && (!freshData || snapshotAt > freshData.checkedAt);
   const dates =
-    fresh.state === 'ready'
-      ? { open: fresh.data.openDates, full: fresh.data.fullDates, windowEnd: fresh.data.windowEnd, at: fresh.data.checkedAt }
+    freshData && !useSnapshot
+      ? { open: freshData.openDates, full: freshData.fullDates, windowEnd: freshData.windowEnd, at: freshData.checkedAt }
       : applicants === 1
         ? { open: office.openDates, full: office.fullDates, windowEnd: office.windowEnd, at: office.checkedAt ?? lastCheck }
         : null;
-  const listed = useMemo(() => (dates?.open ?? []).filter((d) => d >= today), [dates, today]);
+  const listed = useMemo(() => (dates?.open ?? []).filter((d) => d >= today && (
+    applicants === 1 || !office.ok || !snapshotAt || !dates?.at || snapshotAt <= dates.at || office.openDates.includes(d)
+  )), [dates, today, applicants, office.ok, office.openDates, snapshotAt]);
   const open = useMemo(() => listed.filter((d) => !takenSince.has(`${applicants}:${d}`)), [listed, takenSince, applicants]);
   const seenAt = dates?.at ?? null;
+  const closureAt = picked && office.ok && snapshotAt && (!dates?.at || snapshotAt > dates.at) && !office.openDates.includes(picked) ? snapshotAt : seenAt;
+  const warning = fresh.state === 'error' ? fresh.message : !useSnapshot ? freshData?.warning : undefined;
 
   // A picked date must have been open for the current group size (it stays picked
   // after its live hours show it full, so the explanation stays on screen).
@@ -76,19 +104,36 @@ export function OfficeView(props: Props) {
       return;
     }
     let live = true;
-    setTimes({ state: 'loading' });
-    api.officeTimes(office.id, date, applicants).then(
-      (data) => {
+    let busy = false;
+    const refresh = async () => {
+      if (busy || document.visibilityState === 'hidden') return;
+      busy = true;
+      setTimes({ state: 'loading' });
+      try {
+        const data = await api.officeTimes(office.id, date, applicants);
         if (!live) return;
         setTimes({ state: 'ready', data });
-        if (!data.slots.some((s) => s.available)) setTakenSince((prev) => new Set([...prev, `${applicants}:${date}`]));
-      },
-      (err: unknown) => live && setTimes({ state: 'error', message: errorText(err) }),
-    );
+        setTakenSince((prev) => {
+          const next = new Set(prev);
+          if (data.slots.some((s) => s.available)) next.delete(`${applicants}:${date}`);
+          else next.add(`${applicants}:${date}`);
+          return next;
+        });
+      } catch (err) {
+        if (live) setTimes({ state: 'error', message: errorText(err) });
+      } finally { busy = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       live = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
-  }, [api, office.id, date, applicants]);
+  }, [api, office.id, date, applicants, retry]);
 
   // Once when the day is picked (the "asking" line) and again when its hours arrive.
   useEffect(() => {
@@ -110,11 +155,14 @@ export function OfficeView(props: Props) {
   const days = useMemo(() => {
     const map = new Map<string, DayInfo>();
     for (const d of dates?.full ?? []) map.set(d, { state: 'full' });
+    if (office.ok && snapshotAt && dates?.at && snapshotAt > dates.at) {
+      for (const d of office.fullDates) map.set(d, { state: 'full' });
+    }
     for (const d of listed) {
       map.set(d, open.includes(d) ? { state: 'open', label: `${formatDate(d)}: open, show the hours` } : { state: 'full' });
     }
     return map;
-  }, [dates, listed, open]);
+  }, [dates, listed, open, office.ok, office.fullDates, snapshotAt]);
 
   const nearby = useMemo(
     () =>
@@ -196,7 +244,7 @@ export function OfficeView(props: Props) {
         </label>
         <p className="office-status" aria-live="polite">
           {!dates && fresh.state === 'error'
-            ? fresh.message
+            ? 'Dates could not be checked.'
             : !dates
               ? `Checking the dates${forGroup}…`
               : open.length > 0
@@ -204,6 +252,13 @@ export function OfficeView(props: Props) {
                 : `No open dates${forGroup}.${checked}`}
         </p>
       </div>
+
+      {warning && (
+        <div className="warning" role="status">
+          <p>{warning}{dates ? ' Saved dates are shown with their original check time.' : ''}</p>
+          <button type="button" className="btn btn-secondary" onClick={() => setRetry((n) => n + 1)}>Try checking again</button>
+        </div>
+      )}
 
       {noneOpen && (
         <div className="fallback">
@@ -257,9 +312,9 @@ export function OfficeView(props: Props) {
         </div>
       )}
 
-      {picked && !date && dates && fresh.state === 'ready' && (
+      {picked && !date && dates && (
         <p className="note" role="status">
-          {formatDate(picked)} is no longer open{forGroup} (checked {ago(fresh.data.checkedAt)}).
+          {formatDate(picked)} is no longer open{forGroup}{closureAt ? ` (checked ${ago(closureAt)})` : ''}.
           {open.length > 0 ? ' The green days still are.' : ''}
         </p>
       )}
@@ -280,9 +335,10 @@ export function OfficeView(props: Props) {
           </h2>
           {times.state === 'loading' && <p className="hint">Getting the hours from passport.gov.ph…</p>}
           {times.state === 'error' && <p className="error">{times.message}</p>}
+          {times.state === 'ready' && times.data.warning && <p className="warning" role="status">{times.data.warning}</p>}
           {times.state === 'ready' && hoursWithRoom === 0 && (
             <p className="note">
-              Every hour is full now. It was open when we checked{seenAt ? ` ${ago(seenAt)}` : ''}, so it was taken since.
+              {times.state === 'ready' && times.data.warning ? 'Every hour was full at the last successful lookup.' : 'Every hour is full now.'} It was open when we checked{seenAt ? ` ${ago(seenAt)}` : ''}.
               {open.length > 0 ? ' Try another green day.' : ''}
             </p>
           )}

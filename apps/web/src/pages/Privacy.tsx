@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
-import { REPO_URL } from '../links.ts';
+import { BASE, REPO_URL } from '../links.ts';
 
 /** What the site and the Android app keep, as the runbook's inventory records it (deploy/README.md). */
-export const PRIVACY_UPDATED = '29 September 2026';
+export const PRIVACY_UPDATED = '1 October 2026';
 
 export function Privacy() {
   useEffect(() => {
@@ -71,8 +71,9 @@ export function Privacy() {
           hash, not by the address. Your address is never written to the site's or the checker's logs.
         </li>
         <li>A sign-up that is never confirmed is deleted after 48 hours.</li>
+        <li>Deletion links also expire after 48 hours. They store only a keyed address hash and a hash of the random link token. Deleting your data cancels all unused sign-up and deletion links.</li>
         <li>
-          To stop the form flooding an inbox, we count the confirmation emails sent to each address, under a keyed hash
+          To stop the forms flooding an inbox, we count confirmation and deletion-link emails sent to each address, under a keyed hash
           of the address, and forget the count after about two days.
         </li>
         <li>
@@ -100,6 +101,9 @@ export function Privacy() {
         Every alert email has an unsubscribe link. Unsubscribing deletes your address and your choices at once, with
         nothing to ask for or wait on. A sign-up you never confirm deletes itself after 48 hours. The last copies, in
         the backups and the mail server's logs, are gone within 14 days.
+      </p>
+      <p>
+        You can also <a href={`${BASE}delete-data`}>stop alerts and delete your data here</a> before your first alert arrives or if you lose your email links. Enter your address, open the deletion link we email you, and press the button. This deletes your address, choices and waiting alerts and cancels unused sign-up links. We send the same link whether or not an address is subscribed. Anonymous totals and temporary abuse-prevention counters keep their usual retention periods described above.
       </p>
 
       <h2>Where it is kept</h2>

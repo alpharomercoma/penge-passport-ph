@@ -171,12 +171,12 @@ runbook's inventory ([`deploy/README.md`](../../deploy/README.md#where-a-subscri
 | --- | --- |
 | Does the app collect or share any of the required user data types? | Yes |
 | Is all of the user data collected by the app encrypted in transit? | Yes: from the phone, HTTPS only (plain HTTP is redirected, HSTS for a year). The alert emails the server sends out use TLS when the recipient's mail server offers it (`smtp_tls_security_level = may`), as the privacy page says; that is delivery to the user, not collection from the phone |
-| Can users request that their data be deleted? | Yes: the unsubscribe link in every alert email removes the address and its choices from the database at once. The last copies, in the encrypted backups and the mail server's logs, are gone within 14 days. A sign-up that is never confirmed is deleted after 48 hours |
-| Does the app let users create an account? | **No**, on Google's definition of an account ("a unique user identity that developers provide as a user-facing feature"): there is no sign-in, username, password or profile. Signing up for alerts stores an email address to send alerts to. If Play reads that as an account, it will also want an in-app way to delete it (the unsubscribe page) and a web page where someone can ask for deletion without the email, which the site doesn't have yet ([requirement](https://support.google.com/googleplay/android-developer/answer/13327111)) |
+| Can users request that their data be deleted? | Yes: https://alphaexperiments.com/pengepassportph/delete-data is linked from the app and privacy page and works before the first alert or after an email link is lost. It emails a one-time link; pressing its button deletes the address, choices, waiting alerts and unused signup links. Links expire after 48 hours. Encrypted backups and mail logs retain their disclosed copies for up to 14 days; temporary abuse counters and anonymous totals retain their disclosed lifetimes |
+| Does the app let users create an account? | **No**, on Google's definition of an account ("a unique user identity that developers provide as a user-facing feature"): there is no sign-in, username, password or profile. Signing up for alerts stores an email address to send alerts to. If Play reads that as an account, it will also want an in-app way to delete it (the unsubscribe page) and an external deletion URL: use https://alphaexperiments.com/pengepassportph/delete-data, which accepts the email address without requiring an old alert link ([requirement](https://support.google.com/googleplay/android-developer/answer/13327111)) |
 
 | Data type | Collected | Shared | Ephemeral | Required | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| Personal info: Email address | Yes | No | No | Optional (only for alerts) | App functionality; Fraud prevention, security, and compliance (confirmation emails per address are counted under a keyed hash for about two days, so the form can't flood an inbox) |
+| Personal info: Email address | Yes | No | No | Optional (only for alerts) | App functionality; Fraud prevention, security, and compliance (confirmation and deletion-link emails per address are counted under a keyed hash for about two days, so the form can't flood an inbox) |
 | App activity: Other actions (the offices, group size and pace chosen for alerts) | Yes | No | No | Optional | App functionality |
 | Device or other IDs (the network address every request comes from) | Yes | No | No | Required | Fraud prevention, security, and compliance; Analytics |
 | App activity: App interactions (pages visited, offices opened, days' hours looked up) | Yes | No | No | Required | Analytics |
@@ -215,3 +215,9 @@ Against them, the DFA's own FAQ calls "passport appointment assistance services"
 legal notes ([`docs/legal/README.md`](../../docs/legal/README.md), "Open question") say a lawyer should
 decide whether a free service that only tells people when dates open counts as "assistance". A reviewer
 could read it that way too. Whether to submit before that is answered is the owner's decision.
+
+## Production release gates
+
+Before production, run `node android/check-play-release.mjs --play-sha256 <Play-app-signing-SHA256> --support-email <monitored-public-support-email>`. This verifies the actual Play certificate against the live root asset links, the public URLs and the local Android package settings. A missing certificate or support email fails the check; the upload certificate alone is not evidence of Play verification. It does not submit the app or change any files.
+
+Enter the monitored support email in the Console contact field and the privacy page. Install from the Play test track and confirm fullscreen launch, booking links opening in the browser, email confirmation, deletion, offline recovery, Back navigation, and TalkBack. Check the pre-launch report. Verify production access and, when required for a new personal account, the 12-testers/14-days closed test. The local emulator install only verifies the upload key.

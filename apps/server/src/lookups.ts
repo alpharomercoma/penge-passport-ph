@@ -54,7 +54,7 @@ export function createLookups(deps: { kv: Kv; upstream: LookupUpstream; log: Log
   let warming: Promise<void> | null = null;
   let warmFailedAt = -Infinity;
 
-  async function cached<T>(key: string, fresh: number, fetch: () => Promise<T>): Promise<T> {
+  async function cached<T extends OfficeDates | OfficeTimes>(key: string, fresh: number, fetch: () => Promise<T>): Promise<T> {
     const raw = await kv.get(key);
     const hitValue = raw ? (JSON.parse(raw) as Cached<T>) : null;
     if (hitValue && now() - hitValue.at < fresh * 1000) return hitValue.value;
@@ -69,7 +69,7 @@ export function createLookups(deps: { kv: Kv; upstream: LookupUpstream; log: Log
         return value;
       } catch (err) {
         log.warn('lookup failed', { key, err: err as Error });
-        if (hitValue) return hitValue.value;
+        if (hitValue) return { ...hitValue.value, warning: 'The latest lookup could not be completed. This is the last saved answer; availability may have changed.' };
         // The rate limiter refused: its hourly budget is spent, or it is resting after errors.
         if (err instanceof RateLimitError) {
           throw new LookupUnavailable(

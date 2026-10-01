@@ -146,7 +146,7 @@ describe('office dates', () => {
     down.upstream.fail = true;
     const scan = await down.get('/api/offices/486/dates');
     expect(scan.status).toBe(200);
-    expect(scan.body).toEqual({ siteId: 486, applicants: 1, openDates: ['2026-10-05', '2026-10-07'], fullDates: [], windowEnd: null, checkedAt: STATUS.lastHealthyAt });
+    expect(scan.body).toEqual({ siteId: 486, applicants: 1, openDates: ['2026-10-05', '2026-10-07'], fullDates: [], windowEnd: null, checkedAt: STATUS.lastHealthyAt, warning: 'passport.gov.ph did not answer. Try again in a few minutes.' });
 
     // An office whose latest check failed shows dates from an earlier one, and says when.
     const stale = await setup();
@@ -237,6 +237,8 @@ describe('staying polite to passport.gov.ph', () => {
     s.upstream.limited = true; // the lookups' hourly budget is spent
     const stale = await s.get('/api/offices/486/times?date=2026-10-07');
     expect(stale.status).toBe(200); // the older answer, rather than nothing
+    expect(stale.body.warning).toMatch(/last saved answer/);
+    expect(stale.body.checkedAt).toBe(new Date(s.t.now() - 4 * 60_000).toISOString());
     const none = await s.get('/api/offices/693/times?date=2026-10-20&applicants=4');
     expect(none.status).toBe(503);
     expect(none.body.error).toMatch(/^We ask passport.gov.ph only so often/);

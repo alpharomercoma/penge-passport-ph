@@ -84,6 +84,8 @@ export function fakeApi(overrides: Partial<Api> = {}): Api & { [K in keyof Api]:
     subscribe: vi.fn(async () => 'Check your inbox for a confirmation link.'),
     confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'hourly' as const })),
     unsubscribe: vi.fn(async () => {}),
+    requestDeletion: vi.fn(async () => "Check your inbox for a deletion link."),
+    deleteData: vi.fn(async () => {}),
     // Each office's own dates; a group of 4 or more fits only on the office's last open day.
     officeDates: vi.fn(async (siteId: number, applicants: number) => {
       const site = STATUS.sites.find((s) => s.id === siteId) ?? ABROAD.posts.find((s) => s.id === siteId);

@@ -488,3 +488,9 @@ ORDER BY r.startedAt, s.name;
 
 Until the change on 30 September 2026 (Manila time), every scan was stored whole, under `scans/v1/` (the
 schema is `Scan` in `apps/server/src/snapshot.ts`) and `scans-abroad/v1/`.
+
+## Alert deletion recovery
+
+`/delete-data` is available without an old alert link and is linked from the footer, privacy page and confirmation emails. `POST /api/deletion-request` validates and normalizes the email, uses the same IP, per-address and hourly sending limits as confirmation, and sends the same content for subscribed and unknown addresses. Only keyed address hashes and hashes of random tokens are stored for 48 hours (`pp:deletion:*`, `pp:deletion-idx:*`). GETs never delete. `POST /api/delete-data` consumes the token under the same address lock as confirmation/unsubscribe and atomically removes the subscription, site memberships, waiting alerts, last-alert stamp and unused signup/deletion links. Direct RFC 8058 unsubscribe remains supported. Abuse counters keep their existing expiry. The normal encrypted backup/mail-log retention still applies. Recovery mail also honours mail pause; it needs no office catalog.
+
+Office pages use newer single-person scan observations immediately, revalidate group calendars as observations change, and refresh dates and selected hours every three minutes while visible. They refresh on focus/visibility return. Failed API and server-side cached refreshes show warnings with the original observation time. The shared upstream lookup cache and rate limits remain in force.

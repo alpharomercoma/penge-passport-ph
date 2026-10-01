@@ -48,11 +48,11 @@ export async function createPending(kv: Kv, keys: Keys, request: SubscribeReques
     requestedAt: new Date(now).toISOString(),
   };
   const hash = hashToken(token);
-  await kv.write([
+  await withAddressLock(kv, pending.index, () => kv.write([
     { op: 'set', key: K.pending(hash), value: JSON.stringify(pending), ttlSeconds: PENDING_TTL_SECONDS },
     { op: 'sAdd', key: K.pendingFor(pending.index), members: [hash] },
     { op: 'expire', key: K.pendingFor(pending.index), ttlSeconds: PENDING_TTL_SECONDS },
-  ]);
+  ]));
   return token;
 }
 
@@ -148,20 +148,58 @@ export async function unsubscribe(kv: Kv, keys: Keys, token: string): Promise<bo
   return withAddressLock(kv, found.index, async () => {
     const subscriber = await load(kv, id);
     if (!subscriber) return false;
-    // Confirmation links not yet used would bring the subscription back: they go too.
-    const waiting = await kv.sMembers(K.pendingFor(subscriber.index));
-    await kv.write([
-      ...subscriber.siteIds.map((siteId): WriteOp => ({ op: 'sRem', key: K.siteSubscribers(siteId), members: [id] })),
-      { op: 'del', key: K.subscriber(id) },
-      { op: 'del', key: K.emailIndex(subscriber.index) },
-      { op: 'sRem', key: K.allSubscribers, members: [id] },
-      { op: 'del', key: K.held(id) },
-      { op: 'sRem', key: K.heldSubscribers, members: [id] },
-      { op: 'del', key: K.lastAlert(id) },
-      ...waiting.map((hash): WriteOp => ({ op: 'del', key: K.pending(hash) })),
-      { op: 'del', key: K.pendingFor(subscriber.index) },
-    ]);
+    await removeAddress(kv, subscriber.index, subscriber);
     return true;
+  });
+}
+
+/** Delete subscription data and every unused confirmation/deletion link for an address. Caller holds its lock. */
+async function removeAddress(kv: Kv, index: string, subscriber: Subscriber | null): Promise<void> {
+  const waiting = await kv.sMembers(K.pendingFor(index));
+  const deletions = await kv.sMembers(K.deletionsFor(index));
+  await kv.write([
+    ...(subscriber ? [
+      ...subscriber.siteIds.map((siteId): WriteOp => ({ op: 'sRem', key: K.siteSubscribers(siteId), members: [subscriber.id] })),
+      { op: 'del', key: K.subscriber(subscriber.id) } as WriteOp,
+      { op: 'sRem', key: K.allSubscribers, members: [subscriber.id] } as WriteOp,
+      { op: 'del', key: K.held(subscriber.id) } as WriteOp,
+      { op: 'sRem', key: K.heldSubscribers, members: [subscriber.id] } as WriteOp,
+      { op: 'del', key: K.lastAlert(subscriber.id) } as WriteOp,
+    ] : []),
+    { op: 'del', key: K.emailIndex(index) },
+    ...waiting.map((hash): WriteOp => ({ op: 'del', key: K.pending(hash) })),
+    { op: 'del', key: K.pendingFor(index) },
+    ...deletions.map((hash): WriteOp => ({ op: 'del', key: K.deletion(hash) })),
+    { op: 'del', key: K.deletionsFor(index) },
+  ]);
+}
+
+/** Every valid address gets the same email; only its owner can use the random, one-time link. */
+export async function createDeletion(kv: Kv, keys: Keys, email: string): Promise<string> {
+  const index = emailIndex(email, keys.index);
+  return withAddressLock(kv, index, async () => {
+    const token = randomToken();
+    const hash = hashToken(token);
+    await kv.write([
+      { op: 'set', key: K.deletion(hash), value: index, ttlSeconds: PENDING_TTL_SECONDS },
+      { op: 'sAdd', key: K.deletionsFor(index), members: [hash] },
+      { op: 'expire', key: K.deletionsFor(index), ttlSeconds: PENDING_TTL_SECONDS },
+    ]);
+    return token;
+  });
+}
+
+/** A GET never deletes. Recheck the token under the same lock used by confirmation/unsubscribe. */
+export async function deleteWithToken(kv: Kv, token: string): Promise<{ valid: boolean; removed: boolean }> {
+  const key = K.deletion(hashToken(token));
+  const index = await kv.get(key);
+  if (!index) return { valid: false, removed: false };
+  return withAddressLock(kv, index, async () => {
+    if ((await kv.get(key)) !== index) return { valid: false, removed: false };
+    const id = await kv.get(K.emailIndex(index));
+    const subscriber = id ? await load(kv, id) : null;
+    await removeAddress(kv, index, subscriber);
+    return { valid: true, removed: subscriber !== null };
   });
 }
 

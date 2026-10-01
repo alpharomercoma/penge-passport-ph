@@ -28,6 +28,7 @@ export function Confirm({ api }: { api: Api }) {
                 See open dates now
               </a>
             </p>
+            <p><a href={`${BASE}delete-data`}>Stop alerts and delete your data</a></p>
           </>
         );
       }}

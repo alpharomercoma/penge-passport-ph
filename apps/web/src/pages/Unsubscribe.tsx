@@ -6,6 +6,7 @@ import { BASE } from '../links.ts';
 
 export function Unsubscribe({ api }: { api: Api }) {
   return (
+    <>
     <TokenAction
       title="Stop your email alerts"
       intro={<p>Press the button to stop every alert and delete your address from our list.</p>}
@@ -30,5 +31,7 @@ export function Unsubscribe({ api }: { api: Api }) {
         );
       }}
     />
+    <p className="prose">Lost your email link? <a href={`${BASE}delete-data`}>Request a deletion link</a>.</p>
+    </>
   );
 }

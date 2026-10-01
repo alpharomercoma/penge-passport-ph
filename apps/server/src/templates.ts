@@ -57,7 +57,7 @@ export const PACE_PROMISE: Record<Pace, string> = {
   asap: 'as soon as a check finds dates (one email per check; checks run every 5 minutes), with everything new since the last email',
 };
 
-export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[]; applicants: number; pace: Pace }): Rendered {
+export function confirmationEmail(input: { confirmUrl: string; deletionUrl?: string; sites: SiteRef[]; applicants: number; pace: Pace }): Rendered {
   const names = input.sites.map((s) => s.name);
   const often = `We email ${PACE_PROMISE[input.pace]}.`;
   const text = [
@@ -71,6 +71,7 @@ export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[];
     input.confirmUrl,
     '',
     'The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.',
+    ...(input.deletionUrl ? ['', `To stop alerts or delete your address, even before your first alert: ${input.deletionUrl}`] : []),
     '',
     UNOFFICIAL,
   ].join('\n');
@@ -81,9 +82,20 @@ export function confirmationEmail(input: { confirmUrl: string; sites: SiteRef[];
 <p style="margin:0 0 12px">${esc(often)}</p>
 ${button(input.confirmUrl, 'Confirm alerts')}
 <p style="margin:0;font-size:14px;color:#4f5b55">The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.</p>`,
-    esc(UNOFFICIAL),
+    `${esc(UNOFFICIAL)}${input.deletionUrl ? `<br><a href="${esc(input.deletionUrl)}">Stop alerts and delete your address</a>` : ''}`,
   );
   return { subject: `Confirm your ${DISPLAY_NAME} alerts`, text, html };
+}
+
+export function deletionEmail(input: { deletionUrl: string }): Rendered {
+  const intro = 'Someone requested a link to stop PengePassportPH alerts and delete this email address and its alert choices. We send the same link whether or not this address is subscribed.';
+  const note = 'Open the link and press Delete my alert data. The link works for 48 hours. If this was not you, ignore this email: nothing changes.';
+  const retained = 'Deletion also cancels unused sign-up links. The last copies in encrypted backups and mail-server logs are gone within 14 days. Anonymous totals and temporary abuse-prevention counters are retained as described in our privacy policy.';
+  return {
+    subject: 'Delete your PengePassportPH alert data',
+    text: `${intro}\n\n${note}\n${input.deletionUrl}\n\n${retained}\n\n${UNOFFICIAL}`,
+    html: page('Delete your alert data', `<p>${esc(intro)}</p>${button(input.deletionUrl, 'Review deletion request')}<p>${esc(note)}</p><p>${esc(retained)}</p>`, esc(UNOFFICIAL)),
+  };
 }
 
 function checkTime(iso: string | null | undefined): string {

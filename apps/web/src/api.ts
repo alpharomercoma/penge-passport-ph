@@ -92,6 +92,8 @@ export interface Api {
   subscribe(request: SubscribeRequest & { website: string }): Promise<string>;
   confirm(token: string): Promise<ConfirmResponse>;
   unsubscribe(token: string): Promise<void>;
+  requestDeletion(email: string, website: string): Promise<string>;
+  deleteData(token: string): Promise<void>;
   officeDates(siteId: number, applicants: number): Promise<OfficeDates>;
   officeTimes(siteId: number, date: string, applicants: number): Promise<OfficeTimes>;
 }
@@ -103,6 +105,11 @@ export const api: Api = {
   confirm: async (token) => expect(await call(`${BASE}api/confirm`, { token }), isConfirm),
   unsubscribe: async (token) => {
     await call(`${BASE}api/unsubscribe`, { token });
+  },
+  requestDeletion: async (email, website) => expect(await call(`${BASE}api/deletion-request`, { email, website }), hasMessage).message,
+  deleteData: async (token) => {
+    const result = await call(`${BASE}api/delete-data`, { token });
+    expect(result, (v): v is { ok: true } => typeof v === 'object' && v !== null && (v as { ok?: unknown }).ok === true);
   },
   officeDates: async (siteId, applicants) =>
     expect(await call(`${BASE}api/offices/${siteId}/dates?applicants=${applicants}`), isOfficeDates),
