@@ -11,7 +11,7 @@ import { rebuild } from '../src/record.ts';
 import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
 import { signUnsubscribe } from '../src/crypto.ts';
 import { formatDate } from '../src/templates.ts';
-import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, PUBLISHED } from './helpers.ts';
+import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, PUBLISHED, SITES } from './helpers.ts';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 200) / 2;
 
@@ -61,7 +61,13 @@ async function world(overrides: Partial<CheckDeps> = {}) {
     t.advance(10 * 60_000);
     return report;
   };
-  return { t, kv, upstream, sink, mailer, deps, lines, subscribe, run };
+  // Direct delivery tests retry a scan they have just performed. Production
+  // supplies its in-memory scan, rather than rebuilding historical records.
+  const retry = (now = t.now, emailed = new Set<string>()) => {
+    const latest = sink.scans.at(-1);
+    return deliver(deps, now, emailed, latest ? [latest] : []);
+  };
+  return { t, kv, upstream, sink, mailer, deps, lines, subscribe, run, retry };
 }
 
 describe('checker', () => {
@@ -86,11 +92,15 @@ describe('checker', () => {
     const mail = w.mailer.sent[0]!;
     expect(mail.to).toBe('ana@example.com');
     expect(mail.kind).toBe('alert');
+    const latest = JSON.parse((await w.kv.get(K.status))!);
+    const checked = latest.sites.find((s: { id: number }) => s.id === 486).checkedAt;
+    const time = new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).format(new Date(checked));
+    expect(mail.text).toContain(`Office calendar checked: ${time} (Manila time, UTC+8)`);
     expect(mail.subject).toBe('Passport dates open: Antipolo');
     expect(mail.text).toContain('Wed 7 Oct 2026');
     expect(mail.text).not.toContain('Mon 5 Oct 2026');
     expect(mail.unsubscribeUrl).toMatch(/^https:\/\/penge\.example\/api\/unsubscribe\?token=/);
-    expect(mail.text).toMatch(/Stop all alerts: https:\/\/penge\.example\/unsubscribe#token=/);
+    expect(mail.text).toMatch(/Already booked a slot\? Unsubscribe: https:\/\/penge\.example\/unsubscribe#token=/);
 
     // Nothing new: nothing sent.
     expect((await w.run()).queued).toBe(0);
@@ -278,7 +288,7 @@ describe('checker', () => {
     expect((await w.run()).delivery).toMatchObject({ stoppedBy: 'paused', remaining: 1 });
     await w.kv.write([{ op: 'del', key: K.mailPaused }]);
     w.t.advance(OUTBOX_MAX_AGE_MS);
-    expect(await deliver(w.deps)).toMatchObject({ dropped: 1, sent: 0, remaining: 0 });
+    expect(await w.retry()).toMatchObject({ dropped: 1, sent: 0, remaining: 0 });
   });
 
   it('stops after three mail failures in a row and retries later', async () => {
@@ -293,7 +303,7 @@ describe('checker', () => {
     // A refused email costs nobody their daily allowance, nor the daily total.
     const day = manilaDay(w.t.now());
     expect(Number((await w.kv.get(K.mailSentToday(day))) ?? 0)).toBe(0);
-    expect((await deliver(w.deps)).sent).toBe(4);
+    expect((await w.retry()).sent).toBe(4);
     expect(Number(await w.kv.get(K.mailSentToday(day)))).toBe(4);
   });
 
@@ -305,7 +315,7 @@ describe('checker', () => {
     w.mailer.uncertainNext = 1; // the connection drops part-way through the send
     const report = await w.run();
     expect(report.delivery).toMatchObject({ failed: 1, remaining: 0 });
-    await deliver(w.deps);
+    await w.retry();
     expect(w.mailer.sent).toHaveLength(0); // no second copy
     expect(Number(await w.kv.get(K.alertsToday(id, manilaDay(w.t.now()))))).toBe(1);
   });
@@ -317,8 +327,8 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     w.mailer.failNext = 2;
     await w.run();
-    await deliver(w.deps);
-    await deliver(w.deps); // the third attempt goes through
+    await w.retry();
+    await w.retry(); // the third attempt goes through
     expect(w.mailer.sent).toHaveLength(1);
     expect(Number(await w.kv.get(K.alertsToday(id, manilaDay(w.t.now()))))).toBe(1);
   });
@@ -385,7 +395,7 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     await w.run();
     await w.kv.write([{ op: 'del', key: K.subscriber(id) }, { op: 'del', key: K.mailPaused }]);
-    expect(await deliver(w.deps)).toMatchObject({ skipped: 1, sent: 0 });
+    expect(await w.retry()).toMatchObject({ skipped: 1, sent: 0 });
   });
 
   it('never logs an address', async () => {
@@ -395,7 +405,7 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     w.mailer.failNext = 1;
     await w.run();
-    await deliver(w.deps);
+    await w.retry();
     expect(w.mailer.sent).toHaveLength(1);
     expect(w.lines.join('\n')).not.toContain('secret.person');
   });
@@ -471,7 +481,7 @@ describe('checker, found by adversarial review', () => {
     await w.run();
     w.upstream.open.set('486', ['2026-10-05']);
     await w.run();
-    for (let i = 0; i < 5; i++) await deliver(w.deps);
+    for (let i = 0; i < 5; i++) await w.retry();
     expect(await w.kv.sMembers(K.heldSubscribers)).toHaveLength(1);
     expect(await w.kv.lLen(K.outbox)).toBe(0);
     expect(w.kv.keys().filter((k) => k.startsWith('pp:alerts:'))).toEqual([]);
@@ -624,7 +634,7 @@ describe('checker, found by adversarial review', () => {
     await w.run();
     await w.subscribe('ana@example.com', [693]); // changes offices while the alert waits
     await w.kv.write([{ op: 'del', key: K.mailPaused }]);
-    expect(await deliver(w.deps)).toMatchObject({ skipped: 1, sent: 0 });
+    expect(await w.retry()).toMatchObject({ skipped: 1, sent: 0 });
   });
 
   it('stops a run that lost its lock to another checker', async () => {
@@ -674,10 +684,10 @@ describe('outbox integrity and backups', () => {
       { op: 'rPush', key: K.outbox, values: [JSON.stringify(job)] }, // unsigned
       { op: 'del', key: K.mailPaused },
     ]);
-    expect(await deliver(w.deps)).toMatchObject({ dropped: 2, sent: 0 });
+    expect(await w.retry()).toMatchObject({ dropped: 2, sent: 0 });
     // The genuine one still goes.
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
-    expect(await deliver(w.deps)).toMatchObject({ sent: 1 });
+    expect(await w.retry()).toMatchObject({ sent: 1 });
   });
 
   it('backs subscribers up to R2 once a day, and a backup restores them', async () => {
@@ -784,7 +794,7 @@ describe('pace', () => {
     w.t.advance(-10 * 60_000); // back to the moment of the last email
     const job = { id: 'x', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-06'] }] };
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
-    expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
+    expect(await w.retry()).toMatchObject({ sent: 0, held: 1 });
   });
 
   it('emails an "asap" subscriber from consecutive checks whose emails come less than 5 minutes apart', async () => {
@@ -813,7 +823,7 @@ describe('pace', () => {
     const held = JSON.parse((await w.kv.get(K.held(id)))!) as { job: string; mac: string };
     await w.kv.set(K.held(id), JSON.stringify({ ...held, job: held.job.replace('2026-10-06', '2026-10-05') }));
     w.t.advance(60 * 60_000);
-    expect(await deliver(w.deps)).toMatchObject({ dropped: 1, sent: 0, held: 0 });
+    expect(await w.retry()).toMatchObject({ dropped: 1, sent: 0, held: 0 });
 
     w.upstream.open.set('486', ['2026-10-05', '2026-10-06', '2026-10-07']);
     await w.run();
@@ -963,27 +973,30 @@ describe('pace', () => {
     w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
     await w.run(); // T + 10: 6 Oct waits
     w.t.advance(35 * 60_000); // T + 55 minutes
-    await deliver(w.deps);
+    await w.retry();
     expect(w.mailer.sent).toHaveLength(1);
     w.t.advance(5 * 60_000); // T + 60
-    await deliver(w.deps);
+    await w.retry();
     expect(w.mailer.sent).toHaveLength(2);
   });
 
   it('sends an asap person at most one email per check, even when the posts abroad come late in it', async () => {
     const w = await world();
     const id = await w.subscribe('ana@example.com', [486, 36], 1, 'asap');
+    // Give the synthetic second office actual lookup evidence too.
+    w.upstream.sitesList = [...SITES, { ...SITES[0]!, id: 36, name: 'Office abroad' }];
+    w.upstream.open.set('36', ['2026-10-06']);
     w.upstream.open.set('486', ['2026-10-05']);
     await w.run(); // the baseline has 5 Oct open at 486
     const run = new Set<string>(); // one check: the Philippines, then the posts abroad
     const job = (siteId: number, date: string) => ({ id: `j${siteId}`, createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: siteId, name: `Office ${siteId}`, dates: [date] }] });
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job(486, '2026-10-05'), keys.token)] }]);
-    await deliver(w.deps, w.t.now, run);
+    await w.retry(w.t.now, run);
     w.t.advance(11 * 60_000); // the abroad pass may end 12 minutes into the check
     await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job(36, '2026-10-06'), keys.token)] }]);
-    expect(await deliver(w.deps, w.t.now, run)).toMatchObject({ sent: 0, held: 1 });
+    expect(await w.retry(w.t.now, run)).toMatchObject({ sent: 0, held: 1 });
     expect(w.mailer.sent).toHaveLength(1);
-    await deliver(w.deps, w.t.now, new Set()); // the next check
+    await w.retry(w.t.now, new Set()); // the next check
     expect(w.mailer.sent).toHaveLength(2);
   });
 
@@ -1015,11 +1028,11 @@ describe('pace', () => {
     }
   });
 
-  it('never emails an hourly person twice within 55 minutes, and only about dates open now', async () => {
+  it('never emails an hourly person early or from a failed current verification', async () => {
     const SITE_IDS = [10, 20, 30, 486, 693];
     const step = fc.record({
       open: fc.array(fc.subarray(PUBLISHED), { minLength: 5, maxLength: 5 }),
-      failing: fc.subarray(SITE_IDS, { maxLength: 1 }),
+      failing: fc.subarray(SITE_IDS, { maxLength: 3 }),
       minutes: fc.constantFrom(10, 15, 15, 30, 70),
     });
     await fc.assert(
@@ -1029,20 +1042,19 @@ describe('pace', () => {
         for (const id of SITE_IDS) people.set(`p${id}@example.com`, id);
         for (const [email, id] of people) await w.subscribe(email, [id], 1, 'hourly');
         const lastMail = new Map<string, number>();
-        const lastGood = new Map<number, Set<string>>();
         for (const s of steps) {
           SITE_IDS.forEach((id, i) => w.upstream.open.set(String(id), s.open[i]!));
           w.upstream.failing = new Set(s.failing);
           const before = w.mailer.sent.length;
-          await runCheck({ ...w.deps, runId: `r${w.t.now()}` });
-          // One failing office of five keeps the run healthy; the others were looked at.
-          for (const id of SITE_IDS) if (!s.failing.includes(id)) lastGood.set(id, new Set(w.upstream.open.get(String(id))));
+          const report = await runCheck({ ...w.deps, runId: `r${w.t.now()}` });
           for (const mail of w.mailer.sent.slice(before)) {
             const last = lastMail.get(mail.to);
             if (last !== undefined) expect(w.t.now() - last).toBeGreaterThanOrEqual(PACE_SPACING_MS.hourly);
             lastMail.set(mail.to, w.t.now());
-            // "Open now" is as of the office's latest good look: that is all the checker can know.
-            const open = lastGood.get(people.get(mail.to)!)!;
+            const siteId = people.get(mail.to)!;
+            expect(report.healthy).toBe(true);
+            expect(s.failing).not.toContain(siteId);
+            const open = new Set(w.upstream.open.get(String(siteId)));
             for (const date of PUBLISHED) if (datesIn(mail.text).includes(formatDate(date))) expect(open.has(date)).toBe(true);
           }
           w.t.advance(s.minutes * 60_000);
@@ -1400,4 +1412,147 @@ describe('checker fuzz', () => {
       { seed: 20260927, numRuns: RUNS },
     );
   }, 10_000 + RUNS * 10);
+});
+
+describe('fresh delivery verification', () => {
+  it('holds alerts during an unhealthy scan and releases them only after a successful recheck', async () => {
+    const w = await world();
+    const id = await w.subscribe('juan@example.com', [486]);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.upstream.open.set('486', ['2026-10-07']);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    w.upstream.open.set('486', []);
+    w.upstream.failing.add(486);
+    w.upstream.failing.add(693);
+    const bad = await w.run();
+    expect(bad.healthy).toBe(false);
+    expect(bad.delivery).toMatchObject({ sent: 0, held: 1 });
+    expect(w.mailer.sent).toHaveLength(0);
+    expect(await w.kv.get(K.lastAlert(id))).toBeNull();
+    expect(Number(await w.kv.get(K.mailSentToday(manilaDay(w.t.now()))))).toBe(0);
+    w.upstream.failing.clear();
+    expect((await w.run()).delivery?.sent).toBe(0); // successfully checked closed
+    w.upstream.open.set('486', ['2026-10-07']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 });
+  });
+
+  it('sends only the verified office in a mixed alert and retains the failed office', async () => {
+    const w = await world();
+    const id = await w.subscribe('juan@example.com', [486, 693]);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.upstream.open.set('486', ['2026-10-07']);
+    w.upstream.open.set('693', ['2026-10-08']);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    w.upstream.failing.add(486); // 1 of 5 fails: the overall scan is still healthy
+    const partial = await w.run();
+    expect(partial.healthy).toBe(true);
+    expect(partial.delivery).toMatchObject({ sent: 1, held: 1 });
+    expect(w.mailer.sent[0]!.text).toContain('Thu 8 Oct 2026');
+    expect(w.mailer.sent[0]!.text).not.toContain('Wed 7 Oct 2026');
+    expect(openJob((await w.kv.get(K.held(id)))!, keys.token)!.openings.map((o) => o.id)).toEqual([486]);
+    w.upstream.failing.clear();
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 });
+    expect(w.mailer.sent[1]!.text).toContain('Wed 7 Oct 2026');
+    expect(w.mailer.sent[1]!.text).not.toContain('Thu 8 Oct 2026');
+  });
+
+  it('requires a successful group recheck even when the one-person calendar is open', async () => {
+    const w = await world();
+    await w.subscribe('juan@example.com', [486], 2);
+    w.upstream.open.set('486', ['2026-10-05']);
+    w.upstream.open.set('486:2', []);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.upstream.open.set('486:2', ['2026-10-05']);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    const real = w.upstream.availability.bind(w.upstream);
+    w.upstream.availability = async (q) => {
+      if (q.applicants === 2) throw new Error('group lookup failed');
+      return real(q);
+    };
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 1 });
+    expect(w.mailer.sent).toHaveLength(0);
+    w.upstream.availability = real;
+    w.upstream.open.set('486:2', []);
+    expect((await w.run()).delivery?.sent).toBe(0);
+    w.upstream.open.set('486:2', ['2026-10-05']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 });
+  });
+
+  it('never interprets missing or corrupt baselines as proof that a date is open', async () => {
+    for (const raw of [null, '{broken']) {
+      const w = await world();
+      const id = await w.subscribe('juan@example.com', [486]);
+      if (raw) await w.kv.write([{ op: 'hSet', key: K.openDates(486), fields: { '1': raw } }]);
+      const job = { id: 'unknown', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-07'] }] };
+      await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
+      expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
+      expect(w.mailer.sent).toHaveLength(0);
+      expect(await w.kv.get(K.lastAlert(id))).toBeNull();
+    }
+  });
+});
+
+describe('verification boundaries', () => {
+  it('does not release a held group when its lookup was skipped by the query cap', async () => {
+    const w = await world();
+    for (const site of SITES) {
+      w.upstream.open.set(String(site.id), ['2026-10-05']);
+      for (const applicants of [2, 3, 4, 5]) {
+        await w.subscribe(`group${site.id}x${applicants}@example.com`, [site.id], applicants);
+        w.upstream.open.set(`${site.id}:${applicants}`, ['2026-10-05']);
+      }
+    }
+    await w.run();
+    // The first ten group queries consume the cap before Davao's groups.
+    const id = await w.subscribe('juan@example.com', [30], 5);
+    const job = { id: 'group-held', createdAt: w.t.now(), subscriberId: id, applicants: 5, openings: [{ id: 30, name: 'Davao', dates: ['2026-10-05'] }] };
+    await w.kv.write([
+      { op: 'hSet', key: K.openDates(30), fields: { '5': '["2026-10-05"]' } },
+      { op: 'set', key: K.held(id), value: sealJob(job, keys.token) },
+      { op: 'sAdd', key: K.heldSubscribers, members: [id] },
+    ]);
+    const report = await w.run();
+    expect(report.healthy).toBe(true);
+    expect(report.delivery?.sent).toBe(0);
+    expect(w.mailer.sent).toHaveLength(0);
+    expect(await w.kv.get(K.held(id))).not.toBeNull();
+    expect(w.sink.scans.at(-1)!.groups.find((g) => g.siteId === 30 && g.applicants === 5)).toMatchObject({ ok: false, error: expect.stringContaining('skipped:') });
+  });
+
+  it('preserves the original expiry while waiting for verification', async () => {
+    const w = await world();
+    const id = await w.subscribe('juan@example.com', [486]);
+    const job = { id: 'unverified', createdAt: w.t.now(), subscriberId: id, applicants: 1, openings: [{ id: 486, name: 'Antipolo', dates: ['2026-10-05'] }] };
+    await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(job, keys.token)] }]);
+    expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 1 });
+    w.t.advance(OUTBOX_MAX_AGE_MS + 1);
+    expect(await deliver(w.deps)).toMatchObject({ sent: 0, held: 0, dropped: 1 });
+    expect(await w.kv.get(K.held(id))).toBeNull();
+    expect(w.mailer.sent).toHaveLength(0);
+  });
+});
+
+describe('scan trust at delivery', () => {
+  it('rejects a successful office observation when the overall office list is untrustworthy', async () => {
+    const w = await world();
+    await w.subscribe('juan@example.com', [486]);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.upstream.open.set('486', ['2026-10-07']);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    w.upstream.sitesList = SITES.slice(0, 3); // Antipolo answers, but the list lost two offices
+    const report = await w.run();
+    expect(report.healthy).toBe(false);
+    expect(w.sink.scans.at(-1)!.sites.find((s) => s.id === 486)?.ok).toBe(true);
+    expect(report.delivery).toMatchObject({ sent: 0, held: 1 });
+    w.upstream.sitesList = SITES;
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 });
+  });
 });

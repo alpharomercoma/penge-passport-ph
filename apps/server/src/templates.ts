@@ -21,6 +21,8 @@ export interface SiteRef {
 
 export interface Opening extends SiteRef {
   dates: string[];
+  /** Latest successful office calendar lookup, not the email send time. */
+  checkedAt?: string | null;
 }
 
 const esc = (s: string) =>
@@ -84,6 +86,17 @@ ${button(input.confirmUrl, 'Confirm alerts')}
   return { subject: `Confirm your ${DISPLAY_NAME} alerts`, text, html };
 }
 
+function checkTime(iso: string | null | undefined): string {
+  if (!iso || !Number.isFinite(Date.parse(iso))) return 'Office calendar check time unavailable';
+  const time = new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  }).format(new Date(iso));
+  return `Office calendar checked: ${time} (Manila time, UTC+8)`;
+}
+
+const UNSUBSCRIBE_LABEL = 'Already booked a slot? Unsubscribe';
+
 export function alertEmail(input: {
   openings: Opening[];
   applicants: number;
@@ -98,14 +111,14 @@ export function alertEmail(input: {
   const text = [
     `New appointment dates opened for ${people(input.applicants)}:`,
     '',
-    ...input.openings.flatMap((o) => [o.name, ...o.dates.map((d) => `  - ${formatDate(d)}`), '']),
+    ...input.openings.flatMap((o) => [o.name, checkTime(o.checkedAt), ...o.dates.map((d) => `  - ${formatDate(d)}`), '']),
     `Book on the DFA site: ${BOOKING_URL}`,
     'Dates go fast, and they may already be taken. We never book or hold a slot for you.',
     ...(capNote ? ['', capNote] : []),
     '',
     '--',
     `You asked ${DISPLAY_NAME} for these alerts. Change your offices: ${input.manageUrl}`,
-    `Stop all alerts: ${input.unsubscribeUrl}`,
+    `${UNSUBSCRIBE_LABEL}: ${input.unsubscribeUrl}`,
     UNOFFICIAL,
   ].join('\n');
   const html = page(
@@ -114,11 +127,13 @@ export function alertEmail(input: {
 ${input.openings
   .map(
     (o) => `<p style="margin:0 0 4px;font-weight:600">${esc(o.name)}</p>
+<p style="margin:0 0 8px;font-size:13px;color:#4f5b55">${esc(checkTime(o.checkedAt))}</p>
 <ul style="margin:0 0 16px;padding-left:20px">${o.dates.map((d) => `<li>${esc(formatDate(d))}</li>`).join('')}</ul>`,
   )
   .join('\n')}
 ${button(BOOKING_URL, 'Book on the DFA site')}
 <p style="margin:0;font-size:14px;color:#4f5b55">Dates go fast, and they may already be taken. We never book or hold a slot for you.</p>
+${button(input.unsubscribeUrl, UNSUBSCRIBE_LABEL)}
 ${capNote ? `<p style="margin:12px 0 0;font-size:14px;color:#4f5b55">${esc(capNote)}</p>` : ''}`,
     `You asked ${esc(DISPLAY_NAME)} for these alerts. <a href="${esc(input.manageUrl)}" style="color:#4f5b55">Change your offices</a> · <a href="${esc(input.unsubscribeUrl)}" style="color:#4f5b55">Unsubscribe</a><br>${esc(UNOFFICIAL)}`,
   );

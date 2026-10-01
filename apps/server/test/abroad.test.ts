@@ -499,3 +499,65 @@ describe('posts abroad through the API', () => {
     expect((await w.app.request('/api/offices/999999/dates')).status).toBe(404);
   });
 });
+
+describe('fresh verification for posts abroad', () => {
+  it('keeps a waiting post until its next successful lookup, even with no newly queued date', async () => {
+    const w = await world();
+    await w.subscribe('juan@example.com', [497]);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.abroad.open.set('497', ['2026-10-07']);
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    const notDue = await w.run();
+    expect(notDue.abroad?.checked).toBe(0);
+    expect(notDue.delivery).toMatchObject({ sent: 0, held: 1 });
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    w.abroad.failing.add(497);
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 1 });
+    w.abroad.failing.clear();
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    const recovered = await w.run();
+    expect(recovered.abroad?.queued).toBe(0); // announcement already queued during pause
+    expect(recovered.delivery).toMatchObject({ sent: 1, held: 0 });
+    expect(w.mailer.sent[0]!.text).toContain('Office calendar checked:');
+    expect(w.mailer.sent[0]!.text).not.toContain('check time unavailable');
+  });
+
+  it('cannot release an unhealthy home scan through the later healthy abroad pass', async () => {
+    const w = await world();
+    await w.subscribe('juan@example.com', [486, 497]);
+    await w.run();
+    await w.kv.set(K.mailPaused, '1');
+    w.upstream.open.set('486', ['2026-10-07']);
+    await w.run();
+    await w.kv.write([{ op: 'del', key: K.mailPaused }]);
+    w.upstream.failing.add(486);
+    w.upstream.failing.add(693);
+    w.abroad.open.set('497', ['2026-10-08']);
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    const report = await w.run();
+    expect(report.healthy).toBe(false);
+    expect(report.abroad?.trusted).toBe(true);
+    expect(report.delivery).toMatchObject({ sent: 1, held: 1 });
+    expect(w.mailer.sent[0]!.text).toContain('Thu 8 Oct 2026');
+    expect(w.mailer.sent[0]!.text).not.toContain('Wed 7 Oct 2026');
+  });
+});
+
+describe('delivery stop across passes', () => {
+  it('keeps the three-refusal stop in effect for the whole run', async () => {
+    const w = await world();
+    for (const n of [1, 2, 3, 4]) await w.subscribe(`juan${n}@example.com`, [486]);
+    await w.run();
+    w.t.advance(ACTIVE_EVERY_MINUTES * 60_000);
+    w.upstream.open.set('486', ['2026-10-07']);
+    w.mailer.failNext = 6;
+    const report = await w.run();
+    expect(report.abroad?.trusted).toBe(true);
+    expect(report.abroad?.queued).toBe(0);
+    expect(report.delivery).toMatchObject({ failed: 3, stoppedBy: 'mail errors', remaining: 1, held: 3 });
+    expect(w.mailer.failNext).toBe(3);
+  });
+});

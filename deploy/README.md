@@ -40,7 +40,7 @@ every alert is out, it stores in R2 what changed since the last scan ([Data in R
 guardrails:
 
 1. One run at a time, enforced in Redis, so a laptop pointed at the same Redis cannot race the server.
-2. **An unhealthy scan sends nothing and changes no baseline**: the office list failed or was empty,
+2. **An unhealthy scan sends nothing from that stream and changes no baseline**: the office list failed or was empty,
    more than 20% of offices failed, no office published any date, or the office list came back more
    than a fifth shorter than the last good one (which then stays).
 3. An office that failed, or suddenly publishes no dates, keeps its baseline, so a glitch can never make
@@ -66,7 +66,9 @@ guardrails:
    written before this (29 September 2026) kept wall-clock expiries of 2 to 4 hours until the first
    run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (288) a person per Manila day;
    `MAIL_DAILY_LIMIT` (300) emails a day in total.
-7. Only dates open at the latest good look are sent; one that closed while it waited keeps waiting, in case
+7. Only dates verified open in the current trusted run are sent, with successful lookups for the office
+   and the requested applicant count. Failed or skipped checks leave alerts waiting without spending
+   an email allowance. One that closed while it waited keeps waiting, in case
    it opens again. Alerts older than 3 hours are dropped.
 8. Three mail failures in a row stop delivery; the rest waits for the next run. An email the mail
    server refused is tried again later and not charged to anyone's daily count; one that failed

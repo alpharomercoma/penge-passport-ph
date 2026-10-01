@@ -32,13 +32,19 @@ can be under 5 minutes apart, and a 5-minute floor would have skipped every othe
 **Nothing is dropped for coming too soon.** What a check finds before a person's next email is due waits in a
 signed record (`pp:held:<id>`, listed in `pp:held-subs`) and goes out with that email. Before sending:
 
-- only dates open at the latest good look go out; a group (2 to 5 people) also needs the date open for one;
+- only dates verified open by a successful lookup in the current run go out; the scan must be trusted, and a group (2 to 5 people) needs successful lookups for both its group size and one person;
+- a failed or skipped lookup, an untrusted scan, or a missing observation sends nothing for that office and applicant count; the waiting date keeps its original expiry and spends no email allowance;
 - a date that closed while it waited keeps waiting, in case it opens again (the 3-hour announcement window
   would stop it being queued a second time, and this person was never told);
 - each date expires on its own, 3 hours after it was first queued, and counts its own refused sends (3 at
   most);
 - the email is marked sent before it goes out, as an outbox entry is popped first: a crash can lose one
   alert but never send it twice. A refusal from the mail server undoes that in one write and tries again.
+
+For posts abroad, a waiting alert is considered only after that post is checked again, even if the
+check queues no newly opened date. A healthy abroad pass cannot release an unverified date at home.
+The calendar lookup time shown in the email comes from that run's office observation. Calendar
+availability is still the DFA's date-level flag; the checker does not verify every hourly time slot.
 
 ## How time is measured
 

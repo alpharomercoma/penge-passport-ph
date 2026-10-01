@@ -110,6 +110,26 @@ describe('templates', () => {
     );
   });
 
+  it('shows each recorded check in Manila time across midnight, with no fabricated fallback', () => {
+    const mail = alertEmail({
+      openings: [
+        { id: 1, name: 'A', dates: ['2026-10-05'], checkedAt: '2026-09-30T16:01:02Z' },
+        { id: 2, name: 'B', dates: ['2026-10-05'], checkedAt: '2026-09-30T15:59:00Z' },
+        { id: 3, name: 'C', dates: ['2026-10-05'], checkedAt: 'invalid' },
+        { id: 4, name: 'D', dates: ['2026-10-05'] },
+      ],
+      applicants: 2, unsubscribeUrl: 'https://x.example/unsubscribe#token=a', manageUrl: 'm', lastToday: false,
+    });
+    for (const part of [mail.text, mail.html]) {
+      expect(part).toContain('Oct 1, 2026, 12:01:02 AM (Manila time, UTC+8)');
+      expect(part).toContain('Sep 30, 2026, 11:59:00 PM (Manila time, UTC+8)');
+      expect(part.match(/Office calendar check time unavailable/g)).toHaveLength(2);
+      expect(part).toContain('Already booked a slot? Unsubscribe');
+    }
+    expect(mail.html).toContain('href="https://x.example/unsubscribe#token=a"');
+    expect(mail.html).not.toContain('/api/unsubscribe');
+  });
+
   it('lists at most three places in a subject', () => {
     const openings = ['A (x)', 'B (x)', 'C (x)', 'D (x)', 'E (x)'].map((name, id) => ({ id, name, dates: ['2026-10-05'] }));
     const { subject } = alertEmail({ openings, applicants: 1, unsubscribeUrl: 'u', manageUrl: 'm', lastToday: false });

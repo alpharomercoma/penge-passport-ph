@@ -5,7 +5,7 @@
 // Guardrails, in order:
 //  1. One run at a time (a lock in Redis, so a laptop cannot race the server).
 //  2. An unhealthy scan (site list missing, >20% of sites failing, or no site
-//     publishing any dates) sends nothing and leaves every baseline alone.
+//     publishing any dates) sends nothing from that stream and leaves its baselines alone.
 //  3. A site that failed, or publishes no dates, keeps its baseline, so a
 //     glitch can never make every date look new on the next run.
 //  4. The first observation of anything is a baseline, never an alert.
@@ -13,7 +13,7 @@
 //  6. Pace: one alert an hour per person (or one per check if they chose it);
 //     what comes in between waits and joins their next email. Caps: alerts per
 //     person per day, and emails per day in total.
-//  7. Only dates open at the latest good look are sent; one that closed while
+//  7. Only dates verified open in this run are sent; one that closed while
 //     it waited keeps waiting, in case it opens again. Alerts older than 3
 //     hours are dropped: stale news is noise.
 //  8. Three mail failures in a row stop delivery; the rest waits for the next run.
@@ -304,7 +304,7 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     }
     // One email per person per check: the posts abroad join the next check's email.
     const emailed = new Set<string>();
-    let delivery = await deliver(deps, now, emailed);
+    let delivery = await deliver(deps, now, emailed, [scan]);
     // Posts abroad come after the Philippines' alerts are out, so they never delay them.
     let abroad: AbroadReport | null = null;
     let recordAbroad: ((sink: RecordSink) => Promise<void>) | null = null;
@@ -312,8 +312,12 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       // A sweep by hand gets its time from when the posts begin; a scheduled run's posts
       // stop at a time counted from the run's start, to end before the next run.
       const deadline = deps.abroadSweep ? now() + ABROAD_SWEEP_DEADLINE_MS : started + ABROAD_DEADLINE_MS;
-      ({ report: abroad, record: recordAbroad } = await abroadPass(deps, deps.abroad, scan.runId, now, deadline, loadSubscriber, holdLock));
-      if (abroad.queued > 0) delivery = addDelivery(delivery, await deliver(deps, now, emailed));
+      const pass = await abroadPass(deps, deps.abroad, scan.runId, now, deadline, loadSubscriber, holdLock);
+      abroad = pass.report;
+      recordAbroad = pass.record;
+      // A held post can become due without any newly announced date. Recheck
+      // it only after this run's abroad observations, including their groups.
+      if (abroad.trusted && !delivery.stoppedBy) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, pass.scan]));
     }
     // The records come after every alert is out and every post checked, so a slow R2
     // delays neither. Only what changed since the last record (record.ts); nothing at
@@ -562,7 +566,7 @@ async function abroadPass(
   deadline: number,
   loadSubscriber: LoadSubscriber,
   holdLock: () => Promise<void>,
-): Promise<{ report: AbroadReport; record: (sink: RecordSink) => Promise<void> }> {
+): Promise<{ report: AbroadReport; scan: Scan; record: (sink: RecordSink) => Promise<void> }> {
   const { kv, log } = deps;
   const more = () => now() < deadline;
   const startedAt = new Date(now()).toISOString();
@@ -624,7 +628,7 @@ async function abroadPass(
       log.warn('posts abroad: the record failed', { runId, err: err as Error });
     }
   };
-  return { report: { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems }, record };
+  return { report: { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems }, scan, record };
 }
 
 function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
@@ -776,16 +780,37 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
   return jobs.size;
 }
 
-/** Send what is in the outbox and what waited for its pace, within every cap. */
+type DeliveryScan = Pick<Scan, 'healthy' | 'sites' | 'groups'>;
+type DeliveryCheck = { checkedAt: string; dates: Map<number, Set<string>> };
+
+/** Proof comes only from successful observations in this run, never a Redis baseline. */
+function deliveryChecks(scans: readonly DeliveryScan[]): Map<number, DeliveryCheck> {
+  const checks = new Map<number, DeliveryCheck>();
+  for (const scan of scans) {
+    if (!scan.healthy) continue;
+    for (const site of scan.sites) {
+      if (!site.ok || !site.fetchedAt || !Number.isFinite(Date.parse(site.fetchedAt))) continue;
+      checks.set(site.id, { checkedAt: site.fetchedAt, dates: new Map([[1, new Set(site.openDates)]]) });
+    }
+    for (const group of scan.groups) {
+      if (group.ok) checks.get(group.siteId)?.dates.set(group.applicants, new Set(group.openDates));
+    }
+  }
+  return checks;
+}
+
+/** Send verified news within every cap. No current scan means no alert may go out. */
 export async function deliver(
   deps: CheckDeps,
   now: () => number = deps.now ?? Date.now,
   /** People already emailed in this check; each is emailed once per check. */
   emailed: Set<string> = new Set(),
+  /** Only scans from this invocation of runCheck; do not load these from stored history. */
+  scans: readonly DeliveryScan[] = [],
 ): Promise<DeliveryReport> {
   const { kv, log } = deps;
   const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
-  const run = { failuresInARow: 0, emailed };
+  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans) };
   // Checked before every email, so a pause takes effect mid-run.
   const paused = async () => {
     if (!(await kv.get(K.mailPaused))) return false;
@@ -864,7 +889,7 @@ async function consider(
   fromHeld: boolean,
   now: () => number,
   report: DeliveryReport,
-  run: { failuresInARow: number; emailed: Set<string> },
+  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck> },
 ): Promise<'next' | 'stop'> {
   const { kv, log, mailer } = deps;
   const id = job.subscriberId;
@@ -974,10 +999,10 @@ async function consider(
     await hold(deps, jobOf(wanted));
     return 'next';
   }
-  // Only dates open at the latest good look go out. One that closed while it
+  // Only dates verified open in this run go out. One that closed while it
   // waited keeps waiting, until it is too old: if it opens again, they have
   // still not been told, and a date is announced to everyone once in 3 hours.
-  const { open: openings, closed } = await splitByOpen(kv, sub.applicants, wanted);
+  const { open: openings, closed } = splitByOpen(run.checks, sub.applicants, wanted);
   const leftover = closed.length > 0 ? jobOf(closed) : null;
   if (openings.length === 0) {
     await hold(deps, jobOf(wanted));
@@ -1067,20 +1092,14 @@ async function consider(
 
 const dateKey = (siteId: number, date: string) => `${siteId}:${date}`;
 
-/**
- * Which dates are open at the latest good look, and which have closed. A group
- * fits only where one person does, so a date gone for one person is closed for
- * every group; with no baseline at all, the office was never looked at: open.
- */
-async function splitByOpen(kv: Kv, applicants: number, openings: Opening[]) {
+/** Unknown, failed and closed dates wait; every applicant count needs current proof. */
+function splitByOpen(checks: ReadonlyMap<number, DeliveryCheck>, applicants: number, openings: Opening[]) {
   const open: Opening[] = [];
   const closed: Opening[] = [];
   for (const o of openings) {
-    const baseline = await kv.hGetAll(K.openDates(o.id));
-    const one = parseDates(baseline['1']);
-    const group = applicants === 1 ? null : parseDates(baseline[String(applicants)]);
-    const isOpen = (d: string) => (!one || one.includes(d)) && (!group || group.includes(d));
-    if (o.dates.some(isOpen)) open.push({ ...o, dates: o.dates.filter(isOpen) });
+    const check = checks.get(o.id);
+    const isOpen = (d: string) => check?.dates.get(1)?.has(d) === true && check.dates.get(applicants)?.has(d) === true;
+    if (o.dates.some(isOpen)) open.push({ ...o, checkedAt: check!.checkedAt, dates: o.dates.filter(isOpen) });
     if (!o.dates.every(isOpen)) closed.push({ ...o, dates: o.dates.filter((d) => !isOpen(d)) });
   }
   return { open, closed };
