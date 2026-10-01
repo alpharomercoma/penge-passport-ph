@@ -32,12 +32,11 @@ it with "Unofficial". The plain "PengePassportPH" works too if you'd rather keep
 **Tags.** Google's rule is that a tag's relevance should be obvious to someone who doesn't know the
 app, from its listing or its first screen. Pick only those, even if that's fewer than five.
 
-Full description (1,501 of 4,000 characters). Google requires an app that shows government
-information without being run by a government to say so and to name its sources in the description,
-which is why both come first and last:
+Full description (1,594 of 4,000 characters). Lead with appointment checking and alerts.
+The sources, privacy link and clearly labelled independence disclosure appear at the bottom:
 
 ```text
-PengePassportPH is unofficial. It is not run by, affiliated with or endorsed by the Department of Foreign Affairs (DFA) or any other government agency. It shows what the DFA's public appointment calendar shows, and you book on the DFA's own site.
+See open DFA passport appointment dates and get email alerts for the offices you choose.
 
 The DFA releases new passport appointment dates at 12 noon and 9 PM, Monday to Saturday, except holidays. PengePassportPH checks for you and emails you when dates open at the offices you can get to.
 
@@ -60,6 +59,9 @@ Sources
 • Department of Foreign Affairs: https://dfa.gov.ph
 
 Privacy: https://alphaexperiments.com/pengepassportph/privacy
+
+Disclosure
+PengePassportPH is an independent, unofficial project. It is not run by, affiliated with or endorsed by the Department of Foreign Affairs (DFA) or any other government agency. Appointment availability comes from the DFA's public calendar.
 ```
 
 Where each claim comes from:
