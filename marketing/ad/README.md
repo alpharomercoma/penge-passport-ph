@@ -8,6 +8,10 @@ The finished video is [`out/pengepassportph-ad-16x9.mp4`](out/pengepassportph-ad
 H.264 and AAC, -14 LUFS), with a cover image in [`out/thumbnail.png`](out/thumbnail.png). The rest of
 `out/` and all of `frames/` are generated and not committed.
 
+## YouTube upload copy
+
+The title and description are in [`youtube.txt`](youtube.txt). Keep the clearly labelled disclosure at the bottom when editing the description. The YouTube URL is added in Play Console after uploading the video; no hosted URL is recorded here yet.
+
 ## Build it
 
 ```sh

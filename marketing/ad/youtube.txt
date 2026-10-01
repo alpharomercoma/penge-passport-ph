@@ -1,0 +1,27 @@
+TITLE
+PengePassportPH: DFA Passport Appointment Slot Alerts
+
+DESCRIPTION
+Full na naman? Let PengePassportPH check for you.
+
+Find open DFA passport appointment dates, check the available hours, and get email alerts for the offices you choose.
+
+• Checks all 43 DFA offices in the Philippines every 5 minutes
+• Covers 133 embassies, consulates and outreach posts in 67 countries
+• Shows available days, hours and remaining places from the public appointment calendar
+• Lets you choose up to 10 offices and alerts for groups of 1 to 5 people
+
+Website: https://alphaexperiments.com/pengepassportph/
+
+Availability can change quickly. PengePassportPH never reserves or books an appointment. Complete your booking at https://passport.gov.ph/appointment
+
+Open source: https://github.com/alpharomercoma/penge-passport-ph
+Privacy: https://alphaexperiments.com/pengepassportph/privacy
+
+Sources
+Appointment calendar: https://passport.gov.ph/appointment
+DFA passport FAQ: https://passport.gov.ph/faqs_2
+Department of Foreign Affairs: https://dfa.gov.ph
+
+Disclosure
+PengePassportPH is an independent, unofficial project. It is not run by, affiliated with or endorsed by the Department of Foreign Affairs (DFA) or any other government agency. Appointment information comes from the DFA's public calendar.
