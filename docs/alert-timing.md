@@ -22,7 +22,7 @@ exactly the news people signed up for.
 | `hourly` (the default, and every subscription from before paces existed) | 60 minutes, strictly | 24 a day |
 | `asap`, "As soon as a check finds dates" | One per check (checks start every 5 minutes; the Philippines and the posts abroad in one check count as one), and never within 2 minutes | 288 a day |
 
-`ALERTS_PER_SUBSCRIBER_PER_DAY` (288) is only a safety net above both; `MAIL_DAILY_LIMIT` (300 emails a day
+`ALERTS_PER_SUBSCRIBER_PER_DAY` (288) is only a safety net above both; `MAIL_DAILY_LIMIT` (2,500 emails a day
 for the whole site) still protects the domain's reputation and will need raising as subscribers grow.
 
 The 2-minute floor was 5 minutes while checks ran every 15. When they went back to every 5 minutes on 30

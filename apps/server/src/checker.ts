@@ -49,7 +49,7 @@ import { type Mailer, wasRefused } from './mailer.ts';
 import { elapsed, parseStamp, type Stamp, stampAt, systemUptime, type Uptime } from './clock.ts';
 import type { SnapshotSink } from './r2.ts';
 import { beginRecord, type Recorded, type RecordSink, recordRun, skipRecord } from './record.ts';
-import { reportOncePerDay, type Stats } from './stats.ts';
+import { reportOncePerDay, STATS_KEEP_SECONDS, type Stats } from './stats.ts';
 import {
   assessHealth,
   type GroupObservation,
@@ -799,6 +799,25 @@ function deliveryChecks(scans: readonly DeliveryScan[]): Map<number, DeliveryChe
   return checks;
 }
 
+/**
+ * Notes, for the day's report, the limit in force when that day's counter is charged:
+ * the highest of the day, which the report shows beside how many went out. The report
+ * comes the next morning, when the setting may have changed. It is for the report only:
+ * failing to write it must never hold an alert back.
+ */
+async function noteMailLimit(deps: CheckDeps, noted: Set<string>, day: string): Promise<void> {
+  if (noted.has(day)) return;
+  try {
+    const before = await deps.kv.get(K.mailLimit(day));
+    if (before === null || Number(before) < deps.mailDailyLimit) {
+      await deps.kv.set(K.mailLimit(day), String(deps.mailDailyLimit), { ttlSeconds: STATS_KEEP_SECONDS });
+    }
+    noted.add(day); // only once it is there: a failure is tried again at the next charge
+  } catch (err) {
+    deps.log.warn("the day's email limit was not noted for the report", { err: err as Error });
+  }
+}
+
 /** Send verified news within every cap. No current scan means no alert may go out. */
 export async function deliver(
   deps: CheckDeps,
@@ -810,7 +829,7 @@ export async function deliver(
 ): Promise<DeliveryReport> {
   const { kv, log } = deps;
   const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
-  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans) };
+  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans), limitNoted: new Set<string>() };
   // Checked before every email, so a pause takes effect mid-run.
   const paused = async () => {
     if (!(await kv.get(K.mailPaused))) return false;
@@ -889,7 +908,7 @@ async function consider(
   fromHeld: boolean,
   now: () => number,
   report: DeliveryReport,
-  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck> },
+  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck>; limitNoted: Set<string> },
 ): Promise<'next' | 'stop'> {
   const { kv, log, mailer } = deps;
   const id = job.subscriberId;
@@ -1013,14 +1032,16 @@ async function consider(
   const day = manilaDay(now());
   if (Number((await kv.get(K.alertsToday(id, day))) ?? 0) >= deps.alertsPerSubscriberPerDay) {
     report.skipped++;
-    deps.stats?.count('alertsCapped');
+    deps.stats?.count('alertsCapped', 1, day);
     await clearHeld(kv, id);
     return 'next';
   }
+  await noteMailLimit(deps, run.limitNoted, day);
   if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
     // It all waits uncharged, closed dates too: the allowance is only spent on a send.
     await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, ...holdOps(jobOf(wanted))]);
     report.stoppedBy = 'daily limit';
+    deps.stats?.count('mailLimitHits', 1, day);
     log.warn('daily email limit reached; the outbox waits', { limit: deps.mailDailyLimit });
     return 'stop';
   }
@@ -1052,7 +1073,7 @@ async function consider(
     const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
     if (result === 'sent') {
       report.sent++;
-      deps.stats?.count('alertsSent');
+      deps.stats?.count('alertsSent', 1, day);
     } else if (result === 'dry-run') report.dryRun++;
     else report.skipped++;
     run.failuresInARow = 0;

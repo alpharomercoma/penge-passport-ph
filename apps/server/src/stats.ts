@@ -39,6 +39,7 @@ export const COUNTS = [
   'unsubscribed',
   'alertsSent',
   'alertsCapped',
+  'mailLimitHits',
   'runs',
   'healthyRuns',
   'datesOpened',
@@ -58,7 +59,8 @@ export interface Stats {
   visit(address: string, userAgent: string | undefined, opts?: { abroad?: boolean }): void;
   /** An office opened by a person. */
   officeView(siteId: number, userAgent: string | undefined): void;
-  count(name: Count, by?: number): void;
+  /** `day` is the Manila day it belongs to, when that is not the moment the write happens (a charge made just before midnight). */
+  count(name: Count, by?: number, day?: string): void;
   /** Resolves once everything counted so far is written. */
   settled(): Promise<void>;
 }
@@ -116,10 +118,10 @@ export function createStats(kv: Kv, log: Logger, now: () => number = Date.now): 
         await markSince();
       });
     },
-    count(name, by = 1) {
+    count(name, by = 1, day) {
       if (by <= 0) return;
       later(async () => {
-        await kv.incr(K.stat(manilaDay(now()), name), STATS_KEEP_SECONDS, by);
+        await kv.incr(K.stat(day ?? manilaDay(now()), name), STATS_KEEP_SECONDS, by);
         await markSince();
       });
     },
@@ -141,6 +143,8 @@ export interface DailyStats {
   counts: Record<Count, number>;
   /** The offices opened most that day. */
   topOffices: { id: number; name: string; views: number }[];
+  /** The highest site-wide limit on alerts (MAIL_DAILY_LIMIT) in force when that day's alerts were charged; null if none were. */
+  mailLimit: number | null;
   /** When the report was made, not at the end of the day. */
   subscribers: number;
   generatedAt: string;
@@ -166,6 +170,7 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     .sort((a, b) => b.views - a.views || a.id - b.id)
     .slice(0, 5);
   const since = await kv.get(K.statsSince);
+  const limit = await kv.get(K.mailLimit(day));
   return {
     schema: 1,
     day,
@@ -174,6 +179,7 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     abroadVisitors: await kv.pfCount(K.stat(day, 'abroadVisitors')),
     counts,
     topOffices,
+    mailLimit: limit !== null && Number.isFinite(Number(limit)) ? Number(limit) : null,
     subscribers: (await kv.sMembers(K.allSubscribers)).length,
     generatedAt: new Date(now).toISOString(),
   };

@@ -65,7 +65,7 @@ guardrails:
    week can let Redis drop a held alert or an announcement mark early (never send one early). Records
    written before this (29 September 2026) kept wall-clock expiries of 2 to 4 hours until the first
    run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (288) a person per Manila day;
-   `MAIL_DAILY_LIMIT` (300) emails a day in total.
+   `MAIL_DAILY_LIMIT` (2,500) emails a day in total.
 7. Only dates verified open in the current trusted run are sent, with successful lookups for the office
    and the requested applicant count. Failed or skipped checks leave alerts waiting without spending
    an email allowance. One that closed while it waited keeps waiting, in case
@@ -125,7 +125,7 @@ All times are Manila time; the server's clock is UTC.
 | The site's copy on a phone (installed from the browser, or the [Android app](../docs/android.md)) | Each page load asks the server first, so a deploy shows on the next visit | The service worker (`apps/web/src/sw.js`) keeps the last deploy's page, code and icons to open offline; appointment data is never kept |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 9 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA, in one request: while a person has the site open, a DFA session is kept ready (at most one request every 7 minutes or so, none while nobody visits); shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
-| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 288 a person and 300 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
+| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 288 a person and 2,500 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
 | Debian and Caddy security updates | Daily | Restart at 04:30 only when an update needs it |
 | Node.js security releases | Weekly, Tuesday 04:10–04:40 | Signature-checked; runs at the next boot if the server was off |
 | HTTPS certificate | Caddy renews it before it expires | |
@@ -275,8 +275,9 @@ longer work. Two records stay, so nobody else can send as the old address: `peng
 | 8. `MAIL_MODE=live` in `server.env`, then `systemctl restart penge-api`; the website's form switches on by itself | done (27 September 2026) |
 
 A new domain on a new IP starts with no reputation, so the first messages often go to spam whatever the
-records say. Mark them "Not spam", and send little at first: `MAIL_DAILY_LIMIT` (300) keeps volume low
-while reputation builds. Google Postmaster Tools (postmaster.google.com, verify the subdomain with a TXT
+records say. Mark them "Not spam", and send little at first: `MAIL_DAILY_LIMIT` keeps volume low
+while reputation builds. It was 300 until 4 October 2026, when the site hit it at 22:00 Manila on 3 October
+with 34 subscribers; it is now 2,500 (see [Raising the limit](#raising-the-email-limit)). Google Postmaster Tools (postmaster.google.com, verify the subdomain with a TXT
 record) shows how Gmail rates the domain once there is some volume.
 
 The test message, from the server:
@@ -408,7 +409,8 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
 The API counts, per Manila day: distinct visitors (estimated, see above) and how many of them looked at
 the posts abroad, offices opened and which ones most, group sizes checked, days tapped for their hours,
 confirmation emails, new subscribers, changed subscriptions and unsubscribes. The checker adds its runs,
-the new dates it found, the alerts it sent and the ones the daily cap held back. Nothing is added to the
+the new dates it found, the alerts it sent (shown against `MAIL_DAILY_LIMIT`), the runs that limit stopped and
+the alerts a person's own daily cap held back. Nothing is added to the
 page, and a request never waits for its count (`apps/server/src/stats.ts`). Crawlers, link previews and
 scripts are not counted as visitors.
 
@@ -421,6 +423,29 @@ in Valkey 40 days.
 SELECT day, visitors, counts.officeViews, counts.confirmed, counts.alertsSent
 FROM read_json('r2://pengepassportph/stats/v1/*/stats.json') ORDER BY day;
 ```
+
+## Raising the email limit
+
+`MAIL_DAILY_LIMIT` is the most alerts the site sends in a Manila day (confirmation and deletion mail are not
+counted). When it is reached the run stops, the rest wait uncharged in the outbox, and the log says
+`daily email limit reached; the outbox waits`. The daily numbers show it as "Alerts sent: N of LIMIT" and
+"Runs stopped by the daily email limit". LIMIT is the highest limit in force when that day's alerts were
+charged (each run notes it, `pp:mail:limit:<day>`, kept 40 days), not the setting at the time of the report.
+
+It was 300 and ran out at 22:00 Manila on 3 October 2026 (34 subscribers, about 12 alerts an hour, 24 runs
+stopped). The next morning ran about 23 an hour with 43 subscribers (29 "asap", 14 "hourly"), or about 13
+alerts a subscriber a day. Sized on that rate:
+
+| Subscribers | Alerts a day | With 2× room |
+| --- | --- | --- |
+| 43 | ~560 | ~1,100 |
+| 100 | ~1,300 | ~2,600 |
+| 190 | ~2,500 | ~5,000 |
+
+The limit is 2,500 since 4 October 2026: about 4.5× that day's demand. Raise it when "alerts sent" passes half
+of it (about 1,250 a day, near 100 subscribers) and watch Gmail placement and Google Postmaster as volume
+grows. Keep it under 5,000 a day unless you mean to be a Gmail bulk sender, which has its own rules. The
+checker reads `server.env` on every run, so changing `MAIL_DAILY_LIMIT` there needs no restart.
 
 ## Data in R2
 

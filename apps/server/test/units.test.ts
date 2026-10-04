@@ -186,7 +186,7 @@ describe('config', () => {
   it('defaults to dry-run and safe limits', () => {
     const config = loadConfig(env);
     expect(config.mailMode).toBe('dry-run');
-    expect(config.mailDailyLimit).toBe(300);
+    expect(config.mailDailyLimit).toBe(2500);
     // A safety net above what either pace allows: 24 an hour apart, 288 one per check.
     expect(config.alertsPerSubscriberPerDay).toBe(288);
     expect(config.statsEmail).toBeNull();

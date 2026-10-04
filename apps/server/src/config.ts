@@ -129,7 +129,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     mailFrom,
     publicBaseUrl,
     mailMode,
-    mailDailyLimit: int('MAIL_DAILY_LIMIT', 300, 0, 100_000),
+    mailDailyLimit: int('MAIL_DAILY_LIMIT', 2500, 0, 100_000),
     alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 288, 1, 1000),
     statsEmail,
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',

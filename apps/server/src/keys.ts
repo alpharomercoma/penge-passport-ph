@@ -42,6 +42,8 @@ export const K = {
   /** Set once the day's subscriber backup is in R2. */
   backupDone: (day: string) => `${P}backup:${day}`,
   mailSentToday: (day: string) => `${P}mail:sent:${day}`,
+  /** The site-wide daily limit the day's runs enforced, for the day's report. */
+  mailLimit: (day: string) => `${P}mail:limit:${day}`,
   alertsToday: (subscriberId: string, day: string) => `${P}alerts:${subscriberId}:${day}`,
   rate: (bucket: string, id: string) => `${P}rate:${bucket}:${id}`,
   /** Cached answers to on-demand lookups (dates for a group, hours of a day). */

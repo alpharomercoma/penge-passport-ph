@@ -4,7 +4,8 @@ import { createApi } from '../src/api.ts';
 import { type CheckDeps, runCheck } from '../src/checker.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
-import { createStats, dailyStats, isPerson, reportOncePerDay, SALT_SECONDS, statsKey } from '../src/stats.ts';
+import { COUNTS, type Count, createStats, dailyStats, isPerson, reportOncePerDay, SALT_SECONDS, statsKey } from '../src/stats.ts';
+import { dailyStatsEmail } from '../src/templates.ts';
 import { confirm, createPending } from '../src/subscribers.ts';
 import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES } from './helpers.ts';
 
@@ -213,6 +214,15 @@ describe('the morning report', () => {
     expect(mail.html).toContain('New subscribers');
   });
 
+  it("reports the limit the day enforced, not the one set when the report is made", async () => {
+    const r = await reporting();
+    await r.kv.set(K.mailLimit('2026-09-27'), '300'); // what that day's runs enforced; the setting is 2,500 by now
+    r.t.advance(21 * 3600_000);
+    await r.report();
+    expect(r.mailer.sent[0]!.text).toContain('Alerts sent: 0 of 300 allowed a day');
+    expect(JSON.parse(r.objects.get(statsKey('2026-09-27'))!.body).mailLimit).toBe(300);
+  });
+
   it('retries R2 on the next run, and still emails on the first', async () => {
     const r = await reporting();
     r.t.advance(21 * 3600_000);
@@ -371,5 +381,233 @@ describe('what the checker counts', () => {
     const numbers = await dailyStats(kv, day, t.now());
     expect(numbers.counts).toMatchObject({ runs: 4, healthyRuns: 3, datesOpened: 3, alertsSent: 1, alertsCapped: 1 });
     expect(mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+  });
+
+  it('counts a run the site-wide daily email limit stopped, apart from the per-person cap', async () => {
+    const t = clock();
+    const kv = new MemoryKv(t.now);
+    const { log } = recordingLog();
+    const upstream = new FakeUpstream();
+    const mailer = new FakeMailer();
+    const deps: CheckDeps = {
+      kv,
+      upstream,
+      sink: new MemorySink(),
+      mailer,
+      keys,
+      log,
+      publicBaseUrl: 'https://penge.example',
+      mailDailyLimit: 1,
+      alertsPerSubscriberPerDay: 288,
+      client: 'penge-passport-ph@test',
+      uptime: () => null,
+      now: t.now,
+      stats: createStats(kv, log, t.now),
+    };
+    for (const email of ['ana@example.com', 'ben@example.com']) {
+      await confirm(kv, await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+    }
+    await runCheck({ ...deps, runId: 'run1' });
+    t.advance(10 * 60_000);
+    upstream.open.set('486', ['2026-10-05']);
+    await runCheck({ ...deps, runId: 'run2' });
+    await deps.stats!.settled();
+    const numbers = await dailyStats(kv, manilaDay(t.now()), t.now());
+    expect(mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+    expect(numbers.counts).toMatchObject({ alertsSent: 1, alertsCapped: 0, mailLimitHits: 1 });
+    expect(numbers.mailLimit).toBe(1);
+    // A later day, which no run enforced a limit on, has none to show.
+    expect((await dailyStats(kv, manilaDay(t.now() + 86_400_000), t.now())).mailLimit).toBeNull();
+  });
+
+  it('still sends alerts when the day\'s limit cannot be noted for the report', async () => {
+    const t = clock();
+    const kv = new MemoryKv(t.now);
+    const realSet = kv.set.bind(kv);
+    kv.set = async (key, value, opts) => {
+      if (key.startsWith(K.mailLimit(''))) throw new Error('valkey went away');
+      return realSet(key, value, opts);
+    };
+    const { log } = recordingLog();
+    const upstream = new FakeUpstream();
+    const mailer = new FakeMailer();
+    const deps: CheckDeps = {
+      kv,
+      upstream,
+      sink: new MemorySink(),
+      mailer,
+      keys,
+      log,
+      publicBaseUrl: 'https://penge.example',
+      mailDailyLimit: 300,
+      alertsPerSubscriberPerDay: 288,
+      client: 'penge-passport-ph@test',
+      uptime: () => null,
+      now: t.now,
+      stats: createStats(kv, log, t.now),
+    };
+    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+    await runCheck({ ...deps, runId: 'run1' });
+    t.advance(10 * 60_000);
+    upstream.open.set('486', ['2026-10-05']);
+    await runCheck({ ...deps, runId: 'run2' });
+    expect(mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+    expect((await dailyStats(kv, manilaDay(t.now()), t.now())).mailLimit).toBeNull();
+  });
+
+  async function limitWorld(start?: number) {
+    const t = clock(start);
+    const kv = new MemoryKv(t.now);
+    const { log } = recordingLog();
+    const upstream = new FakeUpstream();
+    const mailer = new FakeMailer();
+    const deps: CheckDeps = {
+      kv,
+      upstream,
+      sink: new MemorySink(),
+      mailer,
+      keys,
+      log,
+      publicBaseUrl: 'https://penge.example',
+      mailDailyLimit: 300,
+      alertsPerSubscriberPerDay: 288,
+      client: 'penge-passport-ph@test',
+      uptime: () => null,
+      now: t.now,
+      stats: createStats(kv, log, t.now),
+    };
+    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+    let n = 0;
+    const run = async (mailDailyLimit: number, dates: string[], alertsPerSubscriberPerDay = 288) => {
+      upstream.open.set('486', dates);
+      await runCheck({ ...deps, mailDailyLimit, alertsPerSubscriberPerDay, runId: `run${++n}` });
+      await deps.stats!.settled();
+      t.advance(10 * 60_000);
+    };
+    const limit = async () => (await dailyStats(kv, manilaDay(t.now() - 10 * 60_000), t.now())).mailLimit;
+    return { run, limit, mailer, t, kv };
+  }
+
+  it('reports the highest limit in force that day, so lowering it later does not show more sent than allowed', async () => {
+    const w = await limitWorld();
+    await w.run(5, []);
+    await w.run(5, ['2026-10-05']); // an alert, charged under a limit of 5
+    expect(await w.limit()).toBe(5);
+    await w.run(1, ['2026-10-05', '2026-10-06']); // the limit lowered: this one is stopped, and the day's limit stays 5
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+    expect(await w.limit()).toBe(5);
+    await w.run(50, ['2026-10-05', '2026-10-06', '2026-10-07']); // raised later in the day
+    expect(await w.limit()).toBe(50);
+  });
+
+  // 23:59:58 in Manila on 27 September, 2 seconds before the new day, after a run that sees nothing.
+  async function justBeforeMidnight() {
+    const w = await limitWorld(Date.parse('2026-09-27T15:30:00Z'));
+    await w.run(300, []); // baseline; the clock is now 15:40
+    return w;
+  }
+  const countsOn = async (kv: MemoryKv, day: string, now: number) => (await dailyStats(kv, day, now)).counts;
+
+  it('counts a limit stop under the day of its charge, though the run goes on past midnight', async () => {
+    const w = await justBeforeMidnight();
+    w.t.advance(19 * 60_000 + 58_000); // 15:59:58
+    const write = w.kv.write.bind(w.kv);
+    w.kv.write = async (ops) => {
+      if (ops.some((o) => o.op === 'decr')) w.t.advance(5000); // the stop's own write: midnight passes
+      return write(ops);
+    };
+    await w.run(0, ['2026-10-05']);
+    expect((await countsOn(w.kv, '2026-09-27', w.t.now())).mailLimitHits).toBe(1);
+    expect((await countsOn(w.kv, '2026-09-28', w.t.now())).mailLimitHits).toBe(0);
+  });
+
+  it('counts an alert sent after midnight under the day its allowance was charged', async () => {
+    const w = await justBeforeMidnight();
+    w.t.advance(19 * 60_000 + 58_000);
+    const send = w.mailer.send.bind(w.mailer);
+    w.mailer.send = async (mail) => {
+      w.t.advance(5000); // the send takes until after midnight
+      return send(mail);
+    };
+    await w.run(300, ['2026-10-05']);
+    expect((await countsOn(w.kv, '2026-09-27', w.t.now())).alertsSent).toBe(1);
+    expect((await countsOn(w.kv, '2026-09-28', w.t.now())).alertsSent).toBe(0);
+  });
+
+  it("counts a person's own cap under the day it was checked against, though midnight passes while it is read", async () => {
+    const w = await justBeforeMidnight();
+    await w.run(300, ['2026-10-05'], 1); // ana's one alert for the day, at 15:40
+    w.t.advance(9 * 60_000 + 58_000); // 15:59:58
+    const get = w.kv.get.bind(w.kv);
+    w.kv.get = async (key) => {
+      const value = await get(key);
+      if (key.includes(':alerts:')) w.t.advance(5000); // read just before midnight, answered after
+      return value;
+    };
+    await w.run(300, ['2026-10-05', '2026-10-06'], 1);
+    expect((await countsOn(w.kv, '2026-09-27', w.t.now())).alertsCapped).toBe(1);
+    expect((await countsOn(w.kv, '2026-09-28', w.t.now())).alertsCapped).toBe(0);
+  });
+
+  it("notes the day's limit at a later charge when the first attempt failed", async () => {
+    const w = await limitWorld();
+    await confirm(w.kv, await createPending(w.kv, keys, { email: 'ben@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, w.t.now()), w.t.now());
+    await w.run(300, []);
+    const set = w.kv.set.bind(w.kv);
+    let failures = 1;
+    w.kv.set = async (key, value, opts) => {
+      if (key.startsWith(K.mailLimit('')) && failures-- > 0) throw new Error('valkey blinked');
+      return set(key, value, opts);
+    };
+    await w.run(300, ['2026-10-05']); // two alerts in one run: the first note fails, the second succeeds
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(2);
+    expect(await w.limit()).toBe(300);
+  });
+
+  it('reports a limit of zero as zero, not as unknown', async () => {
+    const w = await limitWorld();
+    await w.run(0, []);
+    await w.run(0, ['2026-10-05']);
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(0);
+    expect(await w.limit()).toBe(0);
+    expect(dailyStatsEmail({ ...base0, mailLimit: 0 }).text).toContain('Alerts sent: 0 of 0 allowed a day');
+  });
+});
+
+const base0 = {
+  schema: 1 as const,
+  day: '2026-10-03',
+  partialFrom: null,
+  visitors: 0,
+  abroadVisitors: 0,
+  topOffices: [],
+  subscribers: 0,
+  generatedAt: '2026-10-03T23:30:00.000Z',
+  counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
+};describe("the operator's daily email", () => {
+  const base = {
+    schema: 1 as const,
+    day: '2026-10-03',
+    partialFrom: null,
+    visitors: 187,
+    abroadVisitors: 37,
+    topOffices: [],
+    subscribers: 43,
+    generatedAt: '2026-10-03T23:30:00.000Z',
+    counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
+  };
+
+  it('says how much of the daily email limit was used, and how often it stopped a run', () => {
+    const counts = { ...base.counts, alertsSent: 300, mailLimitHits: 24 };
+    const mail = dailyStatsEmail({ ...base, counts, mailLimit: 2500 });
+    expect(mail.text).toContain('Alerts sent: 300 of 2,500 allowed a day');
+    expect(mail.text).toContain('Runs stopped by the daily email limit: 24');
+    expect(mail.text).toContain("Alerts held back by a person's own daily cap: 0");
+    expect(mail.html).toContain('300 of 2,500 allowed a day');
+  });
+
+  it('shows the plain count when the limit is not known', () => {
+    const mail = dailyStatsEmail({ ...base, counts: { ...base.counts, alertsSent: 7 }, mailLimit: null });
+    expect(mail.text).toContain('Alerts sent: 7\n');
   });
 });

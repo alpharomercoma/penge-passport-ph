@@ -181,8 +181,12 @@ export function dailyStatsEmail(stats: DailyStats): Rendered {
         ['Changed their offices', String(c.updated)],
         ['Unsubscribed', String(c.unsubscribed)],
         ['Subscribers now', String(stats.subscribers)],
-        ['Alerts sent', String(c.alertsSent)],
-        ['Alerts held back by the daily cap', String(c.alertsCapped)],
+        [
+          'Alerts sent',
+          stats.mailLimit === null ? String(c.alertsSent) : `${c.alertsSent.toLocaleString('en-US')} of ${stats.mailLimit.toLocaleString('en-US')} allowed a day`,
+        ],
+        ['Runs stopped by the daily email limit', String(c.mailLimitHits)],
+        ["Alerts held back by a person's own daily cap", String(c.alertsCapped)],
       ],
     ],
     [
