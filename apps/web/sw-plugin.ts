@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Plugin } from 'vite';
 
 /** Files from public/ the app needs offline, beside the page and its built assets. */
-export const PUBLIC_SHELL = ['manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'favicon.svg'];
+export const PUBLIC_SHELL = ['manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge-96.png', 'favicon.svg'];
 
 /**
  * Writes sw.js from src/sw.js with this build's files to keep on the device (the
@@ -29,13 +29,16 @@ export function serviceWorker(): Plugin {
       // Relative to sw.js, which sits at the root of the site's path: "./" is the page itself.
       const shell = ['./', ...built, ...PUBLIC_SHELL];
       const worker = readFileSync(join(root, 'src/sw.js'), 'utf8');
-      const hash = createHash('sha256').update(worker);
+      // The push state code the page also uses, inlined: a worker script cannot import a module.
+      const shared = readFileSync(join(root, 'src/notify/shared.js'), 'utf8').replace(/^export /gm, '');
+      const hash = createHash('sha256').update(worker).update(shared);
       for (const name of Object.keys(bundle).sort()) {
         const file = bundle[name]!;
         hash.update(`${name}\n`).update(file.type === 'chunk' ? file.code : file.source);
       }
       for (const name of PUBLIC_SHELL) hash.update(`${name}\n`).update(readFileSync(join(publicDir, name)));
       const source = worker
+        .replace('/* __SHARED__ */', () => shared)
         .replace('__VERSION__', () => hash.digest('hex').slice(0, 12))
         .replace('__SHELL__', () => JSON.stringify(shell));
       this.emitFile({ type: 'asset', fileName: 'sw.js', source });

@@ -4,6 +4,7 @@
 //   icons/maskable-512.png       Android adaptive icon: full bleed, mark inside the safe circle
 //   icons/apple-touch-icon.png   iOS home screen (it rounds the corners itself)
 //   android/res/drawable-*/splash.png   the Android app's splash (see below)
+//   icons/badge-96.png, icons/monochrome-512.png   notification icons, from icons/mark-monochrome.svg
 // Google Play's icon is rendered with the store's other graphics (marketing/play-store/capture.cjs).
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -45,6 +46,19 @@ for (const { file, size, markShare, radius } of icons) {
 ${mark.replace('<svg ', `<svg width="${inner}" height="${inner}" `)}</div></body></html>`);
   mkdirSync(dirname(file), { recursive: true });
   await page.screenshot({ path: file, omitBackground: radius > 0 });
+  console.log('wrote', file.slice(repo.length + 1));
+}
+// Notification icons: the one-colour mark (white on transparent; the system reads only alpha).
+const mono = readFileSync(join(web, 'public/icons/mark-monochrome.svg'), 'utf8');
+for (const { file, size } of [
+  { file: join(web, 'public/icons/badge-96.png'), size: 96 },
+  { file: join(web, 'public/icons/monochrome-512.png'), size: 512 },
+]) {
+  await page.setViewportSize({ width: size, height: size });
+  const inner = Math.round(size * 0.86);
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent">
+<div style="width:${size}px;height:${size}px;display:grid;place-items:center">${mono.replace('<svg ', `<svg width="${inner}" height="${inner}" `)}</div></body></html>`);
+  await page.screenshot({ path: file, omitBackground: true });
   console.log('wrote', file.slice(repo.length + 1));
 }
 await browser.close();
