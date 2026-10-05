@@ -16,7 +16,7 @@ build() {
   # shellcheck source-path=SCRIPTDIR source=site.conf
   . deploy/site.conf
   npm run build -w @penge/server >/dev/null 2>&1
-  BASE_PATH=$BASE_PATH npm run build -w @penge/web >/dev/null 2>&1
+  RELEASE=1 BASE_PATH=$BASE_PATH npm run build -w @penge/web >/dev/null 2>&1
   local rev id
   rev=$(git rev-parse --short=10 HEAD 2>/dev/null || echo local)
   id="$(date -u +%Y%m%dT%H%M%SZ)-$rev-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"

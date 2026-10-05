@@ -7,7 +7,10 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "dev:build": "node dev/build.mjs",
+    "dev:local": "node dev/build.mjs && node ../../.local/dist/local.mjs",
+    "dev:alert": "node dev/build.mjs && node ../../.local/dist/alert.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

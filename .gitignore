@@ -17,3 +17,9 @@ __pycache__/
 # The Android project Bubblewrap generates from android/twa-manifest.json, and its builds.
 android/project/
 android/out/
+
+# The local push test stack (scripts/local-stack.sh): keys, certificate, captured mail, builds.
+.local/
+# The debug Android app for the phone gate.
+android/out-dev/
+android/project-dev/
