@@ -6,6 +6,7 @@ import { AlertSheet } from '../components/AlertSheet.tsx';
 import { AllOffices } from '../components/AllOffices.tsx';
 import { BellIcon } from '../components/Icons.tsx';
 import { OfficeView } from '../components/OfficeView.tsx';
+import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
 import { ago } from '../time.ts';
 
@@ -206,6 +207,7 @@ export function Home({ api }: { api: Api }) {
               within the hour.
             </p>
           )}
+          {import.meta.env.VITE_LOCAL_DEBUG === '1' && <p className="debug-context">context: {detectContext()}</p>}
         </div>
       )}
       {scope === 'home' && status && !status.healthy && status.checkedAt && (

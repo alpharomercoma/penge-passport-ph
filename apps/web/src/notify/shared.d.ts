@@ -22,7 +22,7 @@ export interface BrowserSubscription {
 export interface Registration {
   pushManager: {
     getSubscription(): Promise<BrowserSubscription | null>;
-    subscribe(o: { userVisibleOnly: true; applicationServerKey: Uint8Array }): Promise<BrowserSubscription>;
+    subscribe(o: { userVisibleOnly: true; applicationServerKey: Uint8Array<ArrayBuffer> }): Promise<BrowserSubscription>;
   };
 }
 /** Sends JSON to the API and resolves with its JSON answer (plain JavaScript on both sides of it). */
@@ -35,7 +35,7 @@ export function withPushLock<T>(env: PushEnv, fn: () => Promise<T>): Promise<T>;
 export function fingerprint(env: PushEnv, json: { endpoint?: string; keys?: Record<string, string> }): Promise<string>;
 export function newCredential(env: PushEnv): string;
 export function credentialHash(env: PushEnv, credential: string): Promise<string>;
-export function keyBytes(b64url: string): Uint8Array;
+export function keyBytes(b64url: string): Uint8Array<ArrayBuffer>;
 export function ensureSubscribed(env: PushEnv, a: { registration: Registration; applicationServerKey: string }): Promise<{ credentialHash: string }>;
 export function reconcile(env: PushEnv, a: { registration: Registration; post: Post; permission: NotificationPermission }): Promise<{ state: DeviceState; subscribed: boolean } | null>;
 export function turnOff(env: PushEnv, a: { registration: Registration; post: Post }): Promise<{ ok: true; noChannel: boolean } | null>;

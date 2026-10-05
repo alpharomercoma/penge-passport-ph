@@ -6,7 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { PUBLIC_SHELL, serviceWorker } from '../sw-plugin.ts';
+import { PUBLIC_SHELL } from '../sw-plugin.ts';
+import { BUILD, built } from './worker-source.ts';
 
 const web = join(__dirname, '..');
 const manifest = JSON.parse(readFileSync(join(web, 'public/manifest.webmanifest'), 'utf8')) as {
@@ -56,28 +57,6 @@ describe('manifest', () => {
     for (const name of PUBLIC_SHELL) expect(existsSync(join(web, 'public', name))).toBe(true);
   });
 });
-
-type Bundle = Record<string, { type: 'asset'; source: string } | { type: 'chunk'; code: string }>;
-
-/** What the plugin writes for a build with these files (and src/sw.js from `root`). */
-function built(bundle: Bundle, root = web) {
-  const plugin = serviceWorker() as unknown as {
-    configResolved(c: { root: string; publicDir: string }): void;
-    generateBundle(this: { emitFile(f: { fileName: string; source: string }): void }, o: unknown, b: Bundle): void;
-  };
-  plugin.configResolved({ root, publicDir: join(web, 'public') });
-  let source = '';
-  plugin.generateBundle.call({ emitFile: (f) => (source = f.source) }, {}, bundle);
-  const shell = JSON.parse(/const SHELL = (.*);/.exec(source)![1]!) as string[];
-  const version = /const VERSION = '([0-9a-f]+)';/.exec(source)![1]!;
-  return { source, shell, version };
-}
-
-const BUILD: Bundle = {
-  'index.html': { type: 'asset', source: '<html>' },
-  'assets/index-abc.js': { type: 'chunk', code: 'app()' },
-  'assets/index-def.css': { type: 'asset', source: 'body{}' },
-};
 
 describe('service worker build', () => {
   it('keeps the page, this build’s assets and the public files, relative to the worker', () => {
