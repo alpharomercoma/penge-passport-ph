@@ -1,0 +1,6 @@
+[Unit]
+Description=Delete PengePassportPH rollout backups past their expiry time
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/penge-backup-expire

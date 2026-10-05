@@ -404,6 +404,84 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
   a new one and updating the DNS record.
 - Rotate the Redis password and the R2 keys from their dashboards, update `server.env`, restart the API.
 
+## Push notifications
+
+Alerts can also go as push notifications, to browsers and to the Android app (1.1.0 and later), as a
+second channel on the same subscription. Set in `/etc/penge/server.env`, then `systemctl restart
+penge-api` (the checker reads it on its next run):
+
+| Setting | What it does |
+|---|---|
+| `PUSH_MODE` | `off` (the default: no switch is offered, nothing is sent), `owner` (only `PUSH_OWNER_EMAILS` may turn push on; the switch shows only after opening the site with `?push=owner`, which the browser remembers for the session, and the server refuses any other address), `live` (everyone) |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | The keys browsers subscribe with (`npx web-push generate-vapid-keys`). **Keep an offline copy of the private key**: a new pair makes every subscription stop working until each browser turns push on again |
+| `VAPID_SUBJECT` | `mailto:` a monitored address of the site, never a personal one: push services use it to reach us |
+| `PUSH_OWNER_EMAILS` | For `owner` mode: the addresses allowed to turn push on, comma-separated |
+
+**Emergency stops.** Push alone (email goes on), and email alone (push goes on):
+
+```sh
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning SET pp:push:paused 1'
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning DEL pp:push:paused'
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning SET pp:mail:paused 1'
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning DEL pp:mail:paused'
+```
+
+While a channel is stopped, alerts that only it could carry wait, uncharged, and go when it is back
+(or are dropped once older than 3 hours). The daily numbers show pushes accepted by the push service, and the
+others (refused, uncertain, gone); subscribers with push (and push only); subscribers with email off and
+no registered device; devices registered and waiting; and devices removed by the checker (gone when
+pushed to, or never set up; turning off, unsubscribing and deleting are not counted there).
+
+## Rolling back once push is on
+
+First, switch push off (`PUSH_MODE=off`) on the new release. The release before push does not know
+devices or channel requests, and would confirm a pending "notifications only" request as email. If it
+is really needed, in a maintenance window:
+
+```sh
+systemctl disable --now penge-check.timer
+systemctl stop penge-check.service penge-api
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs push-downgrade --yes'
+ln -sfn /opt/penge/releases/<the release before push> /opt/penge/current
+systemctl start penge-api
+systemctl enable --now penge-check.timer
+```
+
+`push-downgrade` removes every device, cancels pending requests that change channels, and
+unsubscribes people who chose push only (they had no email to fall back on). A version 2 backup (this
+release's) must be turned into version 1 before the old release can restore it:
+`admin.mjs backup-to-v1 <file> > v1.json` (it leaves out people with email off).
+
+## Rollout backups
+
+Before a rollout that changes the server, copies are made by hand into `/root/penge-backups/`, each
+named with the time it expires: `server.env-<stamp>-expires-<YYYYMMDDTHHMMSSZ>` and
+`subscribers-<stamp>-expires-<YYYYMMDDTHHMMSSZ>.json` (14 days later). `deploy/penge-backup-expire.sh`
+deletes those past their expiry time; `provision.sh` copies its units, and it is installed once by hand:
+
+```sh
+install -m 0755 deploy/penge-backup-expire.sh /usr/local/sbin/penge-backup-expire
+systemctl daemon-reload && systemctl enable --now penge-backup-expire.timer
+```
+
+The timer runs hourly (and once on start if a run was missed while the server was down), so a backup
+goes about an hour after its expiry time at most while the server is up. To restore one:
+
+```sh
+# server.env
+install -m 0640 -o root -g penge /root/penge-backups/server.env-<stamp>-expires-<stamp> /etc/penge/server.env
+# subscribers: a copy the penge user can read, removed straight after
+install -m 0600 -o penge -g penge /root/penge-backups/subscribers-<stamp>-expires-<stamp>.json /var/lib/penge/restore.json
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs restore /var/lib/penge/restore.json --yes'
+shred -u /var/lib/penge/restore.json
+# the previous release: ONLY before anyone has turned push on or asked for it.
+# After that, use "Rolling back once push is on" (stop, push-downgrade, then switch).
+ln -sfn /opt/penge/releases/<previous> /opt/penge/current && systemctl restart penge-api
+```
+
+A restore never displaces a subscriber who now holds the same address (it lists them as skipped), and
+never brings devices back: a restored subscriber has push off.
+
 ## Daily numbers
 
 The API counts, per Manila day: distinct visitors (estimated, see above) and how many of them looked at

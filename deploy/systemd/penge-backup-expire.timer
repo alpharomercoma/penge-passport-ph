@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly check for expired PengePassportPH rollout backups
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

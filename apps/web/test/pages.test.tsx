@@ -479,7 +479,7 @@ describe('privacy page', () => {
     render(<App path="/privacy" api={fake} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
     const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(sections).toEqual(['If you only look at dates', 'If you sign up for email alerts', 'Deleting your address', 'Where it is kept', 'Changes and questions']);
+    expect(sections).toEqual(['If you only look at dates', 'If you sign up for email alerts', 'Notifications', 'Deleting your address', 'Where it is kept', 'Changes and questions']);
     expect(screen.getByText(/not run by or affiliated with the Department of Foreign Affairs\. This page covers the website and the Android app/)).toBeTruthy();
     // The same promise as the sign-up form and the unsubscribe page.
     expect(screen.getByText(/The last copies, in the backups and the mail server's logs, are gone within 14 days\./)).toBeTruthy();
@@ -488,6 +488,19 @@ describe('privacy page', () => {
     expect(screen.getByText(/The offices you choose for alerts are remembered in your browser, on your device, and reach us only when you sign up\./)).toBeTruthy();
     expect(document.title).toBe('Privacy | PengePassportPH');
     for (const fn of Object.values(fake)) if (vi.isMockFunction(fn)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('explains notifications: what is kept, who carries them, how to stop them, and for how long', async () => {
+    visit('/privacy');
+    render(<App path="/privacy" api={fakeApi()} />);
+    const text = document.body.textContent!;
+    expect(text).toMatch(/push subscription/i);
+    expect(text).toMatch(/Google/);
+    expect(text).toMatch(/Mozilla/);
+    expect(text).toMatch(/Apple/);
+    expect(text).toMatch(/encrypted/i);
+    expect(text).toMatch(/Turn off/);
+    expect(text).toMatch(/not (kept )?in (our )?backups/i);
   });
 
   it.each(['/privacy', '/confirm', '/unsubscribe', '/nope'])('is linked from the footer on %s', (path) => {

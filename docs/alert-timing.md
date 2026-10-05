@@ -29,6 +29,13 @@ The 2-minute floor was 5 minutes while checks ran every 15. When they went back 
 September 2026, it had to come down. A check emails 2 to 4 minutes into its run, so two checks' emails
 can be under 5 minutes apart, and a 5-minute floor would have skipped every other check.
 
+**One pace for every channel.** An alert goes by email, push or both, as the person chose, and the pace
+counts alerts, not channels: one alert to both is one alert. The daily email limit and a mail pause stop
+email only; push goes on. When push carries an alert that email could not (the limit, a pause, mail
+errors), that email is not kept to go later: the person was told. Once an alert is due (its pace allows it and
+its dates are verified), it waits, uncharged, only when no channel can carry it. It counts as delivered when any channel delivered it or may have (a timed-out push,
+an email that may have gone); only when every channel surely failed is it tried again at a later check.
+
 **Nothing is dropped for coming too soon.** What a check finds before a person's next email is due waits in a
 signed record (`pp:held:<id>`, listed in `pp:held-subs`) and goes out with that email. Before sending:
 

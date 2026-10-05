@@ -137,6 +137,23 @@ certainly identify an individual."
 
 - Which dates an office has open identifies nobody.
 - Our subscribers' email addresses do, so the Act covers how we handle them.
+- A push subscription (an address at a browser's push service, and its keys) is tied to one person's
+  device, so the Act covers it too. What push notifications keep, under the `pp:` prefix in Valkey:
+
+| Key | What it holds | Why | How long |
+|---|---|---|---|
+| `push:<subscriber>` | Each device, sealed (AES-256-GCM, its own label): the push endpoint and keys, a coarse device name ("Chrome on Android"), when it was added, when a push last went through or failed | Sending that subscriber's alerts to that device | Until the device is turned off, the push service says it is gone, the person unsubscribes or deletes their data; a device that never finishes setting up: removed at the first check after 48 h for a subscriber; before one exists, its keys expire 72 h after the last sign-up that bound a device |
+| `push:meta:<subscriber>` | Each device's state, a revision number, the hash of its credential, keyed hashes of its endpoint and subscription | Deciding, atomically, which registration is newer and who owns what; nothing secret | As the device |
+| `push:cred:<hash>` | Which device a browser's credential belongs to (the credential itself is only in the browser) | One owner per credential | As the device |
+| `push:endpoint:<hmac>` | Which device holds a push endpoint, under a keyed hash | One owner per endpoint | As the device |
+| `push:pending:<hash>` | Hashes of sign-up links waiting for a credential | Answering "pending" to that browser | 48 h after the latest request |
+| `push:revoked:<hash>` | That a credential was turned off | An older sign-up link cannot turn it back on | 72 h |
+| `push:address:<subscriber>` | The address hash of a subscriber not yet created | Taking the right lock when a device is turned off mid-confirmation | With the provisional device (72 h after the last bind) |
+| `reserved:<address hash>` | The id the address will get | Binding a device before the subscriber exists | 49 h after the latest request (72 h after a bind); deleted on confirmation |
+| `pending:channels` | Sign-up links that change channels, with their address hash | Cancelling them before a rollback (`push-downgrade`) | Removed on use, deletion, or by `push-downgrade` |
+
+Push subscriptions are never in backups (`admin.mjs backup` keeps only the subscriber record, with
+push marked off on restore).
 
 ### DICT
 

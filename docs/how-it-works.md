@@ -133,3 +133,23 @@ The Python package mirrors this layout in `packages/python/src/penge_passport_ph
 
 The website, its API and the alerting checker are built on the Node.js package: see
 [deploy/README.md](../deploy/README.md) for how they run and the checker's guardrails.
+
+## Alerts by email and push
+
+The website's alerts have two channels on one subscription: email and Web Push. A person turns push on
+in the alert form, in the browser or app that should get the notifications. That browser makes a random
+credential (kept in its IndexedDB) and a push subscription; the request carries only the credential's
+hash. The confirmation email and the confirmation page say which channels the request turns on, and for
+which device. Confirming binds that credential to the subscriber: a credential has one owner, and a
+turned-off credential is marked off for 3 days, longer than any sign-up link lives, so an older link
+cannot turn it back on. The browser then registers its subscription with
+its credential, and keeps it current (a renewed subscription is a higher revision; an older one never
+overwrites a newer). A form sent without push changes the offices, group and pace, and leaves every
+device as it was.
+
+Each alert goes to every channel the person has that can carry it now: email within the daily limit,
+push within a per-pass budget. A push service's "gone" removes that device, but only if it still has the
+endpoint the push went to. A device that never finishes setting up is removed at the first check after 48 hours
+(before the subscriber exists, its keys expire 72 hours after the last request for it). The device itself can ask how it is, send itself a test (three an hour),
+or turn itself off. The details, and the reasons for each rule, are in
+`docs/superpowers/specs/2026-10-05-push-notifications-design.md`.
