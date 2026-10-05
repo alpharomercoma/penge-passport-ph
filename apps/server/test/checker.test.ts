@@ -6,24 +6,13 @@ import { ANNOUNCE_WINDOW_SECONDS, type CheckDeps, COOLDOWN_ERRORS, COOLDOWN_SECO
 import type { Pace } from '@penge/contracts';
 import { parseStamp } from '../src/clock.ts';
 import { K, manilaDay } from '../src/keys.ts';
-import type { Logger } from '../src/log.ts';
 import { rebuild } from '../src/record.ts';
 import { confirm, createPending, unsubscribe } from '../src/subscribers.ts';
 import { signUnsubscribe } from '../src/crypto.ts';
 import { formatDate } from '../src/templates.ts';
-import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, PUBLISHED, SITES } from './helpers.ts';
+import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, PUBLISHED, SITES, recordingLog } from './helpers.ts';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 200) / 2;
-
-function recordingLog() {
-  const lines: string[] = [];
-  const log: Logger = {
-    info: (m, f) => lines.push(JSON.stringify({ m, f })),
-    warn: (m, f) => lines.push(JSON.stringify({ m, f })),
-    error: (m, f) => lines.push(JSON.stringify({ m, f })),
-  };
-  return { log, lines };
-}
 
 async function world(overrides: Partial<CheckDeps> = {}) {
   const t = clock();
@@ -276,7 +265,7 @@ describe('checker', () => {
     await w.run();
     w.upstream.open.set('486', ['2026-10-05']);
     const report = await w.run();
-    expect(report.delivery).toMatchObject({ sent: 1, remaining: 0, held: 1, stoppedBy: 'daily limit' });
+    expect(report.delivery).toMatchObject({ sent: 1, remaining: 0, held: 1, emailBlocked: 'daily limit', stoppedBy: 'all channels' });
   });
 
   it('drops alerts that waited too long', async () => {
@@ -285,7 +274,7 @@ describe('checker', () => {
     await w.run();
     await w.kv.set(K.mailPaused, '1');
     w.upstream.open.set('486', ['2026-10-05']);
-    expect((await w.run()).delivery).toMatchObject({ stoppedBy: 'paused', remaining: 1 });
+    expect((await w.run()).delivery).toMatchObject({ emailBlocked: 'paused', stoppedBy: 'all channels', remaining: 0, held: 1 });
     await w.kv.write([{ op: 'del', key: K.mailPaused }]);
     w.t.advance(OUTBOX_MAX_AGE_MS);
     expect(await w.retry()).toMatchObject({ dropped: 1, sent: 0, remaining: 0 });
@@ -298,8 +287,8 @@ describe('checker', () => {
     w.upstream.open.set('486', ['2026-10-05']);
     w.mailer.failNext = 3;
     const report = await w.run();
-    // The three refused wait with their people; the fourth never left the outbox.
-    expect(report.delivery).toMatchObject({ failed: 3, stoppedBy: 'mail errors', remaining: 1, held: 3 });
+    // The three refused wait with their people, and so does the fourth, uncharged: no channel was left.
+    expect(report.delivery).toMatchObject({ failed: 3, emailBlocked: 'mail errors', stoppedBy: 'all channels', remaining: 0, held: 4 });
     // A refused email costs nobody their daily allowance, nor the daily total.
     const day = manilaDay(w.t.now());
     expect(Number((await w.kv.get(K.mailSentToday(day))) ?? 0)).toBe(0);
@@ -662,19 +651,20 @@ describe('checker, found by adversarial review', () => {
       return result;
     };
     const report = await w.run();
-    expect(report.delivery).toMatchObject({ sent: 1, stoppedBy: 'paused', remaining: 2 });
+    expect(report.delivery).toMatchObject({ sent: 1, emailBlocked: 'paused', stoppedBy: 'all channels', remaining: 0, held: 2 });
   });
 });
 
 describe('outbox integrity and backups', () => {
   it('drops an alert that was altered in Redis instead of sending it', async () => {
     const w = await world();
-    await w.subscribe('ana@example.com', [486]);
+    const id = await w.subscribe('ana@example.com', [486]);
     await w.run();
     await w.kv.set(K.mailPaused, '1');
     w.upstream.open.set('486', ['2026-10-05']);
-    await w.run();
-    const raw = (await w.kv.lPop(K.outbox))!;
+    await w.run(); // email paused and no push: the alert is held
+    const raw = (await w.kv.get(K.held(id)))!;
+    await w.kv.write([{ op: 'del', key: K.held(id) }, { op: 'sRem', key: K.heldSubscribers, members: [id] }]);
     const job = openJob(raw, keys.token)!;
     expect(job.openings[0]!.name).toContain('Antipolo');
     const forged = JSON.parse(raw) as { job: string; mac: string };
@@ -1019,7 +1009,8 @@ describe('pace', () => {
       { op: 'sAdd', key: K.heldSubscribers, members: [id] },
     ]);
     w.upstream.open.set('486', ['2026-10-05', '2026-10-06']);
-    w.mailer.failNext = 1; // the merged email is refused, and tried again later in the same check
+    w.mailer.failNext = 1; // the merged email is refused, and tried again at the next check
+    await w.run();
     await w.run();
     expect(w.mailer.sent).toHaveLength(1);
     expect(datesIn(w.mailer.sent[0]!.text)).toEqual(['Mon 5 Oct 2026']); // 6 Oct had used its last try

@@ -3,25 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { createApi } from '../src/api.ts';
 import { type CheckDeps, runCheck } from '../src/checker.ts';
 import { K, manilaDay } from '../src/keys.ts';
-import type { Logger } from '../src/log.ts';
 import { COUNTS, type Count, createStats, dailyStats, isPerson, reportOncePerDay, SALT_SECONDS, statsKey } from '../src/stats.ts';
 import { dailyStatsEmail } from '../src/templates.ts';
 import { confirm, createPending } from '../src/subscribers.ts';
-import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES } from './helpers.ts';
+import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES, recordingLog } from './helpers.ts';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 200);
 const PHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const LAPTOP = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
-
-function recordingLog() {
-  const lines: string[] = [];
-  const log: Logger = {
-    info: (m, f) => lines.push(JSON.stringify({ m, f })),
-    warn: (m, f) => lines.push(JSON.stringify({ m, f })),
-    error: (m, f) => lines.push(JSON.stringify({ m, f })),
-  };
-  return { log, lines };
-}
 
 /** Manila 10:00 on 27 September 2026; `advance` moves the clock. */
 function counting() {

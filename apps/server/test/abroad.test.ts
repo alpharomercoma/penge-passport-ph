@@ -1,4 +1,3 @@
-import type { Site } from 'penge-passport-ph';
 import { describe, expect, it } from 'vitest';
 import {
   ABROAD_DEADLINE_MS,
@@ -11,97 +10,15 @@ import {
   QUIET_EVERY_MINUTES,
 } from '../src/abroad.ts';
 import { createApi } from '../src/api.ts';
-import { type CheckDeps, runCheck } from '../src/checker.ts';
+import { runCheck } from '../src/checker.ts';
 import { K } from '../src/keys.ts';
 import { silentLog } from '../src/log.ts';
 import { rebuild } from '../src/record.ts';
 import { createLookups } from '../src/lookups.ts';
-import { confirm, createPending } from '../src/subscribers.ts';
-import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES } from './helpers.ts';
+import { abroadWorld, post } from './abroad-world.ts';
+import { keys, SITES } from './helpers.ts';
 
-const post = (id: number, name: string): Site => ({
-  id,
-  name,
-  description: null,
-  address: `${name} street 1`,
-  telephone: '+45 71415952',
-  hours: null,
-  mapUrl: null,
-  utcOffsetMinutes: null,
-});
-
-/** A pretend passport.gov.ph that also lists regions, countries and posts abroad. */
-class FakeAbroad extends FakeUpstream {
-  regionList = [
-    { id: 1, name: 'Asia Pacific' },
-    { id: 2, name: 'Europe' },
-  ];
-  countryList = new Map<number, { id: number; name: string }[]>([
-    [1, [{ id: 1, name: 'Philippines' }, { id: 20, name: 'Japan' }]],
-    [2, [{ id: 62, name: 'Denmark' }]],
-  ]);
-  posts = new Map<number, Site[]>([
-    [20, [post(200, 'PE Tokyo'), post(201, 'PE Tokyo - Outreach in Okinawa 2026')]],
-    [62, [post(497, 'PE Copenhagen')]],
-  ]);
-
-  regions() {
-    return this.regionList;
-  }
-  async countries(regionId: number) {
-    this.calls.push(`countries:${regionId}`);
-    return this.countryList.get(regionId) ?? [];
-  }
-  override async sites(opts?: { regionId: number; countryId: number }) {
-    if (!opts) return super.sites();
-    this.calls.push(`sites:${opts.countryId}`);
-    return this.posts.get(opts.countryId) ?? [];
-  }
-}
-
-async function world() {
-  const t = clock();
-  const kv = new MemoryKv(t.now);
-  const upstream = new FakeUpstream();
-  const abroad = new FakeAbroad();
-  const sink = new MemorySink();
-  const objects = new Map<string, Uint8Array>();
-  sink.putObject = async (key, body) => void objects.set(key, body);
-  const mailer = new FakeMailer();
-  const deps: CheckDeps = {
-    kv,
-    upstream,
-    abroad,
-    sink,
-    mailer,
-    keys,
-    log: silentLog,
-    publicBaseUrl: 'https://penge.example',
-    mailDailyLimit: 300,
-    alertsPerSubscriberPerDay: 3,
-    client: 'penge-passport-ph@test',
-    // The fake clock, not this machine's uptime (Linux has one, macOS does not): the same on every machine.
-    uptime: () => null,
-    now: t.now,
-  };
-  let n = 0;
-  const run = async (advance = 5 * 60_000) => {
-    const report = await runCheck({ ...deps, runId: `run${++n}` });
-    t.advance(advance);
-    return report;
-  };
-  const subscribe = async (email: string, siteIds: number[], applicants = 1) => {
-    const token = await createPending(kv, keys, { email, siteIds, applicants, pace: 'asap', channels: null }, t.now());
-    const result = await confirm(kv, keys, token, t.now());
-    if (result.status !== 'confirmed' && result.status !== 'updated') throw new Error(`confirm failed: ${result.status}`);
-    return result.subscriberId;
-  };
-  const stored = async () => {
-    const all = await kv.hGetAll(K.abroadStatus);
-    return new Map(Object.entries(all).map(([id, raw]) => [Number(id), JSON.parse(raw) as { status: { ok: boolean; openDates: string[]; checkedAt: string | null }; dueAt: number }]));
-  };
-  return { t, kv, upstream, abroad, sink, objects, mailer, deps, run, subscribe, stored };
-}
+const world = abroadWorld;
 
 describe('posts abroad', () => {
   it('reads the list of posts, leaving the Philippines to the main scan', async () => {
@@ -557,7 +474,7 @@ describe('delivery stop across passes', () => {
     const report = await w.run();
     expect(report.abroad?.trusted).toBe(true);
     expect(report.abroad?.queued).toBe(0);
-    expect(report.delivery).toMatchObject({ failed: 3, stoppedBy: 'mail errors', remaining: 1, held: 3 });
+    expect(report.delivery).toMatchObject({ failed: 3, emailBlocked: 'mail errors', stoppedBy: 'all channels', remaining: 0, held: 4 });
     expect(w.mailer.failNext).toBe(3);
   });
 });

@@ -216,6 +216,32 @@ describe('pushing one decision', () => {
     expect(await listDevices(w.kv, w.id)).toHaveLength(2); // never removed for a record it could not read
   });
 
+  it('sends nothing, and says so, when the address stays busy before sending', async () => {
+    const w = await withDevices(1);
+    await w.kv.set(K.addressLock(w.index), 'someone else', { ttlSeconds: 60 });
+    let sent = 0;
+    const pool = new PushPool({ transport: { async send() { sent++; } }, inFlight: 8, budgetMs: 60_000, timeoutMs: 5000, now: w.t.now });
+    vi.useFakeTimers();
+    const pending = pushDecision({ kv: w.kv, keys, pool, log: silentLog, now: w.t.now }, { subscriberId: w.id, index: w.index, payload: '{}' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await pending;
+    vi.useRealTimers();
+    expect(r).toMatchObject({ any: 'none', outcomes: [] });
+    expect(sent).toBe(0);
+  });
+
+  it('keeps what was sent when the address is busy for the notes afterwards', async () => {
+    const w = await withDevices(1);
+    const transport: PushTransport = { async send() { await w.kv.set(K.addressLock(w.index), 'someone else', { ttlSeconds: 60 }); } };
+    const pool = new PushPool({ transport, inFlight: 8, budgetMs: 60_000, timeoutMs: 5000, now: w.t.now });
+    vi.useFakeTimers();
+    const pending = pushDecision({ kv: w.kv, keys, pool, log: silentLog, now: w.t.now }, { subscriberId: w.id, index: w.index, payload: '{}' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await pending;
+    vi.useRealTimers();
+    expect(r.any).toBe('accepted');
+  });
+
   it('sends only to the named device when asked', async () => {
     const w = await withDevices(2);
     const seen: string[] = [];

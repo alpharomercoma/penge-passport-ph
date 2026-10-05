@@ -96,10 +96,17 @@ export async function pushDecision(
 ): Promise<{ any: 'accepted' | 'uncertain' | 'none'; outcomes: DeviceOutcome[]; removed: number }> {
   // The sealed records and their metadata are read together, under the lock, so a
   // registration cannot slip between the two reads. The sends happen outside it.
-  const snapshot = await withAddressLock(deps.kv, a.index, async () => ({
-    sealed: await deps.kv.hGetAll(K.pushDevices(a.subscriberId)),
-    devices: await listDevices(deps.kv, a.subscriberId),
-  }));
+  let snapshot: { sealed: Record<string, string>; devices: Awaited<ReturnType<typeof listDevices>> };
+  try {
+    snapshot = await withAddressLock(deps.kv, a.index, async () => ({
+      sealed: await deps.kv.hGetAll(K.pushDevices(a.subscriberId)),
+      devices: await listDevices(deps.kv, a.subscriberId),
+    }));
+  } catch (err) {
+    // Nothing was sent: the alert is settled as push not delivered (and tried again if nothing else carried it).
+    deps.log.warn('push not started: its devices could not be read', { err: err as Error });
+    return { any: 'none', outcomes: [], removed: 0 };
+  }
   const sends: Promise<DeviceOutcome>[] = [];
   const invalid: DeviceOutcome[] = [];
   for (const d of snapshot.devices) {
@@ -123,6 +130,7 @@ export async function pushDecision(
   const at = new Date(deps.now()).toISOString();
   let removed = 0;
   // Clean-up and notes under the address lock, and only for devices that still have the endpoint sent to.
+  // If the address stays busy they are skipped: what was sent stands either way.
   await withAddressLock(deps.kv, a.index, async () => {
     const meta = await deps.kv.hGetAll(K.pushMeta(a.subscriberId));
     const sealed = await deps.kv.hGetAll(K.pushDevices(a.subscriberId));
@@ -144,7 +152,7 @@ export async function pushDecision(
       notes[o.deviceId] = sealDevice(deps.keys, next);
     }
     if (Object.keys(notes).length > 0) await deps.kv.write([{ op: 'hSet', key: K.pushDevices(a.subscriberId), fields: notes }]);
-  });
+  }).catch((err: unknown) => deps.log.warn('push clean-up skipped: the address was busy', { err: err as Error }));
   for (const o of outcomes) if (o.result !== 'accepted') deps.log.warn('push not accepted', { device: o.deviceId, status: o.status, category: o.result });
   const any = outcomes.some((o) => o.result === 'accepted') ? 'accepted' : outcomes.some((o) => o.result === 'uncertain') ? 'uncertain' : 'none';
   return { any, outcomes, removed };

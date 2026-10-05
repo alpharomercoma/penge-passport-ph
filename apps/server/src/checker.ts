@@ -26,7 +26,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { type Availability, CircuitOpenError, type Site } from 'penge-passport-ph';
-import { describePost, officeMapUrl, officePhone, type Pace, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import { describePost, officeMapUrl, officePhone, type Pace, type PushMode, type SiteStatus, type StatusResponse } from '@penge/contracts';
 import {
   ABROAD_DEADLINE_MS,
   ABROAD_GROUP_CAP,
@@ -42,11 +42,15 @@ import {
 } from './abroad.ts';
 import { unsubscribeLinks } from './api.ts';
 import { exportSubscribers } from './backup.ts';
+import { newId } from './crypto.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
 import type { Logger } from './log.ts';
 import { type Mailer, wasRefused } from './mailer.ts';
 import { elapsed, parseStamp, type Stamp, stampAt, systemUptime, type Uptime } from './clock.ts';
+import { listDevices, pruneAwaiting } from './push/devices.ts';
+import { buildPayload } from './push/payload.ts';
+import { PUSH_BUDGET_MS, PUSH_IN_FLIGHT, PUSH_TIMEOUT_MS, PushPool, type PushTransport, pushDecision } from './push/sender.ts';
 import type { SnapshotSink } from './r2.ts';
 import { beginRecord, type Recorded, type RecordSink, recordRun, skipRecord } from './record.ts';
 import { reportOncePerDay, STATS_KEEP_SECONDS, type Stats } from './stats.ts';
@@ -59,7 +63,7 @@ import {
   type Scan,
   type SiteObservation,
 } from './snapshot.ts';
-import { emailOf, type Keys, load, type Subscriber } from './subscribers.ts';
+import { emailOf, type Keys, load, type Subscriber, withAddressLock } from './subscribers.ts';
 import { alertEmail, type Opening } from './templates.ts';
 
 export interface Upstream {
@@ -92,6 +96,10 @@ export interface CheckDeps {
   /** Reads now as a stamp (clock.ts); runCheck sets it. */
   stampNow?: () => Stamp;
   runId?: string;
+  /** Push delivery; without it, or with mode off, alerts go by email only. */
+  push?: { mode: PushMode; transport: PushTransport | null };
+  /** Checks the run still holds its lock (runCheck sets it); a long delivery pass calls it. */
+  lockCheck?: () => Promise<void>;
 }
 
 export const ANNOUNCE_WINDOW_SECONDS = 3 * 3600;
@@ -196,7 +204,11 @@ export interface DeliveryReport {
   /** People whose alerts wait for their pace (or the daily limit) after this pass. */
   held: number;
   remaining: number;
-  stoppedBy: 'paused' | 'daily limit' | 'mail errors' | null;
+  /** Set when no channel could carry anything at the end of the pass. */
+  stoppedBy: 'all channels' | null;
+  /** Why email could not go out, when it could not. */
+  emailBlocked: 'paused' | 'daily limit' | 'mail errors' | 'off' | null;
+  push: { accepted: number; refused: number; uncertain: number; gone: number; heldNoChannel: number };
 }
 
 export interface AbroadReport {
@@ -281,6 +293,7 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       if ((await kv.get(K.checkLock)) !== runId) throw new Error('lost the checker lock; stopping this run');
       await kv.set(K.checkLock, runId, { ttlSeconds: LOCK_TTL_SECONDS });
     };
+    deps.lockCheck = given.lockCheck ?? holdLock;
     const loadSubscriber = subscriberCache(kv);
     // Said missing until its record is made: a run that stops before then is named by the next (record.ts).
     const begun = await beginRecord(kv, 'scans', runId, new Date(started).toISOString());
@@ -304,7 +317,9 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     }
     // One email per person per check: the posts abroad join the next check's email.
     const emailed = new Set<string>();
-    let delivery = await deliver(deps, now, emailed, [scan]);
+    // Tried and put back in this check: not tried again by its posts-abroad pass.
+    const attempted = new Set<string>();
+    let delivery = await deliver(deps, now, emailed, [scan], attempted);
     // Posts abroad come after the Philippines' alerts are out, so they never delay them.
     let abroad: AbroadReport | null = null;
     let recordAbroad: ((sink: RecordSink) => Promise<void>) | null = null;
@@ -317,7 +332,7 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       recordAbroad = pass.record;
       // A held post can become due without any newly announced date. Recheck
       // it only after this run's abroad observations, including their groups.
-      if (abroad.trusted && !delivery.stoppedBy) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, pass.scan]));
+      if (abroad.trusted && shouldRunAbroadDelivery(delivery)) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, pass.scan], attempted));
     }
     // The records come after every alert is out and every post checked, so a slow R2
     // delays neither. Only what changed since the last record (record.ts); nothing at
@@ -631,7 +646,8 @@ async function abroadPass(
   return { report: { checked: observations.length, failed, catalogSteps: catalog.steps, trusted, queued, problems }, scan, record };
 }
 
-function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
+/** Two delivery passes of one check: counts add up; where things stand is what the later pass found. */
+export function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
   return {
     sent: a.sent + b.sent,
     dryRun: a.dryRun + b.dryRun,
@@ -640,7 +656,15 @@ function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
     dropped: a.dropped + b.dropped,
     held: b.held,
     remaining: b.remaining,
-    stoppedBy: b.stoppedBy ?? a.stoppedBy,
+    stoppedBy: b.stoppedBy,
+    emailBlocked: b.emailBlocked,
+    push: {
+      accepted: a.push.accepted + b.push.accepted,
+      refused: a.push.refused + b.push.refused,
+      uncertain: a.push.uncertain + b.push.uncertain,
+      gone: a.push.gone + b.push.gone,
+      heldNoChannel: a.push.heldNoChannel + b.push.heldNoChannel,
+    },
   };
 }
 
@@ -821,29 +845,121 @@ async function noteMailLimit(deps: CheckDeps, noted: Set<string>, day: string): 
   }
 }
 
-/** Send verified news within every cap. No current scan means no alert may go out. */
+/** Every subscriber's awaiting devices older than 48 hours, removed under each address lock. Returns how many. */
+async function pruneAllAwaiting(kv: Kv, keys: Keys, log: Logger, now: number, stillMine: () => Promise<void>): Promise<number> {
+  let removed = 0;
+  for (const id of await kv.sMembers(K.allSubscribers)) {
+    await stillMine();
+    const meta = await kv.hGetAll(K.pushMeta(id));
+    if (!Object.values(meta).some((m) => m.startsWith('a|'))) continue;
+    const sub = await load(kv, id);
+    if (!sub) continue;
+    try {
+      removed += await withAddressLock(kv, sub.index, () => pruneAwaiting(kv, keys, id, now));
+    } catch (err) {
+      // That address is busy (or its devices unreadable): its devices wait for the next pass; everyone else goes on.
+      log.warn('awaiting devices not cleaned up this pass', { err: err as Error });
+    }
+  }
+  return removed;
+}
+
+export type EmailOutcome = 'sent' | 'dry-run' | 'refused' | 'uncertain' | 'none';
+
+/** The spec's outcome table: an alert counts as delivered when any channel delivered it, or may have. */
+export function settleOutcome(email: EmailOutcome, push: 'accepted' | 'uncertain' | 'none', pushChosen: boolean): 'delivered' | 'retry' {
+  if (email === 'sent' || email === 'uncertain') return 'delivered';
+  if (push === 'accepted' || push === 'uncertain') return 'delivered';
+  // A simulated email (local runs and tests) delivers only for someone without push, as before.
+  if (email === 'dry-run' && !pushChosen) return 'delivered';
+  return 'retry';
+}
+
+export const shouldRunAbroadDelivery = (report: DeliveryReport) => report.stoppedBy !== 'all channels';
+
+/** What a delivery pass knows about its channels. */
+interface Pass {
+  failuresInARow: number;
+  emailed: Set<string>;
+  checks: ReadonlyMap<number, DeliveryCheck>;
+  limitNoted: Set<string>;
+  /** Why email cannot go out now; a daily-limit block holds only for its own Manila day. */
+  emailBlock: { reason: 'paused' | 'daily limit' | 'mail errors' | 'off'; day?: string } | null;
+  pool: PushPool | null;
+  startedAt: number;
+  /** People whose alert was tried and put back in this check: they wait for the next one. */
+  attempted: Set<string>;
+  /** People already considered in this pass: work held or retried now waits for a later pass. */
+  seen: Set<string>;
+}
+
+async function emailAvailable(deps: CheckDeps, pass: Pass, day: string): Promise<boolean> {
+  // Three failures in a row stop email for the rest of the pass, whatever else comes and goes.
+  if (pass.failuresInARow >= 3) {
+    pass.emailBlock = { reason: 'mail errors' };
+    return false;
+  }
+  if (deps.mailer.mode === 'off') {
+    pass.emailBlock = { reason: 'off' };
+    return false;
+  }
+  if (await deps.kv.get(K.mailPaused)) {
+    pass.emailBlock = { reason: 'paused' };
+    return false;
+  }
+  const b = pass.emailBlock;
+  if (b?.reason === 'mail errors') return false;
+  if (b?.reason === 'daily limit' && b.day === day) return false;
+  if (b) pass.emailBlock = null; // un-paused, or a new day
+  return true;
+}
+
+async function pushAvailable(deps: CheckDeps, pass: Pass): Promise<boolean> {
+  if (!pass.pool || !deps.push || deps.push.mode === 'off') return false;
+  if (await deps.kv.get(K.pushPaused)) return false;
+  return pass.pool.hasBudget();
+}
+
+/** Send verified news within every cap, on every available channel. No current scan means no alert may go out. */
 export async function deliver(
   deps: CheckDeps,
   now: () => number = deps.now ?? Date.now,
-  /** People already emailed in this check; each is emailed once per check. */
+  /** People already alerted in this check; each is alerted once per check. */
   emailed: Set<string> = new Set(),
   /** Only scans from this invocation of runCheck; do not load these from stored history. */
   scans: readonly DeliveryScan[] = [],
+  /** People already tried and put back in this check, across its delivery passes. */
+  attempted: Set<string> = new Set(),
 ): Promise<DeliveryReport> {
   const { kv, log } = deps;
-  const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
-  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans), limitNoted: new Set<string>() };
-  // Checked before every email, so a pause takes effect mid-run.
-  const paused = async () => {
-    if (!(await kv.get(K.mailPaused))) return false;
-    report.stoppedBy = 'paused';
-    log.warn('mail is paused; the outbox waits');
-    return true;
+  // Awaiting devices older than 48 hours go before anyone is considered, and before the
+  // push budget starts, so a long clean-up never spends it. The lock is checked as it goes.
+  const pruneStart = now();
+  const pruned = await pruneAllAwaiting(kv, deps.keys, log, now(), async () => {
+    if (now() - pruneStart > 30_000) await deps.lockCheck?.();
+  });
+  if (pruned > 0) deps.stats?.count('pushDevicesRemoved', pruned, manilaDay(now()));
+  // A long clean-up: make sure the lock is still this run's before anything is sent.
+  if (now() - pruneStart > 30_000) await deps.lockCheck?.();
+  const report: DeliveryReport = {
+    sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null, emailBlocked: null,
+    push: { accepted: 0, refused: 0, uncertain: 0, gone: 0, heldNoChannel: 0 },
+  };
+  const transport = deps.push && deps.push.mode !== 'off' ? deps.push.transport : null;
+  const pass: Pass = {
+    failuresInARow: 0, emailed, checks: deliveryChecks(scans), limitNoted: new Set<string>(), emailBlock: null,
+    pool: transport ? new PushPool({ transport, inFlight: PUSH_IN_FLIGHT, budgetMs: PUSH_BUDGET_MS, timeoutMs: PUSH_TIMEOUT_MS, now }) : null,
+    startedAt: now(),
+    seen: new Set<string>(),
+    attempted,
+  };
+  const lockStillMine = async () => {
+    if (now() - pass.startedAt > 30_000) await deps.lockCheck?.();
   };
 
   // What the checks found, one entry per person, each joining what that person already has waiting.
   for (let i = 0; i < 5000; i++) {
-    if (await paused()) break;
+    await lockStillMine();
     const raw = await kv.lPop(K.outbox);
     if (raw === null) break;
     const job = openJob(raw, deps.keys.token);
@@ -852,25 +968,33 @@ export async function deliver(
       log.warn('dropped an outbox entry with a bad signature');
       continue;
     }
-    if ((await consider(deps, job, false, now, report, run)) === 'stop') break;
+    pass.seen.add(job.subscriberId);
+    await consider(deps, job, false, now, report, pass);
   }
-  // People whose alerts waited for their pace, and may now be due.
-  if (!report.stoppedBy) {
-    for (const id of await kv.sMembers(K.heldSubscribers)) {
-      if (await paused()) break;
-      const raw = await kv.get(K.held(id));
-      const job = raw === null ? null : openJob(raw, deps.keys.token);
-      if (!job || job.subscriberId !== id) {
-        if (raw !== null) {
-          report.dropped++;
-          log.warn('dropped a held alert with a bad signature');
-        }
-        await clearHeld(kv, id);
-        continue;
+  // People whose alerts waited for their pace, and may now be due. Not those just
+  // considered above: what this pass held or put back waits for the next one.
+  for (const id of await kv.sMembers(K.heldSubscribers)) {
+    if (pass.seen.has(id)) continue;
+    await lockStillMine();
+    const raw = await kv.get(K.held(id));
+    const job = raw === null ? null : openJob(raw, deps.keys.token);
+    if (!job || job.subscriberId !== id) {
+      if (raw !== null) {
+        report.dropped++;
+        log.warn('dropped a held alert with a bad signature');
       }
-      if ((await consider(deps, job, true, now, report, run)) === 'stop') break;
+      await clearHeld(kv, id);
+      continue;
     }
+    await consider(deps, job, true, now, report, pass);
   }
+  await pass.pool?.settle();
+  // As things stand at the end of the pass (a pause lifted, a new day): the reason reported is the current one.
+  const day = manilaDay(now());
+  const emailOk = await emailAvailable(deps, pass, day);
+  const pushOk = await pushAvailable(deps, pass);
+  report.emailBlocked = pass.emailBlock?.reason ?? null;
+  if (!emailOk && !pushOk) report.stoppedBy = 'all channels';
   report.held = (await kv.sMembers(K.heldSubscribers)).length;
   report.remaining = await kv.lLen(K.outbox);
   return report;
@@ -911,8 +1035,8 @@ async function consider(
   fromHeld: boolean,
   now: () => number,
   report: DeliveryReport,
-  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck>; limitNoted: Set<string> },
-): Promise<'next' | 'stop'> {
+  run: Pass,
+): Promise<void> {
   const { kv, log, mailer } = deps;
   const id = job.subscriberId;
   const parts: AlertJob[] = [job];
@@ -943,14 +1067,14 @@ async function consider(
   for (const p of parts) if (!p.openings.some((o) => o.dates.some((d) => fresh(o.id, d)))) report.dropped++;
   if (![...firstAt.values()].some(young)) {
     await clearHeld(kv, id);
-    return 'next';
+    return;
   }
 
   const sub = await load(kv, id);
   if (!sub) {
     report.skipped++;
     await clearHeld(kv, id);
-    return 'next';
+    return;
   }
   // They may have changed their offices or group size since.
   const wanted = mergeOpenings(parts.filter((p) => p.applicants === sub.applicants).map((p) => p.openings))
@@ -960,7 +1084,7 @@ async function consider(
   if (wanted.length === 0) {
     report.skipped++;
     await clearHeld(kv, id);
-    return 'next';
+    return;
   }
   // Refused sends, counted per date: a date that joins a failing alert keeps its own tries.
   const tries = new Map<string, number>();
@@ -1015,11 +1139,11 @@ async function consider(
       { op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) },
       ...holdOps(jobOf(wanted)),
     ]);
-    return 'next';
+    return;
   }
-  if (run.emailed.has(id) || since < PACE_SPACING_MS[sub.pace]) {
+  if (run.emailed.has(id) || run.attempted.has(id) || since < PACE_SPACING_MS[sub.pace]) {
     await hold(deps, jobOf(wanted));
-    return 'next';
+    return;
   }
   // Only dates verified open in this run go out. One that closed while it
   // waited keeps waiting, until it is too old: if it opens again, they have
@@ -1028,7 +1152,7 @@ async function consider(
   const leftover = closed.length > 0 ? jobOf(closed) : null;
   if (openings.length === 0) {
     await hold(deps, jobOf(wanted));
-    return 'next';
+    return;
   }
   const next = jobOf(openings);
 
@@ -1037,81 +1161,135 @@ async function consider(
     report.skipped++;
     deps.stats?.count('alertsCapped', 1, day);
     await clearHeld(kv, id);
-    return 'next';
+    return;
   }
-  await noteMailLimit(deps, run.limitNoted, day);
-  if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
-    // It all waits uncharged, closed dates too: the allowance is only spent on a send.
-    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, ...holdOps(jobOf(wanted))]);
-    report.stoppedBy = 'daily limit';
-    deps.stats?.count('mailLimitHits', 1, day);
-    log.warn('daily email limit reached; the outbox waits', { limit: deps.mailDailyLimit });
-    return 'stop';
+  // Which channels can carry this alert now. Push needs a registered device and a slot in this pass's budget.
+  const registered = sub.pushOn && (await listDevices(kv, id)).some((d) => d.meta.state === 'r');
+  let wantPush = registered && (await pushAvailable(deps, run)) && run.pool!.reserve();
+  let wantEmail = sub.emailOn && (await emailAvailable(deps, run, day));
+  if (wantEmail) {
+    await noteMailLimit(deps, run.limitNoted, day);
+    if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
+      await kv.write([{ op: 'decr', key: K.mailSentToday(day) }]);
+      if (run.emailBlock?.reason !== 'daily limit' || run.emailBlock.day !== day) {
+        deps.stats?.count('mailLimitHits', 1, day);
+        log.warn('daily email limit reached; email waits, push goes on', { limit: deps.mailDailyLimit });
+      }
+      run.emailBlock = { reason: 'daily limit', day };
+      wantEmail = false;
+    }
+  }
+  if (!wantEmail && !wantPush) {
+    // Nothing can carry it now: it all waits, uncharged.
+    if (sub.emailOn || sub.pushOn) report.push.heldNoChannel++;
+    await hold(deps, jobOf(wanted));
+    return;
   }
   const todays = await kv.incr(K.alertsToday(id, day), COUNTER_TTL_SECONDS);
-  // Unsubscribed a moment ago? Then nothing goes out, and nothing is kept.
-  // (Checked right before the claim; the two are not one atomic step.)
-  if (!(await load(kv, id))) {
-    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, { op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(null)]);
+  // Read again right before the claim. Unsubscribed a moment ago? Then nothing goes out, and nothing is kept.
+  const current = await load(kv, id);
+  if (!current) {
+    await kv.write([...(wantEmail ? [{ op: 'decr', key: K.mailSentToday(day) } as WriteOp] : []), { op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(null)]);
     report.skipped++;
-    return 'next';
+    return;
   }
-  // Marked sent before it goes out, as an outbox entry is popped before it is
-  // sent: a crash after the send can lose this alert, never send it twice.
-  await kv.write([
-    { op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) },
-    ...holdOps(leftover),
-  ]);
+  // Channels changed a moment ago: only the ones still on are used, and an unused email is not charged.
+  if (wantEmail && !current.emailOn) {
+    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }]);
+    wantEmail = false;
+  }
+  if (wantPush && !current.pushOn) wantPush = false;
+  if (!wantEmail && !wantPush) {
+    report.push.heldNoChannel++;
+    await kv.write([{ op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(jobOf(wanted))]);
+    return;
+  }
+  // Claimed before anything goes out: a crash after a send can lose this alert, never send it twice.
+  await kv.write([{ op: 'set', key: K.lastAlert(id), value: JSON.stringify(at) }, ...holdOps(leftover)]);
   run.emailed.add(id);
 
-  const links = unsubscribeLinks(deps.publicBaseUrl, id, deps.keys);
-  const content = alertEmail({
-    openings,
-    applicants: next.applicants,
-    unsubscribeUrl: links.page,
-    manageUrl: `${deps.publicBaseUrl}/`,
-    lastToday: todays === deps.alertsPerSubscriberPerDay,
-  });
-  try {
-    const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
-    if (result === 'sent') {
-      report.sent++;
-      deps.stats?.count('alertsSent', 1, day);
-    } else if (result === 'dry-run') report.dryRun++;
-    else report.skipped++;
-    run.failuresInARow = 0;
-  } catch (err) {
-    report.failed++;
-    run.failuresInARow++;
-    if (wasRefused(err)) {
-      // Nothing was sent: the claim is undone, neither today's total nor the
-      // subscriber's allowance is charged, and it is tried again later, all in
-      // one write. A date refused MAX_MAIL_ATTEMPTS times is given up on.
-      run.emailed.delete(id);
-      for (const o of openings) for (const d of o.dates) tries.set(dateKey(o.id, d), (tries.get(dateKey(o.id, d)) ?? 0) + 1);
-      const retry = wanted
-        .map((o) => ({ ...o, dates: o.dates.filter((d) => (tries.get(dateKey(o.id, d)) ?? 0) < MAX_MAIL_ATTEMPTS) }))
-        .filter((o) => o.dates.length > 0);
-      await kv.write([
-        { op: 'decr', key: K.mailSentToday(day) },
-        { op: 'decr', key: K.alertsToday(id, day) },
-        lastValue === null
-          ? { op: 'del', key: K.lastAlert(id) }
-          : { op: 'set', key: K.lastAlert(id), value: lastValue },
-        ...holdOps(retry.length > 0 ? jobOf(retry) : null),
-      ]);
-      log.error('alert email refused', { job: next.id, err: err as Error });
-    } else {
-      // It may have gone out: it stays charged and claimed, and is not sent
-      // again, which could make a duplicate.
+  const sendEmail = async (): Promise<EmailOutcome> => {
+    if (!wantEmail) return 'none';
+    const links = unsubscribeLinks(deps.publicBaseUrl, id, deps.keys);
+    const content = alertEmail({ openings, applicants: next.applicants, unsubscribeUrl: links.page, manageUrl: `${deps.publicBaseUrl}/`, lastToday: todays === deps.alertsPerSubscriberPerDay });
+    try {
+      const result = await mailer.send({ ...content, to: emailOf(sub, deps.keys), kind: 'alert', unsubscribeUrl: links.oneClick });
+      run.failuresInARow = 0;
+      if (result === 'sent') {
+        report.sent++;
+        deps.stats?.count('alertsSent', 1, day);
+        return 'sent';
+      }
+      if (result === 'dry-run') {
+        report.dryRun++;
+        return 'dry-run';
+      }
+      report.skipped++;
+      return 'none';
+    } catch (err) {
+      report.failed++;
+      run.failuresInARow++;
+      if (run.failuresInARow >= 3) run.emailBlock = { reason: 'mail errors' };
+      if (wasRefused(err)) {
+        log.error('alert email refused', { job: next.id, err: err as Error });
+        return 'refused';
+      }
       log.error('alert email may or may not have gone out; not sending it again', { job: next.id, err: err as Error });
+      return 'uncertain';
     }
-    if (run.failuresInARow >= 3) {
-      report.stoppedBy = 'mail errors';
-      return 'stop';
+  };
+  const sendPush = async (): Promise<Awaited<ReturnType<typeof pushDecision>>> => {
+    if (!wantPush) return { any: 'none', outcomes: [], removed: 0 };
+    return pushDecision(
+      { kv, keys: deps.keys, pool: run.pool!, log, now },
+      // A fresh id for this delivery: a held job keeps its id across partial deliveries, and a
+      // notification's tag must differ each time, or a later one replaces an earlier one.
+      { subscriberId: id, index: sub.index, payload: buildPayload({ openings, applicants: next.applicants, decisionId: newId() }) },
+    );
+  };
+  const [email, pushed] = await Promise.all([
+    sendEmail(),
+    // An unexpected failure part-way may have come after a send: counted as uncertain, never sent again.
+    sendPush().catch((err: unknown) => {
+      log.error('push failed part-way; not sending it again', { job: next.id, err: err as Error });
+      return { any: 'uncertain' as const, outcomes: [], removed: 0 };
+    }),
+  ]);
+  if (pushed.removed > 0) deps.stats?.count('pushDevicesRemoved', pushed.removed, day);
+  for (const o of pushed.outcomes) {
+    if (o.result === 'accepted') {
+      report.push.accepted++;
+      deps.stats?.count('pushAccepted', 1, day);
+    } else if (o.result === 'uncertain') {
+      report.push.uncertain++;
+      deps.stats?.count('pushUncertain', 1, day);
+    } else if (o.result === 'gone' || o.result === 'invalid') {
+      report.push.gone++;
+      deps.stats?.count('pushGone', 1, day);
+    } else {
+      report.push.refused++;
+      deps.stats?.count('pushRefused', 1, day);
     }
   }
-  return 'next';
+
+  if (settleOutcome(email, pushed.any, current.pushOn) === 'delivered') {
+    // Email surely refused while push got through: give the allowance back, on the day it was charged.
+    if (email === 'refused') await kv.write([{ op: 'decr', key: K.mailSentToday(day) }]);
+    return;
+  }
+  // Nothing got through for sure: undo the claim and try again at a later check, each date at most MAX_MAIL_ATTEMPTS times.
+  run.emailed.delete(id);
+  run.attempted.add(id);
+  for (const o of openings) for (const d of o.dates) tries.set(dateKey(o.id, d), (tries.get(dateKey(o.id, d)) ?? 0) + 1);
+  const retry = wanted
+    .map((o) => ({ ...o, dates: o.dates.filter((d) => (tries.get(dateKey(o.id, d)) ?? 0) < MAX_MAIL_ATTEMPTS) }))
+    .filter((o) => o.dates.length > 0);
+  await kv.write([
+    ...(wantEmail ? [{ op: 'decr', key: K.mailSentToday(day) } as WriteOp] : []),
+    { op: 'decr', key: K.alertsToday(id, day) },
+    lastValue === null ? { op: 'del', key: K.lastAlert(id) } : { op: 'set', key: K.lastAlert(id), value: lastValue },
+    ...holdOps(retry.length > 0 ? jobOf(retry) : null),
+  ]);
 }
 
 const dateKey = (siteId: number, date: string) => `${siteId}:${date}`;

@@ -3,6 +3,7 @@ import type { Availability, Site } from 'penge-passport-ph';
 import { CircuitOpenError } from 'penge-passport-ph';
 import type { MailMode } from '../src/config.ts';
 import { MemoryKv } from '../src/kv.ts';
+import type { Logger } from '../src/log.ts';
 import type { Mail, Mailer, SendResult } from '../src/mailer.ts';
 import { gunzipSync } from 'node:zlib';
 import type { SnapshotSink } from '../src/r2.ts';
@@ -141,3 +142,14 @@ export function clock(start = Date.parse('2026-09-27T02:00:00Z')) {
 }
 
 export { MemoryKv };
+
+/** A logger that keeps every line, as JSON, for tests to read. */
+export function recordingLog() {
+  const lines: string[] = [];
+  const log: Logger = {
+    info: (m, f) => lines.push(JSON.stringify({ m, f })),
+    warn: (m, f) => lines.push(JSON.stringify({ m, f })),
+    error: (m, f) => lines.push(JSON.stringify({ m, f })),
+  };
+  return { log, lines };
+}

@@ -36,7 +36,13 @@ export async function pruneAwaiting(kv: Kv, keys: Keys, subscriberId: string, no
   let n = 0;
   for (const d of await listDevices(kv, subscriberId)) {
     if (d.meta.state !== 'a' || !sealed[d.id]) continue;
-    if (now - Date.parse(openDevice(keys, sealed[d.id]!).createdAt) <= AWAITING_MAX_MS) continue;
+    let createdAt: number;
+    try {
+      createdAt = Date.parse(openDevice(keys, sealed[d.id]!).createdAt);
+    } catch {
+      continue; // unreadable (a wrong key or label): kept, never removed for it
+    }
+    if (now - createdAt <= AWAITING_MAX_MS) continue;
     if ((await pushRemove(kv, { subscriberId, deviceId: d.id, revokeSeconds: 0, onlyIfEndpointHmac: null, onlyIfAwaiting: true })) === 'removed') n++;
   }
   return n;

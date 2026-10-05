@@ -43,6 +43,11 @@ export const COUNTS = [
   'runs',
   'healthyRuns',
   'datesOpened',
+  'pushAccepted',
+  'pushRefused',
+  'pushUncertain',
+  'pushGone',
+  'pushDevicesRemoved',
 ] as const;
 export type Count = (typeof COUNTS)[number];
 
