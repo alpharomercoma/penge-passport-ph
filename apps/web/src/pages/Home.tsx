@@ -257,6 +257,7 @@ export function Home({ api }: { api: Api }) {
       {sheet && status && (
         <AlertSheet
           api={api}
+          status={status}
           offices={[...home, ...posts]}
           selected={selected}
           initialApplicants={applicants}

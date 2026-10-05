@@ -408,7 +408,7 @@ describe('posts abroad', () => {
     expect(within(sheet).getByRole('button', { name: 'Remove Dubai' })).toBeTruthy();
     fireEvent.change(within(sheet).getByLabelText('Your email'), { target: { value: 'ana@example.com' } });
     fireEvent.click(within(sheet).getByRole('button', { name: 'Send confirmation email' }));
-    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', channels: null, website: '' }));
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', channels: { emailOn: true, pushOn: false, pushCredentialHash: null, device: null }, website: '' }));
   });
 
   it('explains when posts abroad cannot be loaded, and offers to try again', async () => {
