@@ -1,0 +1,76 @@
+{
+  "version": "Chrome/154.0.8037.98",
+  "run": "muvrxfku",
+  "results": [
+    {
+      "item": "Chrome tab is detected as a browser",
+      "pass": true,
+      "note": "context: browser"
+    },
+    {
+      "item": "The switch reads \"Browser notifications\"",
+      "pass": true,
+      "note": "Browser notifications"
+    },
+    {
+      "item": "Push on, email off",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "One confirmation email for this request",
+      "pass": true,
+      "note": "1"
+    },
+    {
+      "item": "The email says \"Email: off\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The email names the asking device (Chrome on Mac)",
+      "pass": true,
+      "note": "Notifications: on, for the device and browser that asked (Chrome on Mac, Tue 6 Oct, 05:40)"
+    },
+    {
+      "item": "The confirmation page lists both channels, before its button",
+      "pass": true,
+      "note": "{\"items\":[\"Email: off\",\"Notifications: on, for the device and browser that asked (Chrome on Mac, Tue 6 Oct, 05:40)\"],\"before\":true}"
+    },
+    {
+      "item": "Confirming in this browser registers it: \"Notifications are on for this device.\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Exactly one new subscriber with one registered device",
+      "pass": true,
+      "note": "{\"uVWpEMx9fT0KQLeH\":\"r|1|GH6-DYpprJMNjjocFS3KjsYJWsoZe1UF5bWcy9M82_k|m4iwak0ApiOitL7xCTAWXI3zZL98dBIejQ8l8LRUFnw|Mkdj8hrcoD9vWloMPVqtgT61EBpbFUwo4hh4PIXRNAo\"}"
+    },
+    {
+      "item": "The row says \"Notifications on this device: On\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "An alert shows \"Dates open at Antipolo\", with the date and group in its body",
+      "pass": true,
+      "note": "[{\"title\":\"Dates open at Antipolo\",\"body\":\"Thu 8 Oct · for 1 person\",\"tag\":\"alert-JnTgFWZFRuDGuwXdMBXoKg\",\"data\":{\"office\":486,\"date\":\"2026-10-08\",\"people\":1}}]"
+    },
+    {
+      "item": "Its data names Antipolo, that date and that group (what a tap opens; the tap itself is not run)",
+      "pass": true,
+      "note": "{\"office\":486,\"date\":\"2026-10-08\",\"people\":1}"
+    },
+    {
+      "item": "No alert email for push only within 10 s",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The checker counted the push as accepted",
+      "pass": true,
+      "note": "{\"accepted\":3,\"refused\":0,\"uncertain\":0,\"gone\":0,\"heldNoChannel\":0}"
+    }
+  ]
+}

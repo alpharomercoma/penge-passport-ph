@@ -1,0 +1,86 @@
+{
+  "version": "Chrome/154.0.8037.98",
+  "run": "muvrl2x5",
+  "results": [
+    {
+      "item": "Both: one new subscriber with one registered device",
+      "pass": true,
+      "note": "ZfQicomEuQp9Texo4U88jA"
+    },
+    {
+      "item": "Both: one alert gives one email and one notification",
+      "pass": true,
+      "note": "emails 1, notifications [\"Dates open at Antipolo\"]"
+    },
+    {
+      "item": "Three tests are each answered 200, and a \"Test notification\" is shown (one tag, so each replaces the last)",
+      "pass": true,
+      "note": "200,200,200 / 1 shown"
+    },
+    {
+      "item": "The fourth within the hour is answered 429 with the limit message",
+      "pass": true,
+      "note": "429"
+    },
+    {
+      "item": "Before turning off, this browser holds a credential",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Turn off removes this subscriber's device on the server",
+      "pass": true,
+      "note": "{}"
+    },
+    {
+      "item": "Turn off clears this browser's credential",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "After turning off: no notification here within 10 s, and the email still comes",
+      "pass": true,
+      "note": "notifications 0, emails 1"
+    },
+    {
+      "item": "Turning on again makes a new credential",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "…and registers one device for the same subscriber",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Push works again after turning back on",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo\"]"
+    },
+    {
+      "item": "Before deleting, keys name this subscriber",
+      "pass": true,
+      "note": "pp:push:meta:ZfQicomEuQp9Texo4U88jA pp:push:ZfQicomEuQp9Texo4U88jA pp:sub:ZfQicomEuQp9Texo4U88jA pp:push:cred:vNnplx7JXUK6IbiG5TdlA5rUbdOj3kHV6PPQWNRXEjs pp:push:endpoint:Y6n93AbyLCIMpYzBQTvMGAu5CT6pwqfWTOc4xnAXKuI"
+    },
+    {
+      "item": "Delete my data leaves no key naming this subscriber (its hashes, credential and endpoint entries, reservation)",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Email only: no device is registered",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Email only: an alert email, and no notification within 10 s",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Denied: the sheet says how to allow notifications, without asking",
+      "pass": true,
+      "note": ""
+    }
+  ]
+}

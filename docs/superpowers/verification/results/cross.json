@@ -1,0 +1,54 @@
+{
+  "versions": {
+    "firefox": "firefox/157.0",
+    "chrome": "Chrome/154.0.8037.98"
+  },
+  "run": "muvryrke",
+  "results": [
+    {
+      "item": "Firefox, denied: the padlock hint shows as the sheet opens",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "A browser that will not subscribe: the switch goes back off with the reason, email stays on",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Firefox in private browsing",
+      "pass": null,
+      "note": "the switch turned on: Firefox 157 allowed the subscription"
+    },
+    {
+      "item": "Confirmed in Firefox: it says notifications are on where they were asked for",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Back in Chrome, without reloading, the row turns On within 30 s of the press in Firefox",
+      "pass": true,
+      "note": "28700 ms"
+    },
+    {
+      "item": "An alert reaches Chrome",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo\"]"
+    },
+    {
+      "item": "One subscriber now has two registered devices (Chrome and Firefox)",
+      "pass": true,
+      "note": "[\"r|\",\"r|\"]"
+    },
+    {
+      "item": "A test from Chrome is accepted",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The test reaches Chrome, and not Firefox (another device of the same subscriber) within 10 s",
+      "pass": true,
+      "note": "chrome [\"Test notification\"], firefox 0"
+    }
+  ]
+}
