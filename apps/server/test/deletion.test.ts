@@ -13,8 +13,8 @@ async function setup() {
   const post = (path: string, body: unknown, type = 'application/json') => app.request(path, { method: 'POST', headers: { 'content-type': type }, body: JSON.stringify(body) });
   const join = async (email = 'juan@example.com') => {
     const token = await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, t.now());
-    const result = await confirm(kv, token, t.now());
-    if (result.status === 'invalid') throw new Error('fixture confirmation failed');
+    const result = await confirm(kv, keys, token, t.now());
+    if (result.status !== 'confirmed' && result.status !== 'updated') throw new Error(`fixture confirmation failed: ${result.status}`);
     return result.subscriberId;
   };
   return { t, kv, mailer, app, post, join };
@@ -55,7 +55,7 @@ describe('deletion recovery without an alert email', () => {
     expect(await s.kv.sMembers(K.siteSubscribers(486))).toEqual([]);
     expect(await s.kv.get(K.held(id))).toBeNull();
     expect(await s.kv.sMembers(K.heldSubscribers)).toEqual([]);
-    expect((await confirm(s.kv, pending, s.t.now())).status).toBe('invalid');
+    expect((await confirm(s.kv, keys, pending, s.t.now())).status).toBe('invalid');
     expect((await deleteWithToken(s.kv, other)).valid).toBe(false);
     expect((await s.post('/api/delete-data', { token })).status).toBe(404);
   });
@@ -65,7 +65,7 @@ describe('deletion recovery without an alert email', () => {
     const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly', channels: null }, s.t.now());
     const token = await createDeletion(s.kv, keys, 'juan@example.com');
     expect(await deleteWithToken(s.kv, token)).toEqual({ valid: true, removed: false });
-    expect((await confirm(s.kv, pending, s.t.now())).status).toBe('invalid');
+    expect((await confirm(s.kv, keys, pending, s.t.now())).status).toBe('invalid');
     const unknown = await createDeletion(s.kv, keys, 'unknown@example.com');
     expect((await s.post('/api/delete-data', { token: unknown })).status).toBe(200);
   });
@@ -75,7 +75,7 @@ describe('deletion recovery without an alert email', () => {
     await s.join();
     const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly', channels: null }, s.t.now());
     const deletion = await createDeletion(s.kv, keys, 'juan@example.com');
-    await Promise.all([confirm(s.kv, pending, s.t.now()), deleteWithToken(s.kv, deletion)]);
+    await Promise.all([confirm(s.kv, keys, pending, s.t.now()), deleteWithToken(s.kv, deletion)]);
     expect(await s.kv.sMembers(K.allSubscribers)).toEqual([]);
     expect(await s.kv.sMembers(K.siteSubscribers(10))).toEqual([]);
   });

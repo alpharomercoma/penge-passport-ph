@@ -12,7 +12,7 @@ export interface Backup {
 }
 
 const ID = /^[A-Za-z0-9_-]{16,32}$/;
-const FIELDS = ['email', 'index', 'sites', 'applicants', 'pace', 'createdAt', 'confirmedAt'];
+const FIELDS = ['email', 'index', 'sites', 'applicants', 'pace', 'emailOn', 'createdAt', 'confirmedAt'];
 
 /**
  * Every subscriber: from the set of all of them, and from the site sets too,
@@ -39,6 +39,10 @@ export async function importSubscribers(kv: Kv, backup: Backup): Promise<number>
     const sites = (clean.sites ?? '').split(',').map(Number);
     // Absent in backups from before paces existed; anything else must be a pace.
     if (fields.pace !== undefined && !isPace(fields.pace)) throw new Error(`bad subscriber ${id}`);
+    // Absent in backups from before channels (email, as then); anything else must be a flag.
+    if (fields.emailOn !== undefined && fields.emailOn !== '0' && fields.emailOn !== '1') throw new Error(`bad subscriber ${id}`);
+    // Devices are not in a backup, so a restored subscriber never has push on.
+    clean.pushOn = '0';
     if (!clean.email || !clean.index || !sites.every((n) => Number.isSafeInteger(n) && n > 0)) {
       throw new Error(`bad subscriber ${id}`);
     }

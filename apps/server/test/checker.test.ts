@@ -52,8 +52,8 @@ async function world(overrides: Partial<CheckDeps> = {}) {
   // Most tests here want an email at every check: the "asap" pace. Pace itself is tested below.
   const subscribe = async (email: string, siteIds: number[], applicants = 1, pace: Pace = 'asap') => {
     const token = await createPending(kv, keys, { email, siteIds, applicants, pace, channels: null }, t.now());
-    const result = await confirm(kv, token, t.now());
-    if (result.status === 'invalid') throw new Error('confirm failed');
+    const result = await confirm(kv, keys, token, t.now());
+    if (result.status !== 'confirmed' && result.status !== 'updated') throw new Error(`confirm failed: ${result.status}`);
     return result.subscriberId;
   };
   const run = async () => {
@@ -442,8 +442,8 @@ describe('checker, found by adversarial review', () => {
     const w = await world();
     const a = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     const b = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
-    const results = await Promise.all([confirm(w.kv, a, w.t.now()), confirm(w.kv, b, w.t.now())]);
-    const ids = new Set(results.map((r) => (r.status === 'invalid' ? null : r.subscriberId)));
+    const results = await Promise.all([confirm(w.kv, keys, a, w.t.now()), confirm(w.kv, keys, b, w.t.now())]);
+    const ids = new Set(results.map((r) => (r.status === 'confirmed' || r.status === 'updated' ? r.subscriberId : null)));
     expect(ids.size).toBe(1);
     const members = [...(await w.kv.sMembers(K.siteSubscribers(486))), ...(await w.kv.sMembers(K.siteSubscribers(693)))];
     expect(new Set(members).size).toBe(1);
@@ -456,7 +456,7 @@ describe('checker, found by adversarial review', () => {
     // Ana asks to change her offices, then unsubscribes from an older alert before confirming.
     const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     expect(await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token))).toBe(true);
-    expect((await confirm(w.kv, update, w.t.now())).status).toBe('invalid'); // no way back in by an old link
+    expect((await confirm(w.kv, keys, update, w.t.now())).status).toBe('invalid'); // no way back in by an old link
     expect(w.kv.keys().filter((k) => k.startsWith('pp:pending'))).toEqual([]);
     expect(w.kv.keys().filter((k) => k.startsWith('pp:sub'))).toEqual([]);
   });
@@ -466,12 +466,12 @@ describe('checker, found by adversarial review', () => {
     const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     const pending = JSON.parse((await w.kv.get(w.kv.keys().find((k) => k.startsWith('pp:pending:'))!))!) as { index: string };
     await w.kv.set(K.addressLock(pending.index), 'someone-else', { ttlSeconds: 60 });
-    await expect(confirm(w.kv, token, w.t.now())).rejects.toThrow('busy');
+    await expect(confirm(w.kv, keys, token, w.t.now())).rejects.toThrow('busy');
     await w.kv.write([{ op: 'del', key: K.addressLock(pending.index) }]);
-    expect((await confirm(w.kv, token, w.t.now())).status).toBe('confirmed');
-    expect((await confirm(w.kv, token, w.t.now())).status).toBe('invalid');
+    expect((await confirm(w.kv, keys, token, w.t.now())).status).toBe('confirmed');
+    expect((await confirm(w.kv, keys, token, w.t.now())).status).toBe('invalid');
     const twice = await createPending(w.kv, keys, { email: 'bo@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
-    const both = await Promise.all([confirm(w.kv, twice, w.t.now()), confirm(w.kv, twice, w.t.now())]);
+    const both = await Promise.all([confirm(w.kv, keys, twice, w.t.now()), confirm(w.kv, keys, twice, w.t.now())]);
     expect(both.map((r) => r.status).sort()).toEqual(['confirmed', 'invalid']);
   }, 15_000);
 
@@ -726,6 +726,14 @@ describe('outbox integrity and backups', () => {
     const fresh = new MemoryKv();
     await importSubscribers(fresh, backup);
     expect(await fresh.sMembers(K.allSubscribers)).toEqual([id]);
+  });
+
+  it('restores how a subscriber is told, but never push: devices are not in a backup', async () => {
+    const fresh = new MemoryKv();
+    const fields = { email: 'v1.x', index: 'idx', sites: '486', applicants: '1', pace: 'asap', emailOn: '0', pushOn: '1', createdAt: '', confirmedAt: '' };
+    await importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields }] });
+    expect(await fresh.hGetAll(K.subscriber('abcdefghijklmnop'))).toMatchObject({ emailOn: '0', pushOn: '0' });
+    await expect(importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields: { ...fields, emailOn: 'yes' } }] })).rejects.toThrow();
   });
 });
 
@@ -1087,7 +1095,7 @@ describe('clock steps', () => {
       client: 'penge-passport-ph@test', now: wall, uptime: () => (opts.noUptime || uptimeFails ? null : { up: t.now() - bootAt, boot }),
     };
     const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, wall());
-    await confirm(kv, token, wall());
+    await confirm(kv, keys, token, wall());
     let n = 0;
     const run = async () => {
       await runCheck({ ...deps, runId: `run${++n}` });

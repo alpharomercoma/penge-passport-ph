@@ -245,12 +245,12 @@ return 'registered'`,
   },
 };
 
-// KEYS: meta, devices
+// KEYS: meta, devices, subscriber
 // ARGV: subscriberId, deviceId, revokeSeconds, onlyIfEndpointHmac ('' any), onlyIfAwaiting ('1'/'0'), credPrefix, endpointPrefix, revokedPrefix
 const REMOVE: ScriptDef = {
   name: 'pushRemove',
   lua: `${LUA}
-if not (typeOk(KEYS[1], 'hash') and typeOk(KEYS[2], 'hash')) then return 'wrongtype' end
+if not (typeOk(KEYS[1], 'hash') and typeOk(KEYS[2], 'hash') and typeOk(KEYS[3], 'hash')) then return 'wrongtype' end
 local raw = redis.call('HGET', KEYS[1], ARGV[2])
 if not raw then return 'missing' end
 local state, rev, cred, ep, sh = meta(raw)
@@ -270,11 +270,13 @@ if dropEp then redis.call('DEL', epKey) end
 if revoke then redis.call('SET', revokedKey, '1', 'EX', tonumber(ARGV[3])) end
 redis.call('HDEL', KEYS[1], ARGV[2])
 redis.call('HDEL', KEYS[2], ARGV[2])
+-- The last device gone: the subscriber has push off, in this same step.
+if redis.call('HLEN', KEYS[1]) == 0 and redis.call('EXISTS', KEYS[3]) == 1 then redis.call('HSET', KEYS[3], 'pushOn', '0') end
 return 'removed'`,
   memory(tx, k, a) {
-    const [metaKey, devicesKey] = k as [string, string];
+    const [metaKey, devicesKey, subscriberKey] = k as [string, string, string];
     const [sub, dev, revokeRaw, only, onlyAwaiting, credPrefix, endpointPrefix, revokedPrefix] = a as [string, string, string, string, string, string, string, string];
-    if (!(typeOk(tx, metaKey, 'hash') && typeOk(tx, devicesKey, 'hash'))) return 'wrongtype';
+    if (!(typeOk(tx, metaKey, 'hash') && typeOk(tx, devicesKey, 'hash') && typeOk(tx, subscriberKey, 'hash'))) return 'wrongtype';
     const raw = tx.hGet(metaKey, dev);
     if (raw === null) return 'missing';
     let m: Meta;
@@ -301,6 +303,7 @@ return 'removed'`,
     }
     tx.hDel(metaKey, dev);
     tx.hDel(devicesKey, dev);
+    if (tx.hLen(metaKey) === 0 && tx.exists(subscriberKey)) tx.hSet(subscriberKey, 'pushOn', '0');
     return 'removed';
   },
 };
@@ -340,7 +343,7 @@ export async function pushRemove(
   check({ subscriberId: a.subscriberId, deviceId: a.deviceId, ...(a.onlyIfEndpointHmac ? { onlyIfEndpointHmac: a.onlyIfEndpointHmac } : {}) });
   return answer(await kv.script(
     REMOVE,
-    [K.pushMeta(a.subscriberId), K.pushDevices(a.subscriberId)],
+    [K.pushMeta(a.subscriberId), K.pushDevices(a.subscriberId), K.subscriber(a.subscriberId)],
     [a.subscriberId, a.deviceId, String(a.revokeSeconds), a.onlyIfEndpointHmac ?? '', a.onlyIfAwaiting ? '1' : '0', K.pushCred(''), K.pushEndpoint(''), K.pushRevoked('')],
   ));
 }

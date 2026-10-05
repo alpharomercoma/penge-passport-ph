@@ -92,8 +92,8 @@ async function world() {
   };
   const subscribe = async (email: string, siteIds: number[], applicants = 1) => {
     const token = await createPending(kv, keys, { email, siteIds, applicants, pace: 'asap', channels: null }, t.now());
-    const result = await confirm(kv, token, t.now());
-    if (result.status === 'invalid') throw new Error('confirm failed');
+    const result = await confirm(kv, keys, token, t.now());
+    if (result.status !== 'confirmed' && result.status !== 'updated') throw new Error(`confirm failed: ${result.status}`);
     return result.subscriberId;
   };
   const stored = async () => {

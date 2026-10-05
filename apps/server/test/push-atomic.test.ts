@@ -179,6 +179,19 @@ for (const [name, make] of targets) {
       expect(await remove(kv, 'A', 'd1', { awaiting: true })).toBe('kept');
     });
 
+    it('turns push off on the subscriber in the same step that removes its last device', async () => {
+      const kv = await make();
+      await kv.write([{ op: 'hSet', key: K.subscriber('A'), fields: { email: 'x', pushOn: '1' } }]);
+      await bind(kv, 'A', 'd1', 'c1');
+      await bind(kv, 'A', 'd2', 'c2');
+      await remove(kv, 'A', 'd1');
+      expect((await kv.hGetAll(K.subscriber('A'))).pushOn).toBe('1');
+      await remove(kv, 'A', 'd2');
+      expect((await kv.hGetAll(K.subscriber('A'))).pushOn).toBe('0');
+      await remove(kv, 'B', 'd9'); // no subscriber: nothing is created
+      expect(await kv.hGetAll(K.subscriber('B'))).toEqual({});
+    });
+
     it('is a no-op when repeated after success (a lost answer)', async () => {
       const kv = await make();
       await subscriber(kv, 'A');

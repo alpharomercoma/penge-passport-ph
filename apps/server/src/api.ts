@@ -100,7 +100,7 @@ export function createApi(deps: ApiDeps) {
       ? deps.clientIp(c)
       : clientAddress(getConnInfo(c).remote.address ?? 'unknown', c.req.header('x-forwarded-for'));
 
-  const fail = (c: Context, status: 400 | 403 | 404 | 413 | 415 | 429 | 500 | 503, error: string, fields?: ApiError['fields']) =>
+  const fail = (c: Context, status: 400 | 403 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: string, fields?: ApiError['fields']) =>
     c.json<ApiError>(fields ? { error, fields } : { error }, status);
 
   // Counters are kept per network address, under a keyed hash of it: Redis
@@ -322,12 +322,14 @@ export function createApi(deps: ApiDeps) {
     if (!parsed.ok) return parsed.res;
     const token = (parsed.body as { token?: unknown } | null)?.token;
     if (!isToken(token)) return fail(c, 400, 'That link is not valid. Copy the whole link from the email.');
-    const result = await confirm(kv, token, now());
-    if (result.status === 'invalid') {
-      return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
+    const result = await confirm(kv, keys, token, now());
+    if (result.status === 'invalid') return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
+    if (result.status === 'reload' || result.status === 'full' || result.status === 'push-unavailable') {
+      // Task 6 words these; a request with channels cannot reach this route from today's page yet.
+      return c.json<ApiError>({ error: 'This page is out of date. Reload it, then open the confirmation link from your email again.', code: 'reload' }, 409);
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
-    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: { emailOn: true, pushOn: false, push: 'none' } });
+    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: result.channels });
   });
 
   app.post('/api/deletion-request', async (c) => {
