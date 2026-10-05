@@ -206,6 +206,34 @@ describe('config', () => {
     expect(() => loadConfig({ ...env, ...patch })).toThrow(ConfigError);
   });
 
+  it('keeps push off unless every push setting is there', () => {
+    expect(loadConfig(env).push).toEqual({ mode: 'off', vapid: null, ownerEmails: [] });
+    expect(() => loadConfig({ ...env, PUSH_MODE: 'live' })).toThrow(/VAPID_PUBLIC_KEY/);
+    expect(() => loadConfig({ ...env, PUSH_MODE: 'sometimes' })).toThrow(/PUSH_MODE/);
+  });
+
+  it('reads push settings, and owner mode needs owner addresses', () => {
+    const vapid = { VAPID_PUBLIC_KEY: 'B'.repeat(87), VAPID_PRIVATE_KEY: 'p'.repeat(43), VAPID_SUBJECT: 'mailto:alerts@example.com' };
+    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner' })).toThrow(/PUSH_OWNER_EMAILS/);
+    const c = loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner', PUSH_OWNER_EMAILS: 'Juan@Example.com, ana@example.com' });
+    expect(c.push.mode).toBe('owner');
+    expect(c.push.ownerEmails).toEqual(['juan@example.com', 'ana@example.com']);
+    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'live', VAPID_SUBJECT: 'https://x' })).toThrow(/VAPID_SUBJECT/);
+  });
+
+  it('refuses VAPID keys of the wrong size, which web-push would refuse only when it first sends', () => {
+    const vapid = { VAPID_PUBLIC_KEY: 'B'.repeat(87), VAPID_PRIVATE_KEY: 'p'.repeat(43), VAPID_SUBJECT: 'mailto:alerts@example.com', PUSH_MODE: 'live' };
+    expect(loadConfig({ ...env, ...vapid }).push.vapid?.publicKey).toBe('B'.repeat(87));
+    for (const publicKey of ['B'.repeat(80), 'B'.repeat(86), 'B'.repeat(88), 'B'.repeat(100)]) {
+      expect(() => loadConfig({ ...env, ...vapid, VAPID_PUBLIC_KEY: publicKey })).toThrow(/VAPID_PUBLIC_KEY/);
+    }
+    // 65 bytes, but not an uncompressed point (it must start with 0x04).
+    expect(() => loadConfig({ ...env, ...vapid, VAPID_PUBLIC_KEY: Buffer.alloc(65, 2).toString('base64url') })).toThrow(/VAPID_PUBLIC_KEY/);
+    for (const privateKey of ['p'.repeat(40), 'p'.repeat(42), 'p'.repeat(44), 'p'.repeat(50)]) {
+      expect(() => loadConfig({ ...env, ...vapid, VAPID_PRIVATE_KEY: privateKey })).toThrow(/VAPID_PRIVATE_KEY/);
+    }
+  });
+
   it('allows live mail once the domain is set', () => {
     const config = loadConfig({ ...env, MAIL_MODE: 'live', MAIL_FROM: 'alerts@penge.example', PUBLIC_BASE_URL: 'https://penge.example/' });
     expect(config.publicBaseUrl).toBe('https://penge.example');

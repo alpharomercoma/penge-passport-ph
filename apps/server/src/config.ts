@@ -1,6 +1,6 @@
 // Everything the server reads from its environment (/etc/penge/server.env on
 // the VPS), checked once at start-up so a bad value fails loudly, not later.
-import { normalizeEmail } from '@penge/contracts';
+import { isPushMode, normalizeEmail, type PushMode } from '@penge/contracts';
 
 export type MailMode = 'live' | 'dry-run' | 'off';
 
@@ -9,6 +9,13 @@ export interface R2Config {
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
+}
+
+export interface PushConfig {
+  mode: PushMode;
+  vapid: { publicKey: string; privateKey: string; subject: string } | null;
+  /** PUSH_MODE=owner: the addresses that may turn push on while it is being tested. */
+  ownerEmails: string[];
 }
 
 export interface Config {
@@ -34,6 +41,7 @@ export interface Config {
   /** Where scans wait when R2 cannot be reached. */
   spoolDir: string;
   api: { host: string; port: number };
+  push: PushConfig;
 }
 
 export class ConfigError extends Error {
@@ -90,6 +98,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('MAIL_MODE=live needs MAIL_FROM and PUBLIC_BASE_URL');
   }
 
+  const pushModeRaw = env.PUSH_MODE?.trim() || 'off';
+  if (!isPushMode(pushModeRaw)) throw new ConfigError('PUSH_MODE must be off, owner or live');
+  let push: PushConfig = { mode: 'off', vapid: null, ownerEmails: [] };
+  if (pushModeRaw !== 'off') {
+    const publicKey = need('VAPID_PUBLIC_KEY');
+    const privateKey = need('VAPID_PRIVATE_KEY');
+    const subject = need('VAPID_SUBJECT');
+    // What web-push checks when it first sends: a 65-byte uncompressed P-256 key and a 32-byte private key.
+    const publicBytes = Buffer.from(publicKey, 'base64url');
+    if (!/^[A-Za-z0-9_-]{87}$/.test(publicKey) || publicBytes.length !== 65 || publicBytes[0] !== 0x04) {
+      throw new ConfigError('VAPID_PUBLIC_KEY is not a VAPID public key');
+    }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(privateKey)) throw new ConfigError('VAPID_PRIVATE_KEY is not a VAPID private key');
+    if (!subject.startsWith('mailto:') || !normalizeEmail(subject.slice(7))) throw new ConfigError('VAPID_SUBJECT must be mailto: and an address');
+    const listed = (env.PUSH_OWNER_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const ownerEmails = listed.map((s) => normalizeEmail(s));
+    if (ownerEmails.some((e) => e === null)) throw new ConfigError('PUSH_OWNER_EMAILS has an address that is not valid');
+    if (pushModeRaw === 'owner' && ownerEmails.length === 0) throw new ConfigError('PUSH_MODE=owner needs PUSH_OWNER_EMAILS');
+    push = { mode: pushModeRaw, vapid: { publicKey, privateKey, subject }, ownerEmails: ownerEmails as string[] };
+  }
+
   const redisUrl = need('REDIS_URL');
   const redis = (() => {
     try {
@@ -135,6 +164,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',
     spoolDir: env.SPOOL_DIR?.trim() || '/var/lib/penge/spool',
     api: { host: env.API_HOST?.trim() || '127.0.0.1', port: int('API_PORT', 8787, 1, 65535) },
+    push,
   };
 }
 

@@ -13,7 +13,8 @@ export type WriteOp =
   | { op: 'rPush'; key: string; values: string[] }
   | { op: 'expire'; key: string; ttlSeconds: number }
   /** Undo one increment, keeping the counter's expiry. */
-  | { op: 'decr'; key: string };
+  | { op: 'decr'; key: string }
+  | { op: 'persist'; key: string };
 
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -107,6 +108,9 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
             break;
           case 'decr':
             multi.decr(op.key);
+            break;
+          case 'persist':
+            multi.persist(op.key);
             break;
         }
       }
@@ -290,6 +294,11 @@ export class MemoryKv implements Kv {
         case 'decr':
           await this.decr(op.key);
           break;
+        case 'persist': {
+          const entry = this.entry(op.key);
+          if (entry) entry.expiresAt = null;
+          break;
+        }
       }
     }
   }

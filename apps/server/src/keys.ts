@@ -67,6 +67,28 @@ export const K = {
   /** Set once a day's numbers are in R2, and once they are emailed. */
   statsStored: (day: string) => `${P}stats:stored:${day}`,
   statsEmailed: (day: string) => `${P}stats:emailed:${day}`,
+  /** Hash: device id → sealed device (endpoint and keys, label, created, last success, last failure). */
+  pushDevices: (subscriberId: string) => `${P}push:${subscriberId}`,
+  /** Hash: device id → "state|revision|credential hash|endpoint hmac|subscription hmac"; what the scripts compare. */
+  pushMeta: (subscriberId: string) => `${P}push:meta:${subscriberId}`,
+  /** "<subscriber id>/<device id>": one owner per endpoint. */
+  pushEndpoint: (endpointHmac: string) => `${P}push:endpoint:${endpointHmac}`,
+  /** "<subscriber id>/<device id>": one owner per credential. */
+  pushCred: (credentialHash: string) => `${P}push:cred:${credentialHash}`,
+  /** Set of pending-token hashes asking push for this credential; 48 h. */
+  pushPending: (credentialHash: string) => `${P}push:pending:${credentialHash}`,
+  /** A credential turned off; 72 h, longer than any confirmation link. */
+  pushRevoked: (credentialHash: string) => `${P}push:revoked:${credentialHash}`,
+  /** Set of "<token hash>|<address index>" for pending requests that change channels (push-downgrade reads it). */
+  pendingChannels: `${P}pending:channels`,
+  /** The subscriber id an address will get while it has none. */
+  reserved: (index: string) => `${P}reserved:${index}`,
+  /** The operator's emergency stop for push alone. */
+  pushPaused: `${P}push:paused`,
+  /** The address index a provisional subscriber id belongs to; written with its first device, gone when the subscriber exists. */
+  pushAddress: (subscriberId: string) => `${P}push:address:${subscriberId}`,
+  /** Present only in a throwaway local Valkey: tests that wipe data refuse any other. */
+  pushTestMark: `${P}test:disposable`,
 };
 
 /** `YYYY-MM-DD` in Manila, where the day boundaries of the daily caps fall. */
