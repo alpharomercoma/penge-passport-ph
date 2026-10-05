@@ -644,10 +644,13 @@ function addDelivery(a: DeliveryReport, b: DeliveryReport): DeliveryReport {
   };
 }
 
+/** The status as stored in pp:status: what /api/status adds (mail and push) is not stored. */
+export type StoredStatus = Omit<StatusResponse, 'mailLive' | 'push' | 'vapidPublicKey'>;
+
 async function writeStatus(kv: Kv, scan: Scan) {
   const raw = await kv.get(K.status);
-  const previous = raw ? (JSON.parse(raw) as Omit<StatusResponse, 'mailLive'>) : null;
-  let status: Omit<StatusResponse, 'mailLive'>;
+  const previous = raw ? (JSON.parse(raw) as StoredStatus) : null;
+  let status: StoredStatus;
   if (scan.healthy) {
     const before = new Map(previous?.sites.map((s) => [s.id, s]));
     status = {

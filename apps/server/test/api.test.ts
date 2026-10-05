@@ -47,7 +47,7 @@ describe('subscribe, confirm, unsubscribe', () => {
     const token = confirmToken(mail.text)!;
     const ok = await post('/api/confirm', { token });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ status: 'confirmed', siteIds: [486, 693], applicants: 2, pace: 'hourly' });
+    expect(await ok.json()).toEqual({ status: 'confirmed', siteIds: [486, 693], applicants: 2, pace: 'hourly', channels: { emailOn: true, pushOn: false, push: 'none' } });
     const [id] = await kv.sMembers(K.siteSubscribers(486));
     expect(await kv.sMembers(K.siteSubscribers(693))).toEqual([id]);
 

@@ -12,7 +12,7 @@ async function setup() {
   const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: 'https://penge.example', now: t.now, clientIp: () => '203.0.113.5' });
   const post = (path: string, body: unknown, type = 'application/json') => app.request(path, { method: 'POST', headers: { 'content-type': type }, body: JSON.stringify(body) });
   const join = async (email = 'juan@example.com') => {
-    const token = await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'hourly' }, t.now());
+    const token = await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, t.now());
     const result = await confirm(kv, token, t.now());
     if (result.status === 'invalid') throw new Error('fixture confirmation failed');
     return result.subscriberId;
@@ -43,7 +43,7 @@ describe('deletion recovery without an alert email', () => {
     const id = await s.join();
     await s.kv.set(K.held(id), 'held');
     await s.kv.write([{ op: 'sAdd', key: K.heldSubscribers, members: [id] }]);
-    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 2, pace: 'asap' }, s.t.now());
+    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 2, pace: 'asap', channels: null }, s.t.now());
     await s.post('/api/deletion-request', { email: 'juan@example.com' });
     const token = deletionToken(s.mailer.sent[0]!.text);
     const other = await createDeletion(s.kv, keys, 'juan@example.com');
@@ -62,7 +62,7 @@ describe('deletion recovery without an alert email', () => {
 
   it('also cancels an unconfirmed signup and succeeds for an unknown address', async () => {
     const s = await setup();
-    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly' }, s.t.now());
+    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly', channels: null }, s.t.now());
     const token = await createDeletion(s.kv, keys, 'juan@example.com');
     expect(await deleteWithToken(s.kv, token)).toEqual({ valid: true, removed: false });
     expect((await confirm(s.kv, pending, s.t.now())).status).toBe('invalid');
@@ -73,7 +73,7 @@ describe('deletion recovery without an alert email', () => {
   it('serializes deletion with confirmation so an old link cannot resurrect the subscription', async () => {
     const s = await setup();
     await s.join();
-    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly' }, s.t.now());
+    const pending = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [10], applicants: 1, pace: 'hourly', channels: null }, s.t.now());
     const deletion = await createDeletion(s.kv, keys, 'juan@example.com');
     await Promise.all([confirm(s.kv, pending, s.t.now()), deleteWithToken(s.kv, deletion)]);
     expect(await s.kv.sMembers(K.allSubscribers)).toEqual([]);

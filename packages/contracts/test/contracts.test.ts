@@ -5,11 +5,13 @@ import {
   formatDate,
   isAbroadResponse,
   isCalendarDate,
+  isCredentialHash,
   isOfficeDates,
   isOfficeTimes,
   isStatusResponse,
   isToken,
   isUnsubscribeToken,
+  parsePushSubscription,
   LIMITS,
   normalizeEmail,
   officeMapUrl,
@@ -68,7 +70,7 @@ describe('validateSubscribe', () => {
   it('accepts a normal request, de-duplicating and sorting sites', () => {
     expect(
       validateSubscribe({ email: 'A@b.co', siteIds: [693, 10, 693], applicants: 2 }, known),
-    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2, pace: 'hourly' } });
+    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2, pace: 'hourly', channels: null } });
     expect(validateSubscribe({ email: 'a@b.co', siteIds: [10] })).toMatchObject({ ok: true, value: { applicants: 1, pace: 'hourly' } });
     expect(validateSubscribe({ email: 'a@b.co', siteIds: [10], pace: 'asap' })).toMatchObject({ ok: true, value: { pace: 'asap' } });
   });
@@ -321,5 +323,81 @@ describe('office answers', () => {
       expect(isOfficeDates({ ...dates, applicants })).toBe(false);
       expect(isOfficeTimes({ ...times, applicants })).toBe(false);
     }
+  });
+});
+
+describe('channels in a subscribe request', () => {
+  const base = { email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'hourly' };
+  const hash = 'a'.repeat(43);
+
+  it('reads a request from a page that predates channels as null', () => {
+    const r = validateSubscribe(base);
+    expect(r.ok && r.value.channels).toBeNull();
+    const n = validateSubscribe({ ...base, channels: null });
+    expect(n.ok && n.value.channels).toBeNull();
+  });
+
+  it('accepts email only, push only, and both', () => {
+    for (const channels of [
+      { emailOn: true, pushOn: false },
+      { emailOn: false, pushOn: true, pushCredentialHash: hash, device: 'Chrome on Android' },
+      { emailOn: true, pushOn: true, pushCredentialHash: hash, device: 'Firefox on Mac' },
+    ]) expect(validateSubscribe({ ...base, channels }).ok).toBe(true);
+  });
+
+  it('refuses no channel at all, and push without a credential hash', () => {
+    const none = validateSubscribe({ ...base, channels: { emailOn: false, pushOn: false } });
+    expect(!none.ok && none.errors.channels).toMatch(/at least one/i);
+    const bare = validateSubscribe({ ...base, channels: { emailOn: true, pushOn: true } });
+    expect(!bare.ok && bare.errors.channels).toBeTruthy();
+  });
+
+  it('refuses a device label that could carry markup, a line break, or is too long', () => {
+    for (const device of ['<b>x</b>', 'x'.repeat(61), 'a\nb']) {
+      expect(validateSubscribe({ ...base, channels: { emailOn: true, pushOn: true, pushCredentialHash: hash, device } }).ok).toBe(false);
+    }
+  });
+
+  it('checks a credential hash', () => {
+    expect(isCredentialHash(hash)).toBe(true);
+    expect(isCredentialHash('a'.repeat(42))).toBe(false);
+    expect(isCredentialHash(`${'a'.repeat(42)}=`)).toBe(false);
+  });
+});
+
+describe('status from a server without push', () => {
+  it('reads as push off', () => {
+    const old: Record<string, unknown> = { checkedAt: null, lastHealthyAt: null, healthy: true, mailLive: true, sites: [] };
+    expect(isStatusResponse(old)).toBe(true);
+    expect(old.push).toBe('off');
+    expect(old.vapidPublicKey).toBeNull();
+  });
+
+  it('refuses an unknown push mode', () => {
+    expect(isStatusResponse({ checkedAt: null, lastHealthyAt: null, healthy: true, mailLive: true, sites: [], push: 'maybe', vapidPublicKey: null })).toBe(false);
+  });
+  it('answers false, without throwing, for an old status it cannot fill in', () => {
+    const old = { checkedAt: null, lastHealthyAt: null, healthy: true, mailLive: true, sites: [] };
+    expect(isStatusResponse(Object.freeze({ ...old }))).toBe(false);
+    expect(isStatusResponse(Object.seal({ ...old }))).toBe(false);
+    expect(isStatusResponse(Object.freeze({}))).toBe(false);
+    expect(isStatusResponse(Object.freeze({ ...old, push: 'off', vapidPublicKey: null }))).toBe(true);
+  });
+});
+
+describe('push subscription shape', () => {
+  const p256dh = Buffer.alloc(65, 4).toString('base64url');
+  const auth = Buffer.alloc(16, 1).toString('base64url');
+
+  it('reads the JSON a browser gives', () => {
+    expect(parsePushSubscription({ endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: { p256dh, auth } })).toEqual({
+      endpoint: 'https://fcm.googleapis.com/fcm/send/x', p256dh, auth,
+    });
+  });
+
+  it('refuses wrong key lengths, a missing endpoint, and anything too long', () => {
+    expect(parsePushSubscription({ endpoint: 'https://x', keys: { p256dh: auth, auth } })).toBeNull();
+    expect(parsePushSubscription({ keys: { p256dh, auth } })).toBeNull();
+    expect(parsePushSubscription({ endpoint: `https://${'x'.repeat(1100)}`, keys: { p256dh, auth } })).toBeNull();
   });
 });

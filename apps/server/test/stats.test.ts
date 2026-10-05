@@ -363,7 +363,7 @@ describe('what the checker counts', () => {
       now: t.now,
       stats,
     };
-    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now());
+    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: null }, t.now());
     await confirm(kv, token, t.now());
     let n = 0;
     const run = async () => {
@@ -405,7 +405,7 @@ describe('what the checker counts', () => {
       stats: createStats(kv, log, t.now),
     };
     for (const email of ['ana@example.com', 'ben@example.com']) {
-      await confirm(kv, await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+      await confirm(kv, await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'asap', channels: null }, t.now()), t.now());
     }
     await runCheck({ ...deps, runId: 'run1' });
     t.advance(10 * 60_000);
@@ -446,7 +446,7 @@ describe('what the checker counts', () => {
       now: t.now,
       stats: createStats(kv, log, t.now),
     };
-    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: null }, t.now()), t.now());
     await runCheck({ ...deps, runId: 'run1' });
     t.advance(10 * 60_000);
     upstream.open.set('486', ['2026-10-05']);
@@ -476,7 +476,7 @@ describe('what the checker counts', () => {
       now: t.now,
       stats: createStats(kv, log, t.now),
     };
-    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, t.now()), t.now());
+    await confirm(kv, await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: null }, t.now()), t.now());
     let n = 0;
     const run = async (mailDailyLimit: number, dates: string[], alertsPerSubscriberPerDay = 288) => {
       upstream.open.set('486', dates);
@@ -551,7 +551,7 @@ describe('what the checker counts', () => {
 
   it("notes the day's limit at a later charge when the first attempt failed", async () => {
     const w = await limitWorld();
-    await confirm(w.kv, await createPending(w.kv, keys, { email: 'ben@example.com', siteIds: [486], applicants: 1, pace: 'asap' }, w.t.now()), w.t.now());
+    await confirm(w.kv, await createPending(w.kv, keys, { email: 'ben@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: null }, w.t.now()), w.t.now());
     await w.run(300, []);
     const set = w.kv.set.bind(w.kv);
     let failures = 1;

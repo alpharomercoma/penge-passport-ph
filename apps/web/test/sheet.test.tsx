@@ -74,7 +74,7 @@ describe('alert sheet', () => {
     fireEvent.change(s.pace, { target: { value: 'asap' } });
     fireEvent.click(s.submit);
     await screen.findByText('Check your inbox for a confirmation link.');
-    expect(s.api.subscribe).toHaveBeenCalledWith({ email: 'juan@example.com', siteIds: [486], applicants: 3, pace: 'asap', website: '' });
+    expect(s.api.subscribe).toHaveBeenCalledWith({ email: 'juan@example.com', siteIds: [486], applicants: 3, pace: 'asap', channels: null, website: '' });
   });
 
   it('says, at the email field, how the address is kept', () => {

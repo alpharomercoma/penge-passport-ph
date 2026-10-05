@@ -309,6 +309,8 @@ describe('home', () => {
       healthy: fc.boolean(),
       mailLive: fc.boolean(),
       sites: fc.uniqueArray(site, { selector: (s) => s.id, maxLength: 12 }),
+      push: fc.constant('off' as const),
+      vapidPublicKey: fc.constant(null),
     });
     await fc.assert(
       fc.asyncProperty(status, fc.nat({ max: 20 }), fc.nat({ max: 40 }), async (s: StatusResponse, pickRow, pickDay) => {
@@ -406,7 +408,7 @@ describe('posts abroad', () => {
     expect(within(sheet).getByRole('button', { name: 'Remove Dubai' })).toBeTruthy();
     fireEvent.change(within(sheet).getByLabelText('Your email'), { target: { value: 'ana@example.com' } });
     fireEvent.click(within(sheet).getByRole('button', { name: 'Send confirmation email' }));
-    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', website: '' }));
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', channels: null, website: '' }));
   });
 
   it('explains when posts abroad cannot be loaded, and offers to try again', async () => {
@@ -525,7 +527,7 @@ describe('API client', () => {
           if (offline) throw new TypeError('Failed to fetch');
           return new Response(text, { status: code, headers: { 'content-type': 'application/json' } });
         });
-        for (const call of [api.status, () => api.subscribe({ email: 'a@b.co', siteIds: [1], applicants: 1, pace: 'hourly', website: '' }), () => api.confirm('t'), () => api.unsubscribe('t')]) {
+        for (const call of [api.status, () => api.subscribe({ email: 'a@b.co', siteIds: [1], applicants: 1, pace: 'hourly', channels: null, website: '' }), () => api.confirm('t'), () => api.unsubscribe('t')]) {
           try {
             await call();
           } catch (err) {

@@ -22,6 +22,7 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { abroadResponse, catalogPosts } from './abroad.ts';
+import type { StoredStatus } from './checker.ts';
 import { emailIndex, signUnsubscribe } from './crypto.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv } from './kv.ts';
@@ -146,13 +147,15 @@ export function createApi(deps: ApiDeps) {
     seen(c);
     warm(c);
     const raw = await kv.get(K.status);
-    const stored = raw ? (JSON.parse(raw) as Omit<StatusResponse, 'mailLive'>) : null;
+    const stored = raw ? (JSON.parse(raw) as StoredStatus) : null;
     return c.json<StatusResponse>({
       checkedAt: stored?.checkedAt ?? null,
       lastHealthyAt: stored?.lastHealthyAt ?? null,
       healthy: stored?.healthy ?? false,
       mailLive: mailer.mode === 'live',
       sites: stored?.sites ?? [],
+      push: 'off',
+      vapidPublicKey: null,
     });
   });
 
@@ -167,7 +170,7 @@ export function createApi(deps: ApiDeps) {
   async function officeFrom(raw: string | undefined) {
     if (!raw || !/^\d{1,7}$/.test(raw)) return null;
     const stored = await kv.get(K.status);
-    const status = stored ? (JSON.parse(stored) as Omit<StatusResponse, 'mailLive'>) : null;
+    const status = stored ? (JSON.parse(stored) as StoredStatus) : null;
     const site = status?.sites.find((s) => s.id === Number(raw));
     if (!site) {
       // A post abroad, checked about hourly: one never checked yet has nothing
@@ -324,7 +327,7 @@ export function createApi(deps: ApiDeps) {
       return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
-    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace });
+    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: { emailOn: true, pushOn: false, push: 'none' } });
   });
 
   app.post('/api/deletion-request', async (c) => {

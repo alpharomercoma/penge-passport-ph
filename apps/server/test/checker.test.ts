@@ -51,7 +51,7 @@ async function world(overrides: Partial<CheckDeps> = {}) {
   let n = 0;
   // Most tests here want an email at every check: the "asap" pace. Pace itself is tested below.
   const subscribe = async (email: string, siteIds: number[], applicants = 1, pace: Pace = 'asap') => {
-    const token = await createPending(kv, keys, { email, siteIds, applicants, pace }, t.now());
+    const token = await createPending(kv, keys, { email, siteIds, applicants, pace, channels: null }, t.now());
     const result = await confirm(kv, token, t.now());
     if (result.status === 'invalid') throw new Error('confirm failed');
     return result.subscriberId;
@@ -440,8 +440,8 @@ describe('checker, found by adversarial review', () => {
 
   it('creates one subscriber when two confirmations for one address race', async () => {
     const w = await world();
-    const a = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
-    const b = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly' }, w.t.now());
+    const a = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
+    const b = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     const results = await Promise.all([confirm(w.kv, a, w.t.now()), confirm(w.kv, b, w.t.now())]);
     const ids = new Set(results.map((r) => (r.status === 'invalid' ? null : r.subscriberId)));
     expect(ids.size).toBe(1);
@@ -454,7 +454,7 @@ describe('checker, found by adversarial review', () => {
     const w = await world();
     const id = await w.subscribe('ana@example.com', [486]);
     // Ana asks to change her offices, then unsubscribes from an older alert before confirming.
-    const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly' }, w.t.now());
+    const update = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [693], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     expect(await unsubscribe(w.kv, keys, signUnsubscribe(id, keys.token))).toBe(true);
     expect((await confirm(w.kv, update, w.t.now())).status).toBe('invalid'); // no way back in by an old link
     expect(w.kv.keys().filter((k) => k.startsWith('pp:pending'))).toEqual([]);
@@ -463,14 +463,14 @@ describe('checker, found by adversarial review', () => {
 
   it('keeps a confirmation link working when the address is busy, and single-use once it works', async () => {
     const w = await world();
-    const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
+    const token = await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     const pending = JSON.parse((await w.kv.get(w.kv.keys().find((k) => k.startsWith('pp:pending:'))!))!) as { index: string };
     await w.kv.set(K.addressLock(pending.index), 'someone-else', { ttlSeconds: 60 });
     await expect(confirm(w.kv, token, w.t.now())).rejects.toThrow('busy');
     await w.kv.write([{ op: 'del', key: K.addressLock(pending.index) }]);
     expect((await confirm(w.kv, token, w.t.now())).status).toBe('confirmed');
     expect((await confirm(w.kv, token, w.t.now())).status).toBe('invalid');
-    const twice = await createPending(w.kv, keys, { email: 'bo@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, w.t.now());
+    const twice = await createPending(w.kv, keys, { email: 'bo@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, w.t.now());
     const both = await Promise.all([confirm(w.kv, twice, w.t.now()), confirm(w.kv, twice, w.t.now())]);
     expect(both.map((r) => r.status).sort()).toEqual(['confirmed', 'invalid']);
   }, 15_000);
@@ -1086,7 +1086,7 @@ describe('clock steps', () => {
       publicBaseUrl: 'https://penge.example', mailDailyLimit: 300, alertsPerSubscriberPerDay: 96,
       client: 'penge-passport-ph@test', now: wall, uptime: () => (opts.noUptime || uptimeFails ? null : { up: t.now() - bootAt, boot }),
     };
-    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, wall());
+    const token = await createPending(kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, wall());
     await confirm(kv, token, wall());
     let n = 0;
     const run = async () => {

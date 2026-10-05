@@ -33,6 +33,8 @@ export const STATUS: StatusResponse = {
     windowEnd: '2027-03-31',
     publishedDays: 20,
   })),
+  push: 'off',
+  vapidPublicKey: null,
 };
 
 const recent = new Date(Date.now() - 20 * 60_000).toISOString();
@@ -82,7 +84,7 @@ export function fakeApi(overrides: Partial<Api> = {}): Api & { [K in keyof Api]:
     status: vi.fn(async () => STATUS),
     abroad: vi.fn(async () => ABROAD),
     subscribe: vi.fn(async () => 'Check your inbox for a confirmation link.'),
-    confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'hourly' as const })),
+    confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'hourly' as const, channels: { emailOn: true, pushOn: false, push: 'none' as const } })),
     unsubscribe: vi.fn(async () => {}),
     requestDeletion: vi.fn(async () => "Check your inbox for a deletion link."),
     deleteData: vi.fn(async () => {}),
