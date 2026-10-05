@@ -9,7 +9,7 @@ async function setup() {
   const t = clock(Date.parse('2026-10-01T00:00:00Z'));
   const kv = new MemoryKv(t.now);
   const mailer = new FakeMailer();
-  const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: 'https://penge.example', now: t.now, clientIp: () => '203.0.113.5' });
+  const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: 'https://penge.example', now: t.now, clientIp: () => '203.0.113.5', push: { mode: 'off', vapid: null, ownerEmails: [] } });
   const post = (path: string, body: unknown, type = 'application/json') => app.request(path, { method: 'POST', headers: { 'content-type': type }, body: JSON.stringify(body) });
   const join = async (email = 'juan@example.com') => {
     const token = await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'hourly', channels: null }, t.now());

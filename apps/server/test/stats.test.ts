@@ -288,7 +288,7 @@ describe('what the website counts', () => {
     const site = { id: 693, name: 'Baguio (SM City Baguio)', ok: true, openDates: ['2026-10-07'], fullDates: [], windowEnd: '2027-03-31', checkedAt: '2026-09-27T01:55:00.000Z' };
     await kv.set(K.status, JSON.stringify({ checkedAt: site.checkedAt, lastHealthyAt: site.checkedAt, healthy: true, sites: [site] }));
     let ip = '203.0.113.7';
-    const app = createApi({ kv, keys, mailer, log, publicBaseUrl: 'https://penge.example', now: t.now, clientIp: () => ip, stats });
+    const app = createApi({ kv, keys, mailer, log, publicBaseUrl: 'https://penge.example', now: t.now, clientIp: () => ip, stats, push: { mode: 'off', vapid: null, ownerEmails: [] } });
     const get = (path: string, ua = PHONE) => app.request(path, { headers: ua ? { 'user-agent': ua } : {} });
     const post = (path: string, body: unknown) =>
       app.request(path, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': PHONE }, body: JSON.stringify(body) });

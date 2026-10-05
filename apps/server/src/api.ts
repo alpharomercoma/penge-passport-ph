@@ -3,8 +3,11 @@
 import {
   type AbroadResponse,
   type ApiError,
+  type ConfirmPreview,
   type ConfirmResponse,
+  type DeviceState,
   describePost,
+  isCredential,
   isCalendarDate,
   isToken,
   isUnsubscribeToken,
@@ -23,6 +26,7 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { abroadResponse, catalogPosts } from './abroad.ts';
 import type { StoredStatus } from './checker.ts';
+import type { PushConfig } from './config.ts';
 import { emailIndex, signUnsubscribe } from './crypto.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv } from './kv.ts';
@@ -30,8 +34,10 @@ import { API_LIMITS, hit, ipBucket, type Limit } from './limits.ts';
 import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
+import { checkPushSubscription } from './push/endpoint.ts';
+import { credentialHash, deviceCall, turnOffDevice } from './push/register.ts';
 import { type Count, isPerson, type Stats } from './stats.ts';
-import { confirm, createDeletion, createPending, deleteWithToken, type Keys, unsubscribe } from './subscribers.ts';
+import { confirm, createDeletion, createPending, deleteWithToken, type Keys, previewPending, unsubscribe } from './subscribers.ts';
 import { confirmationEmail, deletionEmail } from './templates.ts';
 
 export interface ApiDeps {
@@ -47,6 +53,8 @@ export interface ApiDeps {
   lookups?: Lookups;
   /** The day's numbers; without it nothing is counted. */
   stats?: Stats;
+  /** Whether push can be turned on, and the VAPID key browsers subscribe with. */
+  push: PushConfig;
 }
 
 export const SUBSCRIBE_MESSAGE =
@@ -80,6 +88,8 @@ export function createApi(deps: ApiDeps) {
   const { kv, keys, mailer, log } = deps;
   const now = deps.now ?? Date.now;
   const app = new Hono();
+  /** Push for everyone (live), or only the owner's test addresses (owner). */
+  const pushAllowed = (email: string) => deps.push.mode === 'live' || (deps.push.mode === 'owner' && deps.push.ownerEmails.includes(email));
 
   let sitesCache: { at: number; sites: SiteSummary[] } | null = null;
   async function sites(): Promise<SiteSummary[] | null> {
@@ -154,8 +164,8 @@ export function createApi(deps: ApiDeps) {
       healthy: stored?.healthy ?? false,
       mailLive: mailer.mode === 'live',
       sites: stored?.sites ?? [],
-      push: 'off',
-      vapidPublicKey: null,
+      push: deps.push.mode,
+      vapidPublicKey: deps.push.vapid?.publicKey ?? null,
     });
   });
 
@@ -285,6 +295,10 @@ export function createApi(deps: ApiDeps) {
     if (!checked.ok) return fail(c, 400, 'Please fix the highlighted fields.', checked.errors);
 
     const request = checked.value;
+    const ch = request.channels;
+    if (ch?.pushOn && !pushAllowed(request.email)) {
+      return fail(c, 400, 'Please fix the highlighted fields.', { channels: 'Notifications are not available yet.' });
+    }
     const accepted = () => c.json<SubscribeResponse>({ message: SUBSCRIBE_MESSAGE }, 202);
     // Limits on what reaches an inbox are silent: the answer is the same either
     // way, so the form cannot be used to learn anything about an address.
@@ -320,16 +334,75 @@ export function createApi(deps: ApiDeps) {
     if (await limited(c, API_LIMITS.tokenPerIp)) return fail(c, 429, TOO_MANY);
     const parsed = await jsonBody(c);
     if (!parsed.ok) return parsed.res;
-    const token = (parsed.body as { token?: unknown } | null)?.token;
+    const body = parsed.body as { token?: unknown; acknowledge?: { emailOn?: unknown; pushOn?: unknown } } | null;
+    const token = body?.token;
     if (!isToken(token)) return fail(c, 400, 'That link is not valid. Copy the whole link from the email.');
-    const result = await confirm(kv, keys, token, now());
+    const a = body?.acknowledge;
+    const acknowledge = a && typeof a.emailOn === 'boolean' && typeof a.pushOn === 'boolean' ? { emailOn: a.emailOn, pushOn: a.pushOn } : undefined;
+    const result = await confirm(kv, keys, token, now(), acknowledge, { pushAllowed });
     if (result.status === 'invalid') return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
-    if (result.status === 'reload' || result.status === 'full' || result.status === 'push-unavailable') {
-      // Task 6 words these; a request with channels cannot reach this route from today's page yet.
+    if (result.status === 'reload') {
       return c.json<ApiError>({ error: 'This page is out of date. Reload it, then open the confirmation link from your email again.', code: 'reload' }, 409);
+    }
+    if (result.status === 'full') {
+      return c.json<ApiError>({ error: 'This alert already has notifications on 5 devices. Turn them off on one of them first.', code: 'full' }, 409);
+    }
+    if (result.status === 'push-unavailable') {
+      const why = {
+        owned: 'This device already gets alerts for another email address. Turn notifications off for that address on this device, then fill in the form again.',
+        revoked: 'Notifications were turned off on this device. Fill in the form again to turn them back on, or choose email.',
+        off: 'Notifications are not available right now. Fill in the form again with email on.',
+      }[result.reason];
+      return c.json<ApiError>({ error: why, code: 'push-unavailable' }, 409);
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
     return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: result.channels });
+  });
+
+  app.post('/api/confirm/preview', async (c) => {
+    if (await limited(c, API_LIMITS.tokenPerIp)) return fail(c, 429, TOO_MANY);
+    const parsed = await jsonBody(c);
+    if (!parsed.ok) return parsed.res;
+    const token = (parsed.body as { token?: unknown } | null)?.token;
+    if (!isToken(token)) return fail(c, 400, 'That link is not valid. Copy the whole link from the email.');
+    const preview = await previewPending(kv, token);
+    if (!preview) return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
+    return c.json<ConfirmPreview>(preview);
+  });
+
+  /**
+   * A device call: counted per network, and per credential unless it turns the device off
+   * (turning off must always work for the device's holder; it only removes).
+   */
+  async function deviceRequest(c: Context, opts: { perCredential: boolean } = { perCredential: true }): Promise<{ ok: true; credential: string; body: Record<string, unknown> } | { ok: false; res: Response }> {
+    if (await limited(c, API_LIMITS.devicePerIp)) return { ok: false, res: fail(c, 429, TOO_MANY) };
+    const parsed = await jsonBody(c);
+    if (!parsed.ok) return parsed;
+    const body = (parsed.body ?? {}) as Record<string, unknown>;
+    if (!isCredential(body.credential)) return { ok: false, res: fail(c, 400, 'That device answer is not valid.') };
+    if (opts.perCredential && !(await hit(kv, API_LIMITS.devicePerCredential, credentialHash(body.credential), now()))) return { ok: false, res: fail(c, 429, TOO_MANY) };
+    return { ok: true, credential: body.credential, body };
+  }
+
+  app.post('/api/push/device', async (c) => {
+    const r = await deviceRequest(c);
+    if (!r.ok) return r.res;
+    let subscription = null;
+    let revision: number | null = null;
+    if (r.body.subscription !== undefined) {
+      subscription = checkPushSubscription(r.body.subscription);
+      revision = typeof r.body.revision === 'number' && Number.isSafeInteger(r.body.revision) && r.body.revision >= 1 ? r.body.revision : null;
+      if (!subscription || revision === null) return fail(c, 400, 'That device answer is not valid.');
+    }
+    const state = await deviceCall(kv, keys, { credential: r.credential, subscription, revision, now: now() });
+    return c.json<{ state: DeviceState }>({ state });
+  });
+
+  app.delete('/api/push/device', async (c) => {
+    const r = await deviceRequest(c, { perCredential: false });
+    if (!r.ok) return r.res;
+    const { noChannel } = await turnOffDevice(kv, r.credential);
+    return c.json({ ok: true, noChannel });
   });
 
   app.post('/api/deletion-request', async (c) => {

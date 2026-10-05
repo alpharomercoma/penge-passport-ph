@@ -15,7 +15,7 @@ async function setup(opts: { sites?: boolean; mode?: 'live' | 'dry-run' } = {}) 
     await kv.set(K.sites, JSON.stringify(SITES.map(({ id, name }) => ({ id, name }))));
   }
   let ip = '203.0.113.7';
-  const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: BASE, clientIp: () => ip });
+  const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: BASE, clientIp: () => ip, push: { mode: 'off', vapid: null, ownerEmails: [] } });
   const post = (path: string, body: unknown, type = 'application/json') =>
     app.request(path, {
       method: 'POST',
@@ -272,7 +272,7 @@ describe('site under a path', () => {
     await kv.set(K.sites, JSON.stringify(SITES.map(({ id, name }) => ({ id, name }))));
     const mailer = new FakeMailer();
     const base = 'https://example.org/pengepassportph';
-    const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: base, clientIp: () => '203.0.113.9' });
+    const app = createApi({ kv, keys, mailer, log: silentLog, publicBaseUrl: base, clientIp: () => '203.0.113.9', push: { mode: 'off', vapid: null, ownerEmails: [] } });
     await app.request('/api/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'a@b.co', siteIds: [10] }) });
     expect(mailer.sent[0]!.text).toContain(`${base}/confirm#token=`);
     const links = unsubscribeLinks(base, 'abcdefghijklmnopqrstuv', keys);

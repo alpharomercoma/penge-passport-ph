@@ -65,7 +65,7 @@ async function setup() {
   const upstream = new FakeUpstream();
   const lookups = createLookups({ kv, upstream, log: silentLog, now: t.now });
   let ip = '203.0.113.5';
-  const app = createApi({ kv, keys, mailer: new FakeMailer(), log: silentLog, publicBaseUrl: 'https://x.example', now: t.now, lookups, clientIp: () => ip });
+  const app = createApi({ kv, keys, mailer: new FakeMailer(), log: silentLog, publicBaseUrl: 'https://x.example', now: t.now, lookups, clientIp: () => ip, push: { mode: 'off', vapid: null, ownerEmails: [] } });
   const get = async (path: string, userAgent?: string) => {
     const res = await app.request(path, { headers: userAgent ? { 'user-agent': userAgent } : {} });
     return { status: res.status, body: (await res.json()) as Record<string, unknown> };

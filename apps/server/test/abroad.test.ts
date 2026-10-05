@@ -444,7 +444,7 @@ describe('posts abroad through the API', () => {
       warmSession: async () => false,
     };
     const lookups = createLookups({ kv: w.kv, upstream: lookupUpstream, log: silentLog, now: w.t.now });
-    const app = createApi({ kv: w.kv, keys, mailer: w.mailer, log: silentLog, publicBaseUrl: 'https://penge.example', clientIp: () => '203.0.113.7', lookups, now: w.t.now });
+    const app = createApi({ kv: w.kv, keys, mailer: w.mailer, log: silentLog, publicBaseUrl: 'https://penge.example', clientIp: () => '203.0.113.7', lookups, now: w.t.now, push: { mode: 'off', vapid: null, ownerEmails: [] } });
     return { ...w, app };
   }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { K } from '../src/keys.ts';
 import { connectRedis, type Kv, MemoryKv, type WriteOp } from '../src/kv.ts';
+import { findDevice } from '../src/push/register.ts';
 import { MAX_DEVICES, parseMeta, PROVISIONAL_TTL_SECONDS, pushBind, pushRegister, pushRemove, revokeCredential } from '../src/push/atomic.ts';
 
 const ttl = (kv: Kv, key: string) =>
@@ -119,6 +120,17 @@ for (const [name, make] of targets) {
       await subscriber(kv, 'A', 'B');
       await kv.write([{ op: 'set', key: K.pushCred('c1'), value: 'A/' }, { op: 'hSet', key: K.pushMeta('A'), fields: { '': 'a|0|c1||' } }]);
       expect(await bind(kv, 'B', 'd1', 'c1')).toBe('bound');
+    });
+
+    it('clears a credential entry naming no device at all, on both stores', async () => {
+      const kv = await make();
+      // Even when the store holds a field that would match the empty device part.
+      await kv.write([{ op: 'hSet', key: K.pushMeta('A'), fields: { '': 'a|0|c1||' } }, { op: 'hSet', key: K.pushMeta(''), fields: { d1: 'a|0|c1||' } }]);
+      for (const owner of ['A/', '/d1', 'nodevice']) {
+        await kv.set(K.pushCred('c1'), owner);
+        expect(await findDevice(kv, 'c1')).toBeNull();
+        expect(await kv.get(K.pushCred('c1'))).toBeNull();
+      }
     });
 
     it('refuses a sixth device', async () => {

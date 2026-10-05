@@ -23,6 +23,13 @@ export const API_LIMITS = {
   readPerIp: { bucket: 'read-ip', max: 600, windowSeconds: 3600 },
   /** Office details (group dates, hours) from one network address. */
   lookupPerIp: { bucket: 'lookup-ip', max: 120, windowSeconds: 3600 },
+  /** Push device calls (state, register, turn off) from one network address: a household's few devices, each polling. */
+  devicePerIp: { bucket: 'push-ip', max: 600, windowSeconds: 3600 },
+  /**
+   * The same, for one device credential, from anywhere. Sized for the waiting views: the sheet
+   * and the row each ask every 30 s (240 an hour together), with room for retries.
+   */
+  devicePerCredential: { bucket: 'push-cred', max: 300, windowSeconds: 3600 },
 } satisfies Record<string, Limit>;
 
 /**

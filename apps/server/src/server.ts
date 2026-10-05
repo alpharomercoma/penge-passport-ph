@@ -30,6 +30,7 @@ const app = createApi({
   log,
   publicBaseUrl: config.publicBaseUrl ?? `http://localhost:${config.api.port}`,
   stats: createStats(kv, log),
+  push: config.push,
 });
 
 const server = serve({ fetch: app.fetch, hostname: config.api.host, port: config.api.port }, (info) =>
