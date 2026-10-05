@@ -12,14 +12,16 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@penge/contracts": "*",
+    "@redis/client": "^6.2.1",
     "aws4fetch": "^1.0.20",
     "hono": "^4.13.9",
     "nodemailer": "^10.0.10",
     "penge-passport-ph": "*",
-    "@redis/client": "^6.2.1"
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/nodemailer": "^8.0.2",
+    "@types/web-push": "^3.6.4",
     "esbuild": "^0.28.2"
   }
 }

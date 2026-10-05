@@ -30,6 +30,8 @@ export const API_LIMITS = {
    * and the row each ask every 30 s (240 an hour together), with room for retries.
    */
   devicePerCredential: { bucket: 'push-cred', max: 300, windowSeconds: 3600 },
+  /** Test notifications to one device. */
+  testPerDevice: { bucket: 'push-test', max: 3, windowSeconds: 3600 },
 } satisfies Record<string, Limit>;
 
 /**

@@ -35,9 +35,11 @@ import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
 import { checkPushSubscription } from './push/endpoint.ts';
-import { credentialHash, deviceCall, turnOffDevice } from './push/register.ts';
+import { parseMeta } from './push/atomic.ts';
+import { credentialHash, deviceCall, findDevice, turnOffDevice } from './push/register.ts';
+import { PUSH_TIMEOUT_MS, PushPool, type PushTransport, pushDecision } from './push/sender.ts';
 import { type Count, isPerson, type Stats } from './stats.ts';
-import { confirm, createDeletion, createPending, deleteWithToken, type Keys, previewPending, unsubscribe } from './subscribers.ts';
+import { confirm, createDeletion, createPending, deleteWithToken, type Keys, load, previewPending, unsubscribe } from './subscribers.ts';
 import { confirmationEmail, deletionEmail } from './templates.ts';
 
 export interface ApiDeps {
@@ -55,6 +57,8 @@ export interface ApiDeps {
   stats?: Stats;
   /** Whether push can be turned on, and the VAPID key browsers subscribe with. */
   push: PushConfig;
+  /** Sends pushes; without it test notifications answer 404. */
+  pushTransport?: PushTransport;
 }
 
 export const SUBSCRIBE_MESSAGE =
@@ -403,6 +407,25 @@ export function createApi(deps: ApiDeps) {
     if (!r.ok) return r.res;
     const { noChannel } = await turnOffDevice(kv, r.credential);
     return c.json({ ok: true, noChannel });
+  });
+
+  app.post('/api/push/test', async (c) => {
+    const r = await deviceRequest(c);
+    if (!r.ok) return r.res;
+    const hash = credentialHash(r.credential);
+    const found = await findDevice(kv, hash);
+    const subscriber = found ? await load(kv, found.subscriberId) : null;
+    const meta = found ? (await kv.hGetAll(K.pushMeta(found.subscriberId)))[found.deviceId] : undefined;
+    if (!found || !subscriber || !meta || parseMeta(meta).state !== 'r' || !deps.pushTransport) {
+      return fail(c, 404, 'Notifications are not on for this device yet.');
+    }
+    if (await kv.get(K.pushPaused)) return fail(c, 503, 'Notifications are paused for maintenance. Try again later.');
+    if (!(await hit(kv, API_LIMITS.testPerDevice, hash, now()))) return fail(c, 429, 'You can send 3 test notifications an hour. Try again later.');
+    const pool = new PushPool({ transport: deps.pushTransport, inFlight: 1, budgetMs: PUSH_TIMEOUT_MS * 2, timeoutMs: PUSH_TIMEOUT_MS, now });
+    const payload = JSON.stringify({ v: 1, title: 'Test notification', body: 'Notifications work on this device.', tag: 'test', url: {} });
+    const { any } = await pushDecision({ kv, keys, pool, log, now }, { subscriberId: found.subscriberId, index: subscriber.index, payload, onlyDeviceId: found.deviceId });
+    if (any === 'none') return fail(c, 404, 'That test did not reach this device. Turn notifications off and on again.');
+    return c.json({ ok: true });
   });
 
   app.post('/api/deletion-request', async (c) => {

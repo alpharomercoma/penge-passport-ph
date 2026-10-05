@@ -4,6 +4,7 @@ import { createApi } from '../src/api.ts';
 import type { PushConfig } from '../src/config.ts';
 import { K } from '../src/keys.ts';
 import { MemoryKv } from '../src/kv.ts';
+import type { PushTransport } from '../src/push/sender.ts';
 import { silentLog } from '../src/log.ts';
 import { emailIndex } from '../src/crypto.ts';
 import { clock, FakeMailer, fcmSubscription, keys, PUSH_KEYS, SITES } from './helpers.ts';
@@ -13,7 +14,7 @@ const VAPID = { publicKey: 'B'.repeat(87), privateKey: 'p'.repeat(43), subject: 
 const LIVE: PushConfig = { mode: 'live', vapid: VAPID, ownerEmails: [] };
 type Ch = { emailOn: boolean; pushOn: boolean; pushCredentialHash?: string; device?: string };
 
-export async function site(push: PushConfig = LIVE, pushTransport?: unknown) {
+export async function site(push: PushConfig = LIVE, pushTransport?: PushTransport) {
   const t = clock();
   const kv = new MemoryKv(t.now);
   await kv.set(K.sites, JSON.stringify(SITES.map((s) => ({ id: s.id, name: s.name }))));
@@ -247,4 +248,24 @@ describe('turning off while a confirmation finishes', () => {
     expect(await hGetAll(K.pushMeta(ids[0]!))).toEqual({});
     expect((await hGetAll(K.subscriber(ids[0]!))).pushOn).toBe('0');
   });
+});
+
+it('sends a test notification to the requesting device only, three an hour', async () => {
+  const sent: string[] = [];
+  const transport = { async send(s: { endpoint: string }) { sent.push(s.endpoint); } };
+  const s = await site(undefined, transport);
+  const a = s.credential();
+  const b = s.credential();
+  await (await s.signUp('juan@example.com', { emailOn: true, pushOn: true, pushCredentialHash: a.hash, device: 'Chrome on Android' })).confirm();
+  await (await s.signUp('juan@example.com', { emailOn: true, pushOn: true, pushCredentialHash: b.hash, device: 'Firefox on Mac' })).confirm();
+  expect((await s.post('/api/push/test', { credential: a.credential })).status).toBe(404); // not registered yet
+  await s.post('/api/push/device', { credential: a.credential, subscription: fcmSubscription('phone'), revision: 1 });
+  await s.post('/api/push/device', { credential: b.credential, subscription: fcmSubscription('mac'), revision: 1 });
+  for (let i = 0; i < 3; i++) expect((await s.post('/api/push/test', { credential: a.credential })).status).toBe(200);
+  expect((await s.post('/api/push/test', { credential: a.credential })).status).toBe(429);
+  expect(sent).toEqual(Array(3).fill('https://fcm.googleapis.com/fcm/send/phone'));
+  await s.kv.set(K.pushPaused, '1');
+  s.setIp('203.0.113.9');
+  expect((await s.post('/api/push/test', { credential: b.credential })).status).toBe(503);
+  expect(sent).toHaveLength(3);
 });

@@ -8,6 +8,7 @@ import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
 import { createLookups } from './lookups.ts';
 import { createMailer } from './mailer.ts';
+import { webPushTransport } from './push/sender.ts';
 import { createStats } from './stats.ts';
 
 const config = loadConfig();
@@ -31,6 +32,7 @@ const app = createApi({
   publicBaseUrl: config.publicBaseUrl ?? `http://localhost:${config.api.port}`,
   stats: createStats(kv, log),
   push: config.push,
+  ...(config.push.vapid ? { pushTransport: webPushTransport(config.push.vapid) } : {}),
 });
 
 const server = serve({ fetch: app.fetch, hostname: config.api.host, port: config.api.port }, (info) =>
