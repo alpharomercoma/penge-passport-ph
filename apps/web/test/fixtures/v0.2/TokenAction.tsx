@@ -1,6 +1,8 @@
+// @ts-nocheck
+// From 157bad9 (the release before push).
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { errorText } from '../api.ts';
-import { tokenFromHash } from '../time.ts';
+import { errorText } from '../../../src/api.ts';
+import { tokenFromHash } from '../../../src/time.ts';
 
 interface Props {
   token?: string;
@@ -8,10 +10,7 @@ interface Props {
   intro: ReactNode;
   button: string;
   isValid: (token: string) => boolean;
-  /** Runs on opening (changing nothing): its intro replaces `intro`, and the button waits for it. */
-  prepare?: (token: string) => Promise<{ intro: ReactNode; data: unknown }>;
-  /** `data`: what `prepare` returned. */
-  act: (token: string, data?: unknown) => Promise<ReactNode>;
+  act: (token: string) => Promise<ReactNode>;
 }
 
 /**
@@ -39,27 +38,10 @@ export function TokenAction(props: Props) {
   return <TokenActionBody key={`${revision}:${token ?? ''}`} {...props} token={token} />;
 }
 
-function TokenActionBody({ token, title, intro, button, isValid, prepare, act }: Omit<Props, 'token'> & { token: string | null }) {
+function TokenActionBody({ token, title, intro, button, isValid, act }: Omit<Props, 'token'> & { token: string | null }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
-  const [prepared, setPrepared] = useState<{ intro: ReactNode; data: unknown } | null>(null);
-  // Bumped by "Try again" after a failed preview: the token read from the link is kept.
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    if (!prepare || !token || !isValid(token)) return;
-    let live = true;
-    prepare(token).then(
-      (p) => live && setPrepared(p),
-      (err) => live && setError(errorText(err)),
-    );
-    return () => {
-      live = false;
-    };
-  }, [token, attempt]);
-  const waiting = !!prepare && !prepared;
-  const previewFailed = waiting && !!error;
-
   const panel = useRef<HTMLElement>(null);
 
   // Keep the token out of the address bar and history once it has been read.
@@ -86,7 +68,7 @@ function TokenActionBody({ token, title, intro, button, isValid, prepare, act }:
     setBusy(true);
     setError(null);
     try {
-      setResult(await act(token!, prepared?.data));
+      setResult(await act(token!));
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -99,24 +81,11 @@ function TokenActionBody({ token, title, intro, button, isValid, prepare, act }:
       {result ?? (
         <>
           <h1>{title}</h1>
-          {prepared?.intro ?? intro}
+          {intro}
           {error && <p className="error">{error}</p>}
-          {previewFailed ? (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setError(null);
-                setAttempt((n) => n + 1);
-              }}
-            >
-              Try again
-            </button>
-          ) : (
-            <button type="button" className="btn btn-primary" onClick={go} aria-busy={busy} disabled={busy || waiting}>
-              {waiting ? 'Loading…' : busy ? 'Working…' : button}
-            </button>
-          )}
+          <button type="button" className="btn btn-primary" onClick={go} aria-busy={busy} disabled={busy}>
+            {busy ? 'Working…' : button}
+          </button>
         </>
       )}
     </section>

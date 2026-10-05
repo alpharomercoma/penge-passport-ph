@@ -1,6 +1,7 @@
 import { isStatusResponse, type StatusResponse } from '@penge/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import fc from 'fast-check';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiFailure, api } from '../src/api.ts';
 import { App } from '../src/App.tsx';
@@ -431,9 +432,9 @@ describe('confirm and unsubscribe pages', () => {
     render(<App path="/confirm" api={fake} />);
     expect(window.location.hash).toBe('');
     expect(fake.confirm).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm email alert' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
     expect(await screen.findByText('We will email you when a date opens at 1 office, for one person, at most once an hour.')).toBeTruthy();
-    expect(fake.confirm).toHaveBeenCalledWith(token);
+    expect(fake.confirm).toHaveBeenCalledWith(token, undefined);
   });
 
   it('explains an expired link', async () => {
@@ -444,7 +445,7 @@ describe('confirm and unsubscribe pages', () => {
       },
     });
     render(<App path="/confirm" api={fake} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm email alert' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
     expect(await screen.findByText(/expired or was already used/)).toBeTruthy();
   });
 
@@ -561,4 +562,347 @@ describe('base path', () => {
     const { routeOf } = await import('../src/links.ts');
     expect(routeOf(path, base)).toBe(route);
   });
+});
+
+const sharedMock = vi.hoisted(() => ({ reconcile: vi.fn(), turnOff: vi.fn(), readState: vi.fn(), credentialHash: vi.fn(async () => 'h'.repeat(43)) }));
+vi.mock('../src/notify/shared.js', () => sharedMock);
+vi.mock('../src/notify/worker.ts', () => ({ registration: async () => ({ pushManager: { getSubscription: async () => null } }), readyWorker: async () => null, register: () => {}, workerFailed: () => false }));
+vi.mock('../src/notify/push.ts', () => ({ pushEnv: () => ({}), postToApi: vi.fn(), enablePush: vi.fn(), PUSH_CHANGED: 'pengepassportph-push-changed' }));
+
+const NO_CREDENTIAL = { credential: null, confirmed: false, askedAt: null, revision: 0, fingerprint: null, applicationServerKey: null };
+beforeEach(() => {
+  for (const f of Object.values(sharedMock)) f.mockReset();
+  sharedMock.credentialHash.mockResolvedValue('h'.repeat(43));
+  sharedMock.readState.mockResolvedValue(NO_CREDENTIAL);
+});
+const CONFIRMED = { credential: 'c'.repeat(43), confirmed: true, askedAt: 0, revision: 1, fingerprint: 'f', applicationServerKey: 'B'.repeat(87) };
+const LIVE = { ...STATUS, push: 'live' as const, vapidPublicKey: 'B'.repeat(87) };
+
+describe('confirming with channels', () => {
+  const token = 't'.repeat(43);
+  const preview = { siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, device: 'Chrome on Android', requestedAt: '2026-10-05T02:02:00.000Z', pushCredentialHash: 'h'.repeat(43), devicesKept: 0 } };
+  beforeEach(() => sharedMock.readState.mockResolvedValue(NO_CREDENTIAL));
+
+  it('shows the channels before the confirm button and sends the acknowledgement', async () => {
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({ previewConfirm: vi.fn(async () => preview) });
+    render(<App path="/confirm" api={api} />);
+    expect(await screen.findByText(/Email: off/)).toBeTruthy();
+    expect(screen.getByText(/Notifications: on, for the device and browser that asked \(Chrome on Android/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm alert' }));
+    await waitFor(() => expect(api.confirm).toHaveBeenCalledWith(token, { emailOn: false, pushOn: true }));
+  });
+
+  it('keeps the button off until the preview has loaded', async () => {
+    visit(`/confirm#token=${token}`);
+    render(<App path="/confirm" api={fakeApi({ previewConfirm: vi.fn(() => new Promise<never>(() => {})) })} />);
+    expect((await screen.findByRole('button', { name: /Confirm alert|Loading/ })).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows the out-of-date message on 409 reload', async () => {
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => { throw new ApiFailure('This page is out of date. Reload it, then open the confirmation link from your email again.', 409); }),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText(/open the confirmation link from your email again/)).toBeTruthy();
+  });
+
+  it('registers this device right after confirming in the browser that asked', async () => {
+    sharedMock.readState.mockResolvedValue({ ...NO_CREDENTIAL, credential: 'c'.repeat(43), askedAt: Date.now() });
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, push: 'bound' as const } })),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText(/Notifications are on for this device/)).toBeTruthy();
+    expect(sharedMock.reconcile).toHaveBeenCalled();
+  });
+
+  it('does not say notifications are on without permission or a browser subscription', async () => {
+    sharedMock.readState.mockResolvedValue({ ...NO_CREDENTIAL, credential: 'c'.repeat(43), askedAt: Date.now() });
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: false });
+    vi.stubGlobal('Notification', { permission: 'default' });
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, push: 'kept' as const } })),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    // Permission is back to "ask": waiting will not finish it, allowing it will.
+    expect(await screen.findByText(/Notifications are not allowed on this device yet/)).toBeTruthy();
+    expect(screen.queryByText('Notifications are on for this device.')).toBeNull();
+  });
+
+  it('keeps the confirmation when registering this browser fails', async () => {
+    sharedMock.readState.mockResolvedValue({ ...NO_CREDENTIAL, credential: 'c'.repeat(43), askedAt: Date.now() });
+    sharedMock.reconcile.mockRejectedValue(new Error('network'));
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, push: 'bound' as const } })),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText('You are subscribed')).toBeTruthy();
+    expect(screen.getByText(/could not be set up on this device yet/)).toBeTruthy();
+  });
+
+  it('does not register a different local credential, and says where notifications are on', async () => {
+    sharedMock.readState.mockResolvedValue({ ...NO_CREDENTIAL, credential: 'x'.repeat(43), askedAt: Date.now() });
+    sharedMock.credentialHash.mockResolvedValueOnce('z'.repeat(43));
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, push: 'bound' as const } })),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText(/Notifications are on for the device where you asked for them/)).toBeTruthy();
+    expect(sharedMock.reconcile).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirming, when things go wrong', () => {
+  const token = 't'.repeat(43);
+  const preview = { siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, device: 'Chrome on Android', requestedAt: '2026-10-05T02:02:00.000Z', pushCredentialHash: 'h'.repeat(43), devicesKept: 0 } };
+
+  it('offers to load the preview again after it failed, with the same link', async () => {
+    visit(`/confirm#token=${token}`);
+    const previewConfirm = vi.fn().mockRejectedValueOnce(new ApiFailure('We could not reach the server. Check your connection and try again.', 0)).mockResolvedValueOnce(preview);
+    render(<App path="/confirm" api={fakeApi({ previewConfirm })} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Confirm alert' })).toBeTruthy();
+    expect(previewConfirm).toHaveBeenLastCalledWith(token);
+  });
+
+  it('says to allow notifications when permission went back to "ask"', async () => {
+    sharedMock.readState.mockResolvedValue({ ...NO_CREDENTIAL, credential: 'c'.repeat(43), askedAt: Date.now() });
+    sharedMock.reconcile.mockResolvedValue({ state: 'awaiting', subscribed: false });
+    vi.stubGlobal('Notification', { permission: 'default' });
+    visit(`/confirm#token=${token}`);
+    const api = fakeApi({
+      previewConfirm: vi.fn(async () => preview),
+      confirm: vi.fn(async () => ({ status: 'confirmed' as const, siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, push: 'bound' as const } })),
+    });
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText(/Notifications are not allowed on this device yet/)).toBeTruthy();
+  });
+});
+
+describe('an old confirmation page left open across the deploy', () => {
+  it('shows the server message on its token-only confirm, then the new page confirms the reopened link', async () => {
+    const token = 't'.repeat(43);
+    const preview = { siteIds: [486], applicants: 1, pace: 'asap' as const, channels: { emailOn: false, pushOn: true, device: 'Chrome on Android', requestedAt: '2026-10-05T02:02:00.000Z', pushCredentialHash: 'h'.repeat(43), devicesKept: 0 } };
+    // A stand-in for the server: the old page posts { token } only and gets 409 reload, as Task 6 tests on the real server.
+    const server = vi.fn(async (url: string, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? '{}') as { acknowledge?: unknown };
+      if (url.endsWith('/api/confirm/preview')) return new Response(JSON.stringify(preview), { status: 200 });
+      if (!body.acknowledge) return new Response(JSON.stringify({ error: 'This page is out of date. Reload it, then open the confirmation link from your email again.', code: 'reload' }), { status: 409 });
+      return new Response(JSON.stringify({ status: 'confirmed', siteIds: [486], applicants: 1, pace: 'asap', channels: { emailOn: false, pushOn: true, push: 'bound' } }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', server);
+    visit(`/confirm#token=${token}`);
+    const { Confirm: OldConfirm } = await import('./fixtures/v0.2/Confirm.tsx');
+    const old = render(<OldConfirm api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm email alert' }));
+    expect(await screen.findByText(/open the confirmation link from your email again/)).toBeTruthy();
+    old.unmount();
+    // The person reopens the link from the email: the new page.
+    visit(`/confirm#token=${token}`);
+    render(<App path="/confirm" api={api} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm alert' }));
+    expect(await screen.findByText('You are subscribed')).toBeTruthy();
+  });
+});
+
+describe('the notifications row', () => {
+  beforeEach(() => visit('/'));
+
+  it.each([
+    [{ state: 'registered' }, 'granted', /Notifications on this device: On/],
+    [{ state: 'pending' }, 'granted', /Waiting for you to confirm by email/],
+    [{ state: 'registered' }, 'denied', /Notifications are blocked on this device/],
+    [{ state: 'missing' }, 'granted', /Notifications are off for this device/],
+  ])('shows %o with permission %s', async (answer, permission, text) => {
+    vi.stubGlobal('Notification', { permission });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ ...answer, subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+
+  it('turns the device off from the row, and warns when nothing is left', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    sharedMock.turnOff.mockResolvedValue({ ok: true, noChannel: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }));
+    expect(await screen.findByText(/You will get no alerts now/)).toBeTruthy();
+    expect(screen.queryByText(/Notifications on this device: On/)).toBeNull();
+  });
+
+  it('still offers Turn off while push is switched off on the server', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => ({ ...LIVE, push: 'off' as const, vapidPublicKey: null }) })} />);
+    expect(await screen.findByRole('button', { name: 'Turn off' })).toBeTruthy();
+  });
+
+  it('shows blocked, with Turn off, for an awaiting device whose permission was revoked', async () => {
+    vi.stubGlobal('Notification', { permission: 'denied' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'awaiting', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/Notifications are blocked on this device/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
+  });
+
+  it('shows blocked after permission is revoked in settings and the page comes back', async () => {
+    const perm = { permission: 'granted' as NotificationPermission };
+    vi.stubGlobal('Notification', perm);
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/Notifications on this device: On/)).toBeTruthy();
+    perm.permission = 'denied'; // turned off in Android settings, away from the page
+    act(() => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(await screen.findByText(/Notifications are blocked on this device/)).toBeTruthy();
+  });
+
+  it('takes the sheet\'s answer without asking the server again', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'pending', subscribed: false });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/Waiting for you to confirm by email/)).toBeTruthy();
+    const calls = sharedMock.reconcile.mock.calls.length;
+    act(() => void window.dispatchEvent(new CustomEvent('pengepassportph-push-changed', { detail: { state: 'registered', subscribed: true } })));
+    expect(await screen.findByText(/Notifications on this device: On/)).toBeTruthy();
+    expect(sharedMock.reconcile.mock.calls.length).toBe(calls);
+  });
+
+  it('appears when push is turned on later, without reloading the page', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(NO_CREDENTIAL);
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    await screen.findByText(/DFA offices in the Philippines/);
+    expect(screen.queryByText(/Waiting for you to confirm/)).toBeNull();
+    sharedMock.readState.mockResolvedValue({ ...CONFIRMED, confirmed: false });
+    sharedMock.reconcile.mockResolvedValue({ state: 'pending', subscribed: false });
+    act(() => void window.dispatchEvent(new Event('pengepassportph-push-changed')));
+    expect(await screen.findByText(/Waiting for you to confirm by email/)).toBeTruthy();
+  });
+
+  it('does not say On without permission or a browser subscription', async () => {
+    vi.stubGlobal('Notification', { permission: 'default' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: false });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/not allowed on this device yet/)).toBeTruthy();
+    expect(screen.queryByText(/: On/)).toBeNull();
+  });
+
+  it('does not call an unresolved device On', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'stale', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/need setting up again/)).toBeTruthy();
+    expect(screen.queryByText(/: On/)).toBeNull();
+  });
+
+  it('still checks this device when the app opens straight on an office', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    visit('/?office=486&date=2026-10-09&people=2');
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByRole('heading', { name: 'Antipolo' })).toBeTruthy();
+    await waitFor(() => expect(sharedMock.reconcile).toHaveBeenCalled());
+  });
+
+  it('says when turning off failed, and lets it be tried again', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    sharedMock.turnOff.mockRejectedValueOnce(new ApiFailure('We could not reach the server. Check your connection and try again.', 0));
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }));
+    expect(await screen.findByText(/could not reach the server/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
+  });
+
+  it('asks the server once per wait, even in StrictMode', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'pending', subscribed: false });
+    render(<StrictMode><App path="/" api={fakeApi({ status: async () => LIVE })} /></StrictMode>);
+    expect(await screen.findByText(/Waiting for you to confirm by email/)).toBeTruthy();
+    const before = sharedMock.reconcile.mock.calls.length;
+    await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+    expect(sharedMock.reconcile.mock.calls.length - before).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('leaves no permission listener behind once gone', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    const status = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    vi.stubGlobal('navigator', { ...navigator, permissions: { query: () => new Promise((r) => setTimeout(() => r(status), 20)) } });
+    const view = render(<StrictMode><App path="/" api={fakeApi({ status: async () => LIVE })} /></StrictMode>);
+    expect(await screen.findByText(/Notifications on this device: On/)).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    view.unmount();
+    expect(status.addEventListener.mock.calls.length).toBe(status.removeEventListener.mock.calls.length);
+  });
+
+  it('notices when another tab turned this device off', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'registered', subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/Notifications on this device: On/)).toBeTruthy();
+    sharedMock.readState.mockResolvedValue(NO_CREDENTIAL);
+    act(() => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(await screen.findByText(/Notifications are off for this device/)).toBeTruthy();
+  });
+
+  it('says to allow notifications for a confirmed device whose permission went back to "ask"', async () => {
+    vi.stubGlobal('Notification', { permission: 'default' });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ state: 'awaiting', subscribed: false });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    expect(await screen.findByText(/not allowed on this device yet/)).toBeTruthy();
+    expect(screen.queryByText(/Waiting for you to confirm/)).toBeNull();
+  });
+
+  it('shows nothing when this browser never turned push on', async () => {
+    sharedMock.readState.mockResolvedValue(NO_CREDENTIAL);
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    await screen.findByText(/DFA offices in the Philippines/);
+    expect(screen.queryByText(/Notifications/)).toBeNull();
+  });
+});
+
+it('opens an office for a group from ?people=', async () => {
+  visit('/?office=486&date=2026-10-09&people=2');
+  const api = fakeApi();
+  render(<App path="/" api={api} />);
+  expect(await screen.findByRole('heading', { name: 'Antipolo' })).toBeTruthy();
+  await waitFor(() => expect(api.officeDates).toHaveBeenCalledWith(486, 2));
+  expect((screen.getByLabelText('Booking for') as HTMLSelectElement).value).toBe('2');
 });

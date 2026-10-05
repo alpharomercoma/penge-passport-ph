@@ -6,6 +6,7 @@ import { AlertSheet } from '../components/AlertSheet.tsx';
 import { AllOffices } from '../components/AllOffices.tsx';
 import { BellIcon } from '../components/Icons.tsx';
 import { OfficeView } from '../components/OfficeView.tsx';
+import { DeviceRow } from '../components/DeviceRow.tsx';
 import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
 import { ago } from '../time.ts';
@@ -52,7 +53,7 @@ export function Home({ api }: { api: Api }) {
   const [abroad, setAbroad] = useState<AbroadResponse | null>(null);
   const [abroadError, setAbroadError] = useState<string | null>(null);
   // Kept while moving between offices: a group checks every office for the whole group.
-  const [applicants, setApplicants] = useState(1);
+  const [applicants, setApplicants] = useState(() => readPeople() ?? 1);
 
   useEffect(() => {
     let live = true;
@@ -210,6 +211,8 @@ export function Home({ api }: { api: Api }) {
           {import.meta.env.VITE_LOCAL_DEBUG === '1' && <p className="debug-context">context: {detectContext()}</p>}
         </div>
       )}
+      {/* Mounted whatever is open, so opening the app on an office (a notification's link) still checks this device. */}
+      {status && <DeviceRow api={api} status={status} hidden={!!office} />}
       {scope === 'home' && status && !status.healthy && status.checkedAt && (
         <p className="warning" role="status">
           The latest check ran into problems, so these dates may be out of date. Alerts wait until checks pass again.
@@ -267,4 +270,10 @@ export function Home({ api }: { api: Api }) {
       )}
     </>
   );
+}
+
+/** ?people=2 from a notification's link: the group size to open the office with. */
+function readPeople(): number | null {
+  const n = Number(new URLSearchParams(window.location.search).get('people'));
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
 }

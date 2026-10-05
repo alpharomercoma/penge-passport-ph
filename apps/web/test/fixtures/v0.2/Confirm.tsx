@@ -1,0 +1,39 @@
+// @ts-nocheck
+// From 157bad9 (the release before push).
+import { isToken } from '@penge/contracts';
+import type { Api } from '../../../src/api.ts';
+import { CheckIcon } from '../../../src/components/Icons.tsx';
+import { TokenAction } from './TokenAction.tsx';
+import { BASE } from '../../../src/links.ts';
+import { plural } from '../../../src/office.ts';
+
+export function Confirm({ api }: { api: Api }) {
+  return (
+    <TokenAction
+      title="Confirm your email alert"
+      intro={<p>Press the button to start getting an email when a date opens at the offices you picked.</p>}
+      button="Confirm email alert"
+      isValid={isToken}
+      act={async (token) => {
+        const r = await api.confirm(token);
+        return (
+          <>
+            <CheckIcon />
+            <h1>{r.status === 'updated' ? 'Your alert is updated' : 'You are subscribed'}</h1>
+            <p>
+              We will email you when a date opens at {plural(r.siteIds.length, 'office')}, for{' '}
+              {r.applicants === 1 ? 'one person' : `${r.applicants} people`},{' '}
+              {r.pace === 'asap' ? 'as soon as a check finds dates' : 'at most once an hour'}.
+            </p>
+            <p>
+              <a className="btn btn-secondary" href={BASE}>
+                See open dates now
+              </a>
+            </p>
+            <p><a href={`${BASE}delete-data`}>Stop alerts and delete your data</a></p>
+          </>
+        );
+      }}
+    />
+  );
+}
