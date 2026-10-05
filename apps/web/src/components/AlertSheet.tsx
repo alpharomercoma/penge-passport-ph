@@ -409,8 +409,8 @@ export function AlertSheet({ api, status, offices, selected, initialApplicants =
               </select>
               <p className="hint">
                 {pace === 'hourly'
-                  ? 'One email with everything new since the last one, at most once an hour.'
-                  : 'One email from each check that finds dates; checks run every 5 minutes.'}{' '}
+                  ? `One ${emailOn ? 'email' : 'notification'} with everything new since the last one, at most once an hour.`
+                  : `One ${emailOn ? 'email' : 'notification'} from each check that finds dates; checks run every 5 minutes.`}{' '}
                 Dates that closed in the meantime are left out.
               </p>
               {errors.pace && <p className="error">{errors.pace}</p>}

@@ -417,6 +417,18 @@ describe('channels in the alert form', () => {
     expect(api.subscribe.mock.calls[0]![0].channels).toEqual({ emailOn: true, pushOn: false, pushCredentialHash: null, device: null });
   });
 
+  it('speaks of notifications, not emails, in the pace hint when email is off', async () => {
+    pushMock.enable.mockResolvedValueOnce({ ok: true, credentialHash: 'h'.repeat(43) });
+    const s = openWith();
+    expect(within(s.sheet).getByText(/One email with everything new/)).toBeTruthy();
+    await waitFor(() => expect(s.pushSwitch()).not.toBeNull());
+    fireEvent.click(s.pushSwitch()!);
+    await waitFor(() => expect(s.pushSwitch()!.getAttribute('aria-checked')).toBe('true'));
+    fireEvent.click(s.emailSwitch);
+    expect(within(s.sheet).getByText(/One notification with everything new since the last one/)).toBeTruthy();
+    expect(within(s.sheet).queryByText(/One email/)).toBeNull();
+  });
+
   it('shows no switch when the server has push off', () => {
     const s = openWith({ ...STATUS, push: 'off', vapidPublicKey: null });
     expect(s.pushSwitch()).toBeNull();
