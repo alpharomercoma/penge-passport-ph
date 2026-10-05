@@ -699,7 +699,7 @@ describe('outbox integrity and backups', () => {
     expect(JSON.stringify(backup)).not.toContain('ana@example.com');
 
     const fresh = new MemoryKv();
-    expect(await importSubscribers(fresh, backup)).toBe(1);
+    expect(await importSubscribers(fresh, backup)).toEqual({ restored: 1, skipped: [] });
     const again = await exportSubscribers(fresh, [486, 693], 0);
     expect(again.subscribers).toEqual(backup.subscribers);
     expect(await fresh.sMembers(K.siteSubscribers(693))).toEqual([id]);
@@ -721,9 +721,9 @@ describe('outbox integrity and backups', () => {
   it('restores how a subscriber is told, but never push: devices are not in a backup', async () => {
     const fresh = new MemoryKv();
     const fields = { email: 'v1.x', index: 'idx', sites: '486', applicants: '1', pace: 'asap', emailOn: '0', pushOn: '1', createdAt: '', confirmedAt: '' };
-    await importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields }] });
+    await importSubscribers(fresh, { version: 2, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields }] });
     expect(await fresh.hGetAll(K.subscriber('abcdefghijklmnop'))).toMatchObject({ emailOn: '0', pushOn: '0' });
-    await expect(importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields: { ...fields, emailOn: 'yes' } }] })).rejects.toThrow();
+    await expect(importSubscribers(fresh, { version: 2, exportedAt: '', subscribers: [{ id: 'abcdefghijklmnop', fields: { ...fields, emailOn: 'yes' } }] })).rejects.toThrow();
   });
 });
 

@@ -2,6 +2,8 @@
 //
 //   node admin.mjs backup > subscribers.json          every subscriber, still encrypted
 //   node admin.mjs restore subscribers.json[.gz] --yes
+//   node admin.mjs backup-to-v1 subscribers.json[.gz] > v1.json   for the release before push
+//   node admin.mjs push-downgrade --yes                         before running that release
 //   node admin.mjs scans 2026-10-01 [abroad] > day.jsonl
 //
 // The daily backups the checker stores in R2 (backups/subscribers/date=…/)
@@ -11,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { isCalendarDate } from '@penge/contracts';
-import { type Backup, exportSubscribers, importSubscribers } from './backup.ts';
+import { type Backup, type BackupV1, exportSubscribers, importSubscribers, pushDowngrade, toV1 } from './backup.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { K } from './keys.ts';
 import { connectRedis } from './kv.ts';
@@ -19,11 +21,20 @@ import { silentLog } from './log.ts';
 import { r2Sink, readSpool } from './r2.ts';
 import { rebuild, RECORD_SCHEMA, type ScanRecord } from './record.ts';
 
-const USAGE = 'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl\n';
+const USAGE =
+  'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs backup-to-v1 <file.json[.gz]> > v1.json | admin.mjs push-downgrade --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl\n';
 const [command, file, confirm] = process.argv.slice(2);
-if (command !== 'backup' && command !== 'restore' && command !== 'scans') {
+const COMMANDS = ['backup', 'restore', 'backup-to-v1', 'push-downgrade', 'scans'];
+if (!command || !COMMANDS.includes(command)) {
   process.stderr.write(USAGE);
   process.exit(2);
+}
+
+/** A backup file, plain or gzipped. */
+function readBackup(path: string): BackupV1 | Backup {
+  let data = readFileSync(path);
+  if (data[0] === 0x1f && data[1] === 0x8b) data = gunzipSync(data);
+  return JSON.parse(data.toString('utf8')) as BackupV1 | Backup;
 }
 if (command === 'scans') {
   const day = file ?? '';
@@ -63,11 +74,30 @@ if (command === 'scans') {
   process.exitCode = gaps.length ? 1 : 0;
 }
 if (command === 'restore' && (!file || confirm !== '--yes')) {
-  process.stderr.write('restore overwrites subscribers with the same ids; add --yes to go ahead\n');
+  process.stderr.write('restore overwrites subscribers with the same ids (never another live subscriber); add --yes to go ahead\n');
+  process.exit(2);
+}
+if (command === 'push-downgrade' && file !== '--yes') {
+  process.stderr.write('push-downgrade removes every push device, cancels channel requests and unsubscribes people with email off; stop the API and the checker first (deploy/README.md), then add --yes\n');
   process.exit(2);
 }
 
-if (command === 'backup' || command === 'restore') {
+if (command === 'backup-to-v1') {
+  if (!file) {
+    process.stderr.write(USAGE);
+    process.exit(2);
+  }
+  const backup = readBackup(file);
+  if (backup.version !== 2) {
+    process.stderr.write('that backup is already version 1\n');
+    process.exit(2);
+  }
+  const { backup: v1, leftOut } = toV1(backup);
+  process.stdout.write(`${JSON.stringify(v1)}\n`);
+  process.stderr.write(`left out ${leftOut} people who turned email off\n`);
+}
+
+if (command === 'backup' || command === 'restore' || command === 'push-downgrade') {
   const config = loadConfig();
   const kv = await connectRedis(config.redisUrl, (err) => process.stderr.write(`redis: ${err.message}\n`));
   try {
@@ -75,11 +105,21 @@ if (command === 'backup' || command === 'restore') {
       const raw = await kv.get(K.sites);
       const siteIds = raw ? (JSON.parse(raw) as { id: number }[]).map((s) => s.id) : [];
       process.stdout.write(`${JSON.stringify(await exportSubscribers(kv, siteIds, Date.now()))}\n`);
+    } else if (command === 'restore') {
+      const { restored, skipped } = await importSubscribers(kv, readBackup(file!));
+      process.stderr.write(`restored ${restored}, skipped ${skipped.length} (their address now belongs to another subscriber)${skipped.length ? `: ${skipped.join(', ')}` : ''}\n`);
     } else {
-      let data = readFileSync(file!);
-      if (data[0] === 0x1f && data[1] === 0x8b) data = gunzipSync(data);
-      const restored = await importSubscribers(kv, JSON.parse(data.toString('utf8')) as Backup);
-      process.stderr.write(`restored ${restored} subscribers\n`);
+      const channelRequests = (await kv.sMembers(K.pendingChannels)).length;
+      let withPush = 0;
+      let pushOnly = 0;
+      for (const id of await kv.sMembers(K.allSubscribers)) {
+        const h = await kv.hGetAll(K.subscriber(id));
+        if (h.pushOn === '1') withPush++;
+        if (h.emailOn === '0') pushOnly++;
+      }
+      process.stderr.write(`push-downgrade: ${channelRequests} pending channel requests, ${withPush} subscribers with push, ${pushOnly} with email off (they will be unsubscribed)\n`);
+      const r = await pushDowngrade(kv);
+      process.stderr.write(`done: removed ${r.devicesRemoved} devices, cancelled ${r.pendingCancelled} requests, unsubscribed ${r.unsubscribed}\n`);
     }
   } finally {
     await kv.close();
