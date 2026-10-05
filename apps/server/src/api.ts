@@ -34,6 +34,7 @@ import { API_LIMITS, hit, ipBucket, type Limit } from './limits.ts';
 import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
+import { listDevices } from './push/devices.ts';
 import { checkPushSubscription } from './push/endpoint.ts';
 import { parseMeta } from './push/atomic.ts';
 import { credentialHash, deviceCall, findDevice, turnOffDevice } from './push/register.ts';
@@ -317,12 +318,21 @@ export function createApi(deps: ApiDeps) {
 
     const token = await createPending(kv, keys, request, now());
     const chosen = list.filter((s) => request.siteIds.includes(s.id));
+    // The devices this address already has with notifications keep them whatever this request says.
+    const existing = await kv.get(K.emailIndex(emailIndex(request.email, keys.index)));
+    const devicesKept = existing && request.channels ? (await listDevices(kv, existing)).filter((d) => d.meta.state === 'r').length : 0;
+    // A page from before channels keeps the address's email setting: word the email for it.
+    const emailOnNow = existing && !request.channels ? (await load(kv, existing))?.emailOn : undefined;
     const content = confirmationEmail({
       confirmUrl: `${deps.publicBaseUrl}/confirm#token=${token}`,
       deletionUrl: `${deps.publicBaseUrl}/delete-data`,
       sites: chosen,
       applicants: request.applicants,
       pace: request.pace,
+      ...(emailOnNow === false ? { emailOn: false } : {}),
+      ...(request.channels
+        ? { channels: { emailOn: request.channels.emailOn, pushOn: request.channels.pushOn, device: request.channels.device, requestedAt: new Date(now()).toISOString(), devicesKept } }
+        : {}),
     });
     try {
       await mailer.send({ ...content, to: request.email, kind: 'confirm' });

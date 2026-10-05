@@ -61,6 +61,14 @@ describe('subscribing with channels', () => {
     expect(kv.dump()).toBe(before);
   });
 
+  it('counts as kept only devices that really get notifications', async () => {
+    const t = clock(); const kv = new MemoryKv(t.now);
+    const c = both(newCredHash());
+    await confirm(kv, keys, await createPending(kv, keys, req(c), t.now()), t.now(), ack(c)); // its device never registered
+    const laptop = await createPending(kv, keys, req(emailOnly), t.now());
+    expect(await previewPending(kv, laptop)).toMatchObject({ channels: { devicesKept: 0 } });
+  });
+
   it('refuses a channel request confirmed without acknowledgement, and keeps the token usable', async () => {
     const t = clock(); const kv = new MemoryKv(t.now);
     const c = pushOnly(newCredHash());

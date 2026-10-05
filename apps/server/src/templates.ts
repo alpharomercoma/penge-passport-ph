@@ -57,31 +57,70 @@ export const PACE_PROMISE: Record<Pace, string> = {
   asap: 'as soon as a check finds dates (one email per check; checks run every 5 minutes), with everything new since the last email',
 };
 
-export function confirmationEmail(input: { confirmUrl: string; deletionUrl?: string; sites: SiteRef[]; applicants: number; pace: Pace }): Rendered {
+/** "2026-10-05T02:02:00Z" → "Mon 5 Oct, 10:02" in Manila (UTC+8, no daylight saving). */
+function manilaWhen(iso: string): string {
+  const d = new Date(Date.parse(iso) + 8 * 3600_000);
+  const date = formatDate(d.toISOString().slice(0, 10)).replace(/ \d{4}$/, '');
+  return `${date}, ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function channelLines(c: { emailOn: boolean; pushOn: boolean; device: string | null; requestedAt: string; devicesKept: number } | undefined): string[] {
+  // Every request that says its channels shows them, email-only too (it may turn email back on).
+  if (!c) return [];
+  const kept = c.devicesKept === 1 ? 'The 1 device that already gets notifications keeps them.' : `The ${c.devicesKept} devices that already get notifications keep them.`;
+  return [
+    `Email: ${c.emailOn ? 'on' : 'off'}`,
+    c.pushOn
+      ? `Notifications: on, for the device and browser that asked (${c.device ?? 'a browser'}, ${manilaWhen(c.requestedAt)})`
+      : 'Notifications: none added by this request.',
+    ...(c.devicesKept > 0 ? [kept] : []),
+    'If you did not ask for this, ignore this email: nothing changes.',
+  ];
+}
+
+export function confirmationEmail(input: {
+  confirmUrl: string;
+  deletionUrl?: string;
+  sites: SiteRef[];
+  applicants: number;
+  pace: Pace;
+  /** What the request changes; absent for a request from a page made before channels. */
+  channels?: { emailOn: boolean; pushOn: boolean; device: string | null; requestedAt: string; devicesKept: number };
+  /** For a page made before channels: whether the address has email on now (it keeps it). */
+  emailOn?: boolean;
+}): Rendered {
+  const channels = channelLines(input.channels);
+  const emailOn = input.channels ? input.channels.emailOn : (input.emailOn ?? true);
   const names = input.sites.map((s) => s.name);
-  const often = `We email ${PACE_PROMISE[input.pace]}.`;
+  // Worded for what the request turns on: never a promise of email when email is off.
+  const asked = emailOn ? 'email this address' : 'send notifications';
+  const often = emailOn ? `We email ${PACE_PROMISE[input.pace]}.` : `We send notifications ${PACE_PROMISE[input.pace].replace(/email/g, 'alert')}.`;
+  const ignore = 'If this was not you, ignore this email: nothing changes.';
   const text = [
-    `Someone, hopefully you, asked ${DISPLAY_NAME} to email this address when passport appointment dates open for ${people(input.applicants)} at:`,
+    `Someone, hopefully you, asked ${DISPLAY_NAME} to ${asked} when passport appointment dates open for ${people(input.applicants)} at:`,
     '',
     ...names.map((n) => `  - ${n}`),
     '',
     often,
     '',
+    ...(channels.length > 0 ? [...channels, ''] : []),
     'To start the alerts, open this link and press Confirm:',
     input.confirmUrl,
     '',
-    'The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.',
+    // The channel lines already say what ignoring it means.
+    channels.length > 0 ? 'The link works for 48 hours.' : `The link works for 48 hours. ${ignore}`,
     ...(input.deletionUrl ? ['', `To stop alerts or delete your address, even before your first alert: ${input.deletionUrl}`] : []),
     '',
     UNOFFICIAL,
   ].join('\n');
   const html = page(
     'Confirm your alerts',
-    `<p style="margin:0 0 12px">Someone, hopefully you, asked us to email this address when passport appointment dates open for ${esc(people(input.applicants))} at:</p>
+    `<p style="margin:0 0 12px">Someone, hopefully you, asked us to ${esc(asked)} when passport appointment dates open for ${esc(people(input.applicants))} at:</p>
 <ul style="margin:0 0 12px;padding-left:20px">${names.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
 <p style="margin:0 0 12px">${esc(often)}</p>
+${channels.map((line) => `<p style="margin:0 0 12px">${esc(line)}</p>`).join('\n')}
 ${button(input.confirmUrl, 'Confirm alerts')}
-<p style="margin:0;font-size:14px;color:#4f5b55">The link works for 48 hours. If this was not you, ignore this email: nothing will be sent.</p>`,
+<p style="margin:0;font-size:14px;color:#4f5b55">${esc(channels.length > 0 ? 'The link works for 48 hours.' : `The link works for 48 hours. ${ignore}`)}</p>`,
     `${esc(UNOFFICIAL)}${input.deletionUrl ? `<br><a href="${esc(input.deletionUrl)}">Stop alerts and delete your address</a>` : ''}`,
   );
   return { subject: `Confirm your ${DISPLAY_NAME} alerts`, text, html };

@@ -114,7 +114,8 @@ export async function previewPending(kv: Kv, token: string): Promise<ConfirmPrev
   const p = JSON.parse(raw) as Pending;
   const c = p.channels;
   const existing = await kv.get(K.emailIndex(p.index));
-  const devicesKept = existing ? (await listDevices(kv, existing)).length : 0;
+  // Only devices that really get notifications (registered); one still awaiting gets nothing yet.
+  const devicesKept = existing ? (await listDevices(kv, existing)).filter((d) => d.meta.state === 'r').length : 0;
   return {
     siteIds: p.siteIds,
     applicants: p.applicants,
