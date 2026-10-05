@@ -31,6 +31,14 @@ try {
     const bundle = await (await get(new URL(script, base))).text();
     if (!bundle.includes(email) || !bundle.includes('mailto:')) fail('The supplied support address is not in the live app. Publish the privacy/support contact before production.');
   }
+  // The status-bar icon notifications use: served, a PNG, 512 square.
+  const mono = await get(manifest.monochromeIconUrl);
+  if (!mono.headers.get('content-type')?.startsWith('image/png')) fail(`monochromeIconUrl answers ${mono.headers.get('content-type')}`);
+  const png = Buffer.from(await mono.arrayBuffer());
+  // A real PNG: its signature, then the IHDR chunk that holds the width and height.
+  const isPng = png.length >= 24 && png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && png.toString('latin1', 12, 16) === 'IHDR';
+  if (!isPng) fail('monochromeIconUrl is not a PNG');
+  else if (png.readUInt32BE(16) !== 512 || png.readUInt32BE(20) !== 512) fail('monochromeIconUrl is not 512x512');
 } catch (error) { fail(error.message); }
 console.log(JSON.stringify({ packageId: manifest.packageId, site: base, passed: failures.length === 0, failures, remainingManualChecks: ['Match Console support email and Data safety/Government declarations.', 'Install from Play test track and verify TWA, deletion, email confirmation, offline recovery, Back and TalkBack.', 'Review pre-launch report and confirm production access/closed-test requirements.'] }, null, 2));
 process.exitCode = failures.length ? 1 : 0;

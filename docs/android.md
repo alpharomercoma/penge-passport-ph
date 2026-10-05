@@ -34,8 +34,9 @@ never change: a different name is a different app, with no installs or reviews.
 - **Offline.** The service worker keeps the page, its code and icons on the phone, so the app opens with
   no connection and says it cannot reach the server. Appointment dates are never stored: `/api/` always
   goes to the network. `apps/web/test/pwa.test.ts` runs the worker's rules against a fake cache.
-- **Nothing extra is collected.** The app has no permissions of its own and no SDKs; notifications are
-  off (`enableNotifications: false`). Its data is the website's, as the privacy page says.
+- **Nothing extra is collected.** The app has no SDKs. Its one permission (from 1.1.0) is Android's
+  notification permission, asked only when the alert form's switch is turned on (see Notifications).
+  Its data is the website's, as the privacy page says.
 
 ## What it shows at launch
 
@@ -137,13 +138,13 @@ To check an APK before uploading it:
 
 ```sh
 sdk=/opt/homebrew/share/android-commandlinetools/build-tools/36.1.0
-$sdk/apksigner verify --print-certs android/out/pengepassportph-1.apk   # the upload key's SHA-256
-$sdk/aapt2 dump badging android/out/pengepassportph-1.apk | grep -E "^package|targetSdk|label"
+$sdk/apksigner verify --print-certs android/out/pengepassportph-2.apk   # the upload key's SHA-256
+$sdk/aapt2 dump badging android/out/pengepassportph-2.apk | grep -E "^package|targetSdk|label"
 ```
 
 ## Try it on a phone
 
-With USB debugging on, `adb install android/out/pengepassportph-1.apk`. An emulator works as well: start
+With USB debugging on, `adb install android/out/pengepassportph-2.apk` (the file is named after `appVersionCode`). An emulator works as well: start
 it with `-read-only` and nothing it installs is kept. The first launch on a device where Chrome was never
 opened shows Chrome's own welcome screen before the app; that is Chrome's, and happens once.
 
@@ -151,6 +152,34 @@ opened shows Chrome's own welcome screen before the app; that is Chrome's, and h
 - **There is an address bar at the top:** Chrome could not verify the app. Check the file with Google's
   checker:
   <https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://alphaexperiments.com&relation=delegate_permission/common.handle_all_urls>.
+
+## Notifications (version 1.1.0)
+
+From 1.1.0 the app shows the site's alert notifications as its own. `twa-manifest.json` sets
+`enableNotifications: true`, so Bubblewrap adds Android's notification permission and a
+`DelegationService`: Chrome hands the site's notifications to the app, which shows them with its
+name and `monochromeIconUrl` (the one-colour mark, `icons/monochrome-512.png`) in the status bar.
+
+- On Android 13 and later, turning the switch on in the alert form shows Android's own permission
+  prompt naming the app. Denied, the form says to allow it in Settings › Apps › PassportPH ›
+  Notifications.
+- The site detects the app (the referrer `android-app://com.alphaexperiments.pengepassportph`) only
+  to word things; the server checks everything.
+- `node android/check-manifest.mjs` checks the manifest offline before a build; with `--project`
+  it also checks the generated app asks for the permission and has the delegation.
+  `check-play-release.mjs` checks the icon is live (after the web deploy).
+
+**The phone check.** Before 1.1.0 goes to Play, a separate debug app (`android/dev/`, package
+`…pengepassportph.dev`) is tried on a real phone against the local stack: the permission prompt,
+a notification with the app's name and icon, and a tap opening the office. Its results are in
+`docs/superpowers/verification/2026-10-push-phone.md`.
+
+**For the owner, in Play Console, with 1.1.0:**
+1. **Data safety:** add "Device or other IDs" (the push subscription's endpoint), collected for
+   app functionality, encrypted in transit, deletable on request; not shared.
+2. **App signing:** Play's app-signing certificate SHA-256 in `assetlinks.json` (see below), so a
+   copy installed from Play opens without an address bar and its notifications are delegated.
+3. **Upload** `pengepassportph-2.aab` (version 1.1.0) to the testing track.
 
 ## Digital Asset Links
 
