@@ -16,6 +16,33 @@ export type WriteOp =
   | { op: 'decr'; key: string }
   | { op: 'persist'; key: string };
 
+/** What a script sees: the store, with nothing else running until it returns (a Lua script on Valkey). */
+export interface ScriptTx {
+  type(key: string): 'none' | 'string' | 'hash' | 'set' | 'list' | 'other';
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  del(key: string): void;
+  exists(key: string): boolean;
+  /** -2 missing, -1 no expiry, else seconds left (rounded to the nearest second, as Valkey's TTL). */
+  ttl(key: string): number;
+  /** As ttl, in milliseconds. */
+  pttl(key: string): number;
+  expire(key: string, seconds: number): void;
+  /** The hash methods throw WRONGTYPE on a key of another type, as Valkey does. */
+  hGet(key: string, field: string): string | null;
+  hSet(key: string, field: string, value: string): void;
+  hDel(key: string, field: string): void;
+  hLen(key: string): number;
+  hGetAll(key: string): Record<string, string>;
+}
+
+/** One atomic operation: Lua for Valkey, and the same steps for MemoryKv. */
+export interface ScriptDef {
+  name: string;
+  lua: string;
+  memory(tx: ScriptTx, keys: string[], args: string[]): string;
+}
+
 export interface Kv {
   get(key: string): Promise<string | null>;
   /** Returns false when `nx` is set and the key already exists. */
@@ -35,6 +62,8 @@ export interface Kv {
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
   write(ops: WriteOp[]): Promise<void>;
+  /** Runs a script atomically and returns its answer. */
+  script(def: ScriptDef, keys: string[], args: string[]): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -77,6 +106,9 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     sMembers: (key) => client.sMembers(key),
     lPop: (key) => client.lPop(key),
     lLen: (key) => client.lLen(key),
+    async script(def, keys, args) {
+      return String(await client.eval(def.lua, { keys, arguments: args }));
+    },
     async write(ops) {
       if (ops.length === 0) return;
       const multi = client.multi();
@@ -128,7 +160,8 @@ type Entry = { value: string | Map<string, string> | Set<string> | string[]; exp
 /** In-memory twin of the Redis subset above, for tests and local runs. */
 export class MemoryKv implements Kv {
   private readonly data = new Map<string, Entry>();
-  private readonly now: () => number;
+  /** Not readonly: a script holds it still while it runs. */
+  private now: () => number;
 
   constructor(now: () => number = Date.now) {
     this.now = now;
@@ -300,6 +333,61 @@ export class MemoryKv implements Kv {
           break;
         }
       }
+    }
+  }
+
+  async script(def: ScriptDef, keys: string[], args: string[]): Promise<string> {
+    const hashOf = (key: string, create: boolean) => {
+      const e = this.entry(key);
+      if (e && !(e.value instanceof Map)) throw new Error(`WRONGTYPE ${key}`);
+      if (!e && create) return this.typed(key, () => new Map<string, string>(), (v) => v instanceof Map);
+      return (e?.value as Map<string, string> | undefined) ?? null;
+    };
+    const tx: ScriptTx = {
+      type: (key) => {
+        const e = this.entry(key);
+        if (!e) return 'none';
+        if (typeof e.value === 'string') return 'string';
+        if (e.value instanceof Map) return 'hash';
+        if (e.value instanceof Hll) return 'string';
+        if (e.value instanceof Set) return 'set';
+        return Array.isArray(e.value) ? 'list' : 'other';
+      },
+      // A HyperLogLog is a string on Valkey, whose bytes a script reads as such.
+      get: (key) => (this.entry(key)?.value instanceof Hll ? 'HYLL' : this.string(key)),
+      set: (key, value) => void this.data.set(key, { value, expiresAt: null }),
+      del: (key) => void this.data.delete(key),
+      exists: (key) => this.entry(key) !== undefined,
+      ttl: (key) => {
+        const ms = tx.pttl(key);
+        return ms < 0 ? ms : Math.floor((ms + 500) / 1000);
+      },
+      pttl: (key) => {
+        const e = this.entry(key);
+        if (!e) return -2;
+        return e.expiresAt === null ? -1 : e.expiresAt - this.now();
+      },
+      expire: (key, seconds) => {
+        const e = this.entry(key);
+        if (e) e.expiresAt = this.now() + seconds * 1000;
+      },
+      hGet: (key, field) => hashOf(key, false)?.get(field) ?? null,
+      hSet: (key, field, value) => void hashOf(key, true)!.set(field, value),
+      hDel: (key, field) => {
+        hashOf(key, false)?.delete(field);
+        this.tidy(key);
+      },
+      hLen: (key) => hashOf(key, false)?.size ?? 0,
+      hGetAll: (key) => Object.fromEntries(hashOf(key, false) ?? []),
+    };
+    // Time stands still while a script runs, as on Valkey: nothing expires halfway through it.
+    const clock = this.now;
+    const frozen = clock();
+    this.now = () => frozen;
+    try {
+      return def.memory(tx, keys, args);
+    } finally {
+      this.now = clock;
     }
   }
 
