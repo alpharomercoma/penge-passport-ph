@@ -427,9 +427,10 @@ FROM read_json('r2://pengepassportph/stats/v1/*/stats.json') ORDER BY day;
 ## Raising the email limit
 
 `MAIL_DAILY_LIMIT` is the most alerts the site sends in a Manila day (confirmation and deletion mail are not
-counted). When it is reached the run stops, the rest wait uncharged in the outbox, and the log says
-`daily email limit reached; the outbox waits`. The daily numbers show it as "Alerts sent: N of LIMIT" and
-"Runs stopped by the daily email limit". LIMIT is the highest limit in force when that day's alerts were
+counted). When it is reached, email stops for the rest of that Manila day while push notifications go on;
+alerts that only email could carry wait uncharged, and the log says `daily email limit reached; email waits,
+push goes on`. The daily numbers show it as "Alerts sent: N of LIMIT" and "Delivery passes that hit the daily
+email limit". LIMIT is the highest limit in force when that day's alerts were
 charged (each run notes it, `pp:mail:limit:<day>`, kept 40 days), not the setting at the time of the report.
 
 It was 300 and ran out at 22:00 Manila on 3 October 2026 (34 subscribers, about 12 alerts an hour, 24 runs

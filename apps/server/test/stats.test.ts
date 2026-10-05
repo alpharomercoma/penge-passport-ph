@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { createApi } from '../src/api.ts';
@@ -5,8 +6,9 @@ import { type CheckDeps, runCheck } from '../src/checker.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import { COUNTS, type Count, createStats, dailyStats, isPerson, reportOncePerDay, SALT_SECONDS, statsKey } from '../src/stats.ts';
 import { dailyStatsEmail } from '../src/templates.ts';
+import { deviceCall } from '../src/push/register.ts';
 import { confirm, createPending } from '../src/subscribers.ts';
-import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, SITES, recordingLog } from './helpers.ts';
+import { clock, FakeMailer, FakeUpstream, fcmSubscription, keys, MemoryKv, MemorySink, SITES, recordingLog } from './helpers.ts';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 200);
 const PHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
@@ -120,7 +122,33 @@ describe('counting visitors', () => {
   });
 });
 
+async function subscribeWith(kv: MemoryKv, t: { now: () => number }, email: string, ch: { emailOn: boolean; pushOn: boolean }, register: boolean) {
+  const credential = randomBytes(32).toString('base64url');
+  const hash = createHash('sha256').update(credential).digest('base64url');
+  const token = await createPending(kv, keys, { email, siteIds: [486], applicants: 1, pace: 'asap', channels: { ...ch, pushCredentialHash: ch.pushOn ? hash : null, device: ch.pushOn ? 'Chrome on Android' : null } }, t.now());
+  await confirm(kv, keys, token, t.now(), ch);
+  if (ch.pushOn && register) {
+    const s = fcmSubscription();
+    await deviceCall(kv, keys, { credential, subscription: { endpoint: s.endpoint, ...s.keys }, revision: 1, now: t.now() });
+  }
+}
+
 describe('the day in numbers', () => {
+  it('counts subscribers by channel and devices by state', async () => {
+    const t = clock();
+    const kv = new MemoryKv(t.now);
+    await subscribeWith(kv, t, 'a@example.com', { emailOn: true, pushOn: false }, true);
+    await subscribeWith(kv, t, 'b@example.com', { emailOn: true, pushOn: true }, true);
+    await subscribeWith(kv, t, 'c@example.com', { emailOn: false, pushOn: true }, true);
+    await subscribeWith(kv, t, 'd@example.com', { emailOn: false, pushOn: true }, false); // awaiting
+    const s = await dailyStats(kv, manilaDay(t.now()), t.now());
+    expect(s.channels).toEqual({ push: 3, pushOnly: 2, noChannel: 1, devicesRegistered: 2, devicesAwaiting: 1 });
+    expect(dailyStatsEmail(s).text).toMatch(/Devices with notifications: 2 \(1 waiting to finish\)/);
+    expect(dailyStatsEmail(s).text).toMatch(/Subscribers with notifications on: 3 \(2 push only\)/);
+    expect(dailyStatsEmail(s).text).toMatch(/Push attempts accepted by the push service: 0/);
+    expect(dailyStatsEmail(s).text).toMatch(/Other push outcomes \(refused, uncertain, device gone\): 0, 0, 0/);
+  });
+
   it('adds the day up, names the offices opened most, and says when the day is only partly counted', async () => {
     const { kv, stats } = counting();
     await kv.set(K.sites, JSON.stringify(SITES.map(({ id, name }) => ({ id, name }))));
@@ -573,6 +601,7 @@ const base0 = {
   subscribers: 0,
   generatedAt: '2026-10-03T23:30:00.000Z',
   counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
+  channels: { push: 0, pushOnly: 0, noChannel: 0, devicesRegistered: 0, devicesAwaiting: 0 },
 };describe("the operator's daily email", () => {
   const base = {
     schema: 1 as const,
@@ -584,13 +613,14 @@ const base0 = {
     subscribers: 43,
     generatedAt: '2026-10-03T23:30:00.000Z',
     counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
+    channels: { push: 0, pushOnly: 0, noChannel: 0, devicesRegistered: 0, devicesAwaiting: 0 },
   };
 
   it('says how much of the daily email limit was used, and how often it stopped a run', () => {
     const counts = { ...base.counts, alertsSent: 300, mailLimitHits: 24 };
     const mail = dailyStatsEmail({ ...base, counts, mailLimit: 2500 });
     expect(mail.text).toContain('Alerts sent: 300 of 2,500 allowed a day');
-    expect(mail.text).toContain('Runs stopped by the daily email limit: 24');
+    expect(mail.text).toContain('Delivery passes that hit the daily email limit: 24');
     expect(mail.text).toContain("Alerts held back by a person's own daily cap: 0");
     expect(mail.html).toContain('300 of 2,500 allowed a day');
   });

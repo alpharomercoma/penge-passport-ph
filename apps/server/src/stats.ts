@@ -152,6 +152,8 @@ export interface DailyStats {
   mailLimit: number | null;
   /** When the report was made, not at the end of the day. */
   subscribers: number;
+  /** Subscribers by how they are told, and their devices by state, when the report was made. */
+  channels: { push: number; pushOnly: number; noChannel: number; devicesRegistered: number; devicesAwaiting: number };
   generatedAt: string;
 }
 
@@ -176,6 +178,18 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     .slice(0, 5);
   const since = await kv.get(K.statsSince);
   const limit = await kv.get(K.mailLimit(day));
+  const channels = { push: 0, pushOnly: 0, noChannel: 0, devicesRegistered: 0, devicesAwaiting: 0 };
+  for (const id of await kv.sMembers(K.allSubscribers)) {
+    const h = await kv.hGetAll(K.subscriber(id));
+    const emailOn = h.emailOn !== '0';
+    const devices = Object.values(await kv.hGetAll(K.pushMeta(id)));
+    const registered = devices.filter((m) => m.startsWith('r|')).length;
+    channels.devicesRegistered += registered;
+    channels.devicesAwaiting += devices.length - registered;
+    if (h.pushOn === '1') channels.push++;
+    if (h.pushOn === '1' && !emailOn) channels.pushOnly++;
+    if (!emailOn && registered === 0) channels.noChannel++;
+  }
   return {
     schema: 1,
     day,
@@ -186,6 +200,7 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     topOffices,
     mailLimit: limit !== null && Number.isFinite(Number(limit)) ? Number(limit) : null,
     subscribers: (await kv.sMembers(K.allSubscribers)).length,
+    channels,
     generatedAt: new Date(now).toISOString(),
   };
 }
