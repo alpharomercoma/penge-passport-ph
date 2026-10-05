@@ -23,6 +23,31 @@ export function decryptEmail(sealed: string, key: Buffer): string {
   return Buffer.concat([decipher.update(raw.subarray(12, raw.length - 16)), decipher.final()]).toString('utf8');
 }
 
+/** AES-256-GCM with `label` as associated data: a value sealed for one purpose never opens as another. */
+export function seal(plain: string, key: Buffer, label: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from(label));
+  const body = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  return `v2.${Buffer.concat([iv, body, cipher.getAuthTag()]).toString('base64url')}`;
+}
+
+export function unseal(sealed: string, key: Buffer, label: string): string {
+  const [version, payload] = sealed.split('.');
+  if (version !== 'v2' || !payload) throw new Error('unknown sealed format');
+  const raw = Buffer.from(payload, 'base64url');
+  if (raw.length < 12 + 16 + 1) throw new Error('sealed value is too short');
+  const decipher = createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
+  decipher.setAAD(Buffer.from(label));
+  decipher.setAuthTag(raw.subarray(raw.length - 16));
+  return Buffer.concat([decipher.update(raw.subarray(12, raw.length - 16)), decipher.final()]).toString('utf8');
+}
+
+/** A keyed hash for one purpose: without the key it reveals nothing. */
+export function keyedHash(key: Buffer, label: string, value: string): string {
+  return createHmac('sha256', key).update(`${label}:${value}`).digest('base64url');
+}
+
 /** Same address, same index; without the key, the index reveals nothing. */
 export function emailIndex(email: string, key: Buffer): string {
   return createHmac('sha256', key).update(`email:${email}`).digest('base64url');

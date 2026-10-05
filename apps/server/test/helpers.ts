@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createECDH, randomBytes } from 'node:crypto';
 import type { Availability, Site } from 'penge-passport-ph';
 import { CircuitOpenError } from 'penge-passport-ph';
 import type { MailMode } from '../src/config.ts';
@@ -11,6 +11,15 @@ import type { SiteObservation } from '../src/snapshot.ts';
 import type { Keys } from '../src/subscribers.ts';
 
 export const keys: Keys = { email: randomBytes(32), index: randomBytes(32), token: randomBytes(32) };
+
+/** A real P-256 public key and auth secret, as a browser would send them. */
+const ecdh = createECDH('prime256v1');
+ecdh.generateKeys();
+export const PUSH_KEYS = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') };
+export const fcmSubscription = (id = randomBytes(8).toString('hex')) => ({
+  endpoint: `https://fcm.googleapis.com/fcm/send/${id}`,
+  keys: { ...PUSH_KEYS },
+});
 
 export class FakeMailer implements Mailer {
   sent: Mail[] = [];
