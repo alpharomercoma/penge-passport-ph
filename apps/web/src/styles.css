@@ -235,13 +235,17 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .pick-detail { display: block; color: var(--ink-2); font-size: 0.875rem; }
 .hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .sheet-backdrop { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; background: rgb(0 0 0 / 0.45); }
-.sheet { width: 100%; max-width: 520px; max-height: 92vh; overflow-y: auto; overscroll-behavior: contain; padding: 8px 20px 24px; border-radius: var(--r) var(--r) 0 0; background: var(--bg); }
+/* dvh: the height left by the browser's bars (vh counts the screen as if they were hidden). */
+.sheet { width: 100%; max-width: 520px; max-height: 92vh; max-height: 92dvh; overflow-y: auto; overscroll-behavior: contain; padding: 8px 20px 24px; border-radius: var(--r) var(--r) 0 0; background: var(--bg); }
+/* The space under the title is padding, not margin, so scrolled text passes under it instead of showing, sliced, in the gap. */
+.sheet-head { position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 -20px; padding: 8px 12px 12px 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.sheet-head + * { margin-top: 16px; }
+.sheet-head h2 { font-size: 1.25rem; }
 @media (min-width: 640px) {
   .sheet-backdrop { align-items: center; padding: 24px; }
   .sheet { padding: 12px 28px 28px; border-radius: var(--r); }
+  .sheet-head { margin: 0 -28px; padding: 8px 20px 12px 28px; }
 }
-.sheet-head { position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 -8px 12px 0; padding-top: 8px; background: var(--bg); }
-.sheet-head h2 { font-size: 1.25rem; }
 .sheet-done { display: grid; justify-items: start; gap: 14px; padding: 4px 0; }
 .sheet-fine { margin-top: 12px; }
 
@@ -282,7 +286,9 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .switch[aria-checked='true'] .switch-track::after { background: var(--bg); }
 .switch[aria-checked='true'] .switch-track::after { transform: translateX(16px); }
 .switch:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 6px; }
-.device-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 12px; }
+/* The status, then its links together on their own line, so they never split across lines. */
+.device-row { display: grid; justify-items: start; margin: 0 0 12px; }
+.device-actions { display: flex; flex-wrap: wrap; column-gap: 20px; }
 .channels-preview { margin: 0 0 12px; padding-left: 20px; }
 .debug-context { font: 12px/1.4 ui-monospace, monospace; opacity: 0.7; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }

@@ -119,9 +119,11 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
     return (
       <div className="device-row">
         <span>Notifications are blocked on this device.</span>
-        <button type="button" className="link-button" onClick={off}>
-          Turn off
-        </button>
+        <span className="device-actions">
+          <button type="button" className="link-button" onClick={off}>
+            Turn off
+          </button>
+        </span>
         {note && <p className="hint">{note}</p>}
       </div>
     );
@@ -131,9 +133,11 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
     return (
       <div className="device-row">
         <span>Notifications are not allowed on this device yet. Allow them in your browser or phone settings.</span>
-        <button type="button" className="link-button" onClick={off}>
-          Turn off
-        </button>
+        <span className="device-actions">
+          <button type="button" className="link-button" onClick={off}>
+            Turn off
+          </button>
+        </span>
         {note && <p className="hint">{note}</p>}
       </div>
     );
@@ -142,9 +146,11 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
     return (
       <div className="device-row">
         <span>Waiting for you to confirm by email.</span>
-        <button type="button" className="link-button" onClick={off}>
-          Cancel
-        </button>
+        <span className="device-actions">
+          <button type="button" className="link-button" onClick={off}>
+            Cancel
+          </button>
+        </span>
         {note && <p className="hint">{note}</p>}
       </div>
     );
@@ -153,9 +159,11 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
     return (
       <div className="device-row">
         <span>Notifications are not allowed on this device yet. Allow them in your browser or phone settings.</span>
-        <button type="button" className="link-button" onClick={off}>
-          Turn off
-        </button>
+        <span className="device-actions">
+          <button type="button" className="link-button" onClick={off}>
+            Turn off
+          </button>
+        </span>
         {note && <p className="hint">{note}</p>}
       </div>
     );
@@ -164,9 +172,11 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
     return (
       <div className="device-row">
         <span>Notifications need setting up again on this device.</span>
-        <button type="button" className="link-button" onClick={off}>
-          Turn off
-        </button>
+        <span className="device-actions">
+          <button type="button" className="link-button" onClick={off}>
+            Turn off
+          </button>
+        </span>
         {note && <p className="hint">{note}</p>}
       </div>
     );
@@ -174,12 +184,14 @@ export function DeviceRow({ api, status, hidden = false }: { api: Api; status: S
   return (
     <div className="device-row">
       <span>Notifications on this device: On</span>
-      <button type="button" className="link-button" onClick={test}>
-        Send a test
-      </button>
-      <button type="button" className="link-button" onClick={off}>
-        Turn off
-      </button>
+      <span className="device-actions">
+        <button type="button" className="link-button" onClick={test}>
+          Send a test
+        </button>
+        <button type="button" className="link-button" onClick={off}>
+          Turn off
+        </button>
+      </span>
       {note && <p className="hint">{note}</p>}
     </div>
   );

@@ -754,6 +754,22 @@ describe('the notifications row', () => {
     expect(await screen.findByText(text)).toBeTruthy();
   });
 
+  // On a narrow phone the links wrapped one by one: "Send a test" beside the text, "Turn off" below.
+  it.each([
+    [{ state: 'registered' }, 'granted', ['Send a test', 'Turn off']],
+    [{ state: 'registered' }, 'denied', ['Turn off']],
+    [{ state: 'pending' }, 'granted', ['Cancel']],
+  ])('keeps the row\'s links together on their own line for %o (%s)', async (answer, permission, names) => {
+    vi.stubGlobal('Notification', { permission });
+    sharedMock.readState.mockResolvedValue(CONFIRMED);
+    sharedMock.reconcile.mockResolvedValue({ ...answer, subscribed: true });
+    render(<App path="/" api={fakeApi({ status: async () => LIVE })} />);
+    const buttons = await Promise.all(names.map((name) => screen.findByRole('button', { name })));
+    const group = buttons[0]!.parentElement!;
+    expect(group.classList.contains('device-actions')).toBe(true);
+    for (const b of buttons) expect(b.parentElement).toBe(group);
+  });
+
   it('turns the device off from the row, and warns when nothing is left', async () => {
     vi.stubGlobal('Notification', { permission: 'granted' });
     sharedMock.readState.mockResolvedValue(CONFIRMED);
