@@ -115,8 +115,12 @@ failed on a wide screen and was ignored; the audit now stops on any failed step)
 - The row's links wrapped one by one ("Send a test" beside the text, "Turn off" below). They now sit
   together on their own line (test: "keeps the row's links together…").
 - The sheet's height was 92% of `vh`, which on phones counts the screen as if the browser's bars were
-  hidden; it is now 92% of `dvh` (with `vh` for older browsers). Checked in emulation only: the phone
-  had locked itself before the sheet could be measured in its Chrome tab.
+  hidden; it is now 92% of `dvh` (with `vh` for older browsers). Measured later the same day in the phone's
+  Chrome tab, its toolbar showing (`harness/measure-sheet.mjs`, CSS pixels, screenshot
+  `phone-tab-sheet-height`): the visible height (`innerHeight`, `dvh`, `svh`) is 702 while `100vh` is
+  759; the old cap, 92vh, would have been 698, leaving the sheet 4 pixels below the top of the screen (in a
+  browser whose visible height is less than 92vh, the old cap would have run above the top); the new
+  one is 646, and the sheet runs from 56 to 702, its header at 64, its end just above Chrome's toolbar.
 
 Fixed in `4c7389a` (the row's test went red, then green; the audit reran clean).
 
@@ -146,6 +150,9 @@ output itself was not kept):
   alone).
 - Dark mode left on, as it was (`cmd uimode night`: yes). Every phone screenshot above was taken in
   dark mode and reads clearly (checked by eye); light mode was checked on the Mac.
+
+For that measurement the owner unlocked the phone; the same setup was made and undone again (`adb
+reverse` 4173 and the DevTools forward, removed; the site's data cleared, 0 bytes; the tab closed).
 
 Still to do by the owner: restart Chrome on the phone once, so the running browser drops the
 switches it read from the command-line file at its last start.
