@@ -1,0 +1,46 @@
+{
+  "version": "Chrome/154.0.8037.92",
+  "run": "muw56kf7",
+  "results": [
+    {
+      "item": "The debug app is detected as the Play app (context: play)",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The switch reads \"Notifications on this device\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Android's own permission prompt names the app",
+      "pass": false,
+      "note": "not shown: Chrome's site prompt asked instead; the app's POST_NOTIFICATIONS granted=false"
+    },
+    {
+      "item": "The email names the device (\"Chrome on Android\")",
+      "pass": true,
+      "note": "Notifications: on, for the device and browser that asked (Chrome on Android, Tue 6 Oct, 11:51)"
+    },
+    {
+      "item": "Confirmed in the app: one registered device",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "An alert shows a notification",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo / Sat 10 Oct · for 1 person\"]"
+    },
+    {
+      "item": "Android shows it as the app's notification (posted by the debug app)",
+      "pass": false,
+      "note": "com.android.chrome com.android.chrome"
+    },
+    {
+      "item": "Tapping it opens the app on Antipolo, with the date and group",
+      "pass": true,
+      "note": "retried by hand (adb tap on the localhost:8443 card; the first tap hit the phone-tab subscriber's card above it): https://localhost:8443/pengepassportph/?office=486&date=2026-10-10&people=1, in the app's window (CustomTabActivity, task 408)"
+    }
+  ]
+}

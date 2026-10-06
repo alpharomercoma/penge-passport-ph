@@ -1,0 +1,41 @@
+{
+  "version": "Chrome/154.0.8037.92",
+  "run": "muw4v734",
+  "results": [
+    {
+      "item": "A Chrome tab on the phone is detected as a browser",
+      "pass": true,
+      "note": "context: browser"
+    },
+    {
+      "item": "The switch reads \"Browser notifications\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Push on, email off",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The email names the phone (\"Chrome on Android\")",
+      "pass": true,
+      "note": "Notifications: on, for the device and browser that asked (Chrome on Android, Tue 6 Oct, 11:43)"
+    },
+    {
+      "item": "Confirmed: one registered device",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "An alert arrives as a Chrome notification on the phone: \"Dates open at Antipolo\"",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo / Fri 9 Oct · for 1 person\"]"
+    },
+    {
+      "item": "Shade screenshot",
+      "pass": false,
+      "note": "the script stopped here: adb screencap overflowed the default output buffer (ENOBUFS). Every check above had passed; the buffer was raised and the screenshot (phone-tab-notification) taken by hand after."
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "version": "Chrome/154.0.8037.98",
+  "run": "muw690aw",
+  "widths": [
+    320,
+    360,
+    375,
+    390,
+    412,
+    768,
+    1280
+  ],
+  "finished": true,
+  "states": [
+    "sheet-iphone-tab",
+    "home",
+    "home-abroad",
+    "office",
+    "by-date",
+    "sheet-top",
+    "sheet-switches",
+    "sheet-push-only",
+    "sheet-end",
+    "sheet-sent",
+    "row-waiting",
+    "confirm-preview",
+    "confirm-done",
+    "row-on",
+    "row-blocked",
+    "sheet-blocked-hint",
+    "privacy",
+    "delete-data",
+    "unsubscribe"
+  ],
+  "findings": []
+}

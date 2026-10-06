@@ -1,0 +1,27 @@
+{
+  "version": "Chrome/154.0.8037.92",
+  "run": "muw5b043",
+  "results": [
+    {
+      "item": "The installed app is detected as installed (context: installed)",
+      "pass": true,
+      "note": "com.android.chrome/org.chromium.chrome.browser.webapps.SameTaskWebApkActivity"
+    },
+    {
+      "item": "The switch reads \"Notifications on this device\"",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "flow",
+      "pass": false,
+      "note": "TimeoutError: Waiting failed: 20000ms exceeded (waitText \"Notifications on this device: On\", phone-pwa.mjs; stack trace with local paths removed)"
+    }
+  ],
+  "annotations": [
+    {
+      "addedByHand": true,
+      "note": "Why the row never said On: it said \"Notifications are not allowed on this device yet\" (screenshot phone-pwa-error). The WebAPK has its own Android notification permission, off (dumpsys package: POST_NOTIFICATIONS granted=false), although Chrome's is on. The alert and tap checks after it were not reached."
+    }
+  ]
+}

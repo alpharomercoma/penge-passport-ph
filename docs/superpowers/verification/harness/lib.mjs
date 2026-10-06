@@ -4,9 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
-export const REPO = '/Users/alpha/appointment-checker';
+// The repository: REPO when the harness runs from a copy elsewhere, else four levels up from here.
+export const REPO = process.env.REPO ?? fileURLToPath(new URL('../../../../', import.meta.url));
 export const SITE = 'http://localhost:4173/pengepassportph/';
 export const ORIGIN = 'http://localhost:4173';
 export const IMG = join(REPO, 'docs/superpowers/verification/img');
