@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  clickText, emailSwitch, launch, linkIn, mailMark, mailSince, ORIGIN, pushSwitch, resetRateLimits, RUN, send, sleep, SITE, waitText, workerReady,
+  clickText, emailSwitch, launch, linkIn, mailMark, waitMail, ORIGIN, pushSwitch, resetRateLimits, RUN, send, sleep, SITE, waitText, workerReady,
 } from './lib.mjs';
 
 // Screenshots for eye review go outside the repository; audit.json is copied into results/.
@@ -143,7 +143,7 @@ try {
   const mark = mailMark();
   await send(page, email);
   await audit(page, 'sheet-sent');
-  const mail = mailSince(mark, 'confirm', email)[0].text;
+  const mail = (await waitMail(mark, 'confirm', email)).text;
   await page.goto(SITE, { waitUntil: 'networkidle0' });
   await waitText(page, 'Waiting for you to confirm by email.', 20_000);
   await audit(page, 'row-waiting');

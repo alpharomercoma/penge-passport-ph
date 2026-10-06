@@ -353,7 +353,7 @@ are gone within 14 days."), checked on 27 September 2026:
 | Valkey | AES-256-GCM, a fresh nonce each time (`crypto.ts`); lookups use a keyed hash, never the address | Yes | At once |
 | Valkey's append-only log | Every write, the encrypted record included, until the log is rewritten (hourly, `deploy/valkey-compact.sh`) | Yes | Within an hour |
 | Unconfirmed sign-ups | The same encrypted record, waiting for its link to be clicked | Yes | At once (unsubscribing cancels them); otherwise after 48 hours |
-| Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day's scan deletes every copy older than that |
+| Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day the checker deletes every copy older than that, even when that day's upload fails; later only while R2 cannot be reached or the server is down (it retries every run) |
 | API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
 | Confirmation and unsubscribe links | Random tokens, stored only as a hash | Nothing to encrypt | Not an address |
 | Postfix, while sending | The message, with its recipient, waits in the queue until delivered (at most a day; root and postfix only) | **No** | Within a day |
@@ -383,8 +383,9 @@ database and the server's keys (Caddy's error log, above, is separate).
 ## Keys and backups
 
 Subscribers live only in Redis. Once a day the checker copies them, as stored (addresses encrypted), to R2
-at `backups/subscribers/date=YYYY-MM-DD/subscribers.json.gz`, and deletes the copies older than 14 days,
-so an address removed on unsubscribing leaves the backups too. To restore, download one and run, on the
+at `backups/subscribers/date=YYYY-MM-DD/subscribers.json.gz`, and deletes the copies older than 14 days
+(also on a day whose upload fails; both retry on the next run until they succeed), so an address removed
+on unsubscribing leaves the backups too. To restore, download one and run, on the
 server:
 
 ```sh

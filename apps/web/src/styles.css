@@ -98,7 +98,9 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 
 /* page header, on the page of all offices */
 .toolbar { display: grid; gap: 8px; padding: 20px 0 16px; }
-.title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+/* The button moves under the heading only where the heading would otherwise take three lines (under ~360 px). */
+.title-row h1 { flex: 1 1 11rem; }
 .toolbar h1 { font-size: 1.25rem; }
 @media (min-width: 640px) { .toolbar h1 { font-size: 1.5rem; } }
 .summary { color: var(--ink-2); }
@@ -212,6 +214,10 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .hour.is-open .hour-state { color: var(--open); }
 .hour.is-full { color: var(--full-ink); }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+/* On phones the office's two actions are one width, one under the other. */
+@media (max-width: 479px) { .actions .btn { flex: 1 1 100%; } }
+/* The narrowest phones: the alert button's bell goes, so its label stays on one line. */
+@media (max-width: 339px) { .actions button.btn svg { display: none; } }
 .fallback { display: grid; gap: 10px; padding-top: 4px; }
 .fallback h2 { margin-top: 6px; font-size: 1.125rem; }
 

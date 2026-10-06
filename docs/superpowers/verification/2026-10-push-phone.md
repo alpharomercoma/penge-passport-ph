@@ -120,8 +120,11 @@ failed on a wide screen and was ignored; the audit now stops on any failed step)
 
 Fixed in `4c7389a` (the row's test went red, then green; the audit reran clean).
 
-Left as they are: at 320 pixels the home heading takes three lines beside the alerts button, and an
-office's "Email me when dates open here" takes two.
+Then, at the owner's request, the two small ones: below about 360 pixels the home heading took three
+lines beside the alerts button (the button now moves under the heading there), and an office's two
+buttons differed in width, the alert one taking two lines at 320 (on phones both now take the full
+width, and below 340 pixels the alert button drops its bell to stay on one line). Measured before and
+after in Chrome at 320 to 412 pixels; the audit reran clean (`results/audit.json`).
 
 ## Phone cleanup
 

@@ -371,13 +371,15 @@ const backupKey = (day: string) => `backups/subscribers/date=${day}/subscribers.
 /**
  * The day's copy of every subscriber (still encrypted) goes to R2, and every
  * copy BACKUP_KEEP_DAYS old or older is deleted, however long the checker was
- * away. A failure retries on the next run.
+ * away. The old copies go even when the day's upload fails, so a removed
+ * address leaves the backups on time. A failure retries on the next run.
  */
 async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: string) {
   const { kv, log, sink } = deps;
   if (!sink.putObject) return;
   const day = manilaDay(now());
   if (!(await kv.set(K.backupDone(day), runId, { nx: true, ttlSeconds: 2 * 24 * 3600 }))) return;
+  let done = true;
   try {
     const raw = await kv.get(K.sites);
     const siteIds = raw ? (JSON.parse(raw) as { id: number }[]).map((s) => s.id) : [];
@@ -385,6 +387,11 @@ async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: strin
     const backup = await exportSubscribers(kv, siteIds, now());
     await sink.putObject(backupKey(day), gzipSync(JSON.stringify(backup)), 'application/gzip');
     log.info('subscriber backup stored', { day, subscribers: backup.subscribers.length });
+  } catch (err) {
+    done = false;
+    log.error('subscriber backup failed; the next run retries', { err: err as Error });
+  }
+  try {
     if (sink.listObjects && sink.deleteObject) {
       const oldest = manilaDay(now() - (BACKUP_KEEP_DAYS - 1) * 86_400_000); // the oldest day kept
       for (const key of await sink.listObjects('backups/subscribers/')) {
@@ -393,9 +400,10 @@ async function backupOncePerDay(deps: CheckDeps, now: () => number, runId: strin
       }
     }
   } catch (err) {
-    await kv.write([{ op: 'del', key: K.backupDone(day) }]);
-    log.error('subscriber backup failed; the next run retries', { err: err as Error });
+    done = false;
+    log.error('old subscriber backups not deleted; the next run retries', { err: err as Error });
   }
+  if (!done) await kv.write([{ op: 'del', key: K.backupDone(day) }]);
 }
 
 async function scanAll(

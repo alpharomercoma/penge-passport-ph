@@ -17,7 +17,8 @@ says so rather than guessing.
 - It stores no personal data from the DFA. The personal data it holds is its own:
   - subscribers' email addresses, which it encrypts, confirms by double opt-in, and deletes on
     unsubscribe. The last copies, in encrypted daily backups and the mail server's logs, are gone within
-    14 days. The runbook lists
+    14 days; backups stay longer only while their storage cannot be reached or the server is down (old
+    copies are deleted every day, even when that day's backup fails). The runbook lists
     [every place an address exists](../../deploy/README.md#where-a-subscribers-address-goes).
   - visitors' network addresses, briefly. Rate-limit counters are kept under a keyed hash of the address,
     never the address itself, and expire after about two hours. The web server keeps no access log, but

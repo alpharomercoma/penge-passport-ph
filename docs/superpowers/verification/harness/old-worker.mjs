@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  clickText, devOpen, emailSwitch, launch, linkIn, mailMark, mailSince, newNotes, ORIGIN, publishedDay, pushSwitch, REPO, resetRateLimits, RUN, send, shot, shown, sleep, SITE,
+  clickText, devOpen, emailSwitch, launch, linkIn, mailMark, waitMail, newNotes, ORIGIN, publishedDay, pushSwitch, REPO, resetRateLimits, RUN, send, shot, shown, sleep, SITE,
   waitText,
 } from './lib.mjs';
 
@@ -119,7 +119,7 @@ try {
   const email = `old-worker-${RUN}@example.com`;
   const mark = mailMark();
   await send(page, email);
-  await page.goto(linkIn(mailSince(mark, 'confirm', email)[0].text, '/confirm'), { waitUntil: 'networkidle0' });
+  await page.goto(linkIn((await waitMail(mark, 'confirm', email)).text, '/confirm'), { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Confirm alert' && !b.disabled), { timeout: 15_000 });
   await clickText(page, 'button', 'Confirm alert');
   await waitText(page, 'Notifications are on for this device.', 20_000);

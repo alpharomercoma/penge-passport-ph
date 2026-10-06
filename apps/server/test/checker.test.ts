@@ -706,6 +706,25 @@ describe('outbox integrity and backups', () => {
     await expect(importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: '../x', fields: {} }] })).rejects.toThrow();
   });
 
+  it('deletes backups 14 days old even when the day\'s upload fails, and retries the upload', async () => {
+    const w = await world();
+    let attempts = 0;
+    w.sink.putObject = async () => {
+      attempts++;
+      throw new Error('R2 refused the upload');
+    };
+    const deleted: string[] = [];
+    w.sink.deleteObject = async (key) => void deleted.push(key);
+    const stored = ['2026-09-13', '2026-09-14'].map((d) => `backups/subscribers/date=${d}/subscribers.json.gz`);
+    w.sink.listObjects = async (prefix) => (prefix === 'backups/subscribers/' ? stored : []);
+    await w.subscribe('ana@example.com', [486]);
+    await w.run();
+    // The address someone removed must still leave the old copies on time.
+    expect(deleted).toEqual([stored[0]]);
+    await w.run();
+    expect(attempts).toBe(2); // not marked done: the next run tries again
+  });
+
   it('backs up a subscriber whose only office has left the DFA\'s list', async () => {
     const w = await world();
     const gone = w.upstream.sitesList[0]!.id;

@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { BASE, REPO_URL } from '../links.ts';
 
 /** What the site and the Android app keep, as the runbook's inventory records it (deploy/README.md). */
-export const PRIVACY_UPDATED = '1 October 2026';
+export const PRIVACY_UPDATED = '6 October 2026';
 
 export function Privacy() {
   useEffect(() => {
@@ -81,8 +81,8 @@ export function Privacy() {
           hour, which drops anything deleted or expired, so a deleted address leaves it within the hour.
         </li>
         <li>
-          Backups are kept for 14 days: each day's backup deletes the older ones. If the storage cannot be reached,
-          they are deleted as soon as it can.
+          Backups are kept for 14 days: every day the older ones are deleted, even on a day whose own backup fails.
+          If the storage cannot be reached, or our server is down, they are deleted as soon as it is back.
         </li>
         <li>
           Emails go out from our own mail server, over an encrypted connection when your email provider offers one.
@@ -134,7 +134,8 @@ export function Privacy() {
       <p>
         Every alert email has an unsubscribe link. Unsubscribing deletes your address and your choices at once, with
         nothing to ask for or wait on. A sign-up you never confirm deletes itself after 48 hours. The last copies, in
-        the backups and the mail server's logs, are gone within 14 days.
+        the backups and the mail server's logs, are gone within 14 days. Backups can stay longer only while their
+        storage cannot be reached or our server is down (see above).
       </p>
       <p>
         You can also <a href={`${BASE}delete-data`}>stop alerts and delete your data here</a> before your first alert arrives or if you lose your email links. Enter your address, open the deletion link we email you, and press the button. This deletes your address, choices and waiting alerts and cancels unused sign-up links. We send the same link whether or not an address is subscribed. Anonymous totals and temporary abuse-prevention counters keep their usual retention periods described above.

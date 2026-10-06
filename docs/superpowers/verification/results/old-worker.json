@@ -1,11 +1,11 @@
 {
   "version": "Chrome/154.0.8037.98",
-  "run": "muw6raf0",
+  "run": "muw7f30w",
   "results": [
     {
       "item": "The two builds have different workers; only the new one handles pushes",
       "pass": true,
-      "note": "old 2e00b15acd4f, new 1d9aed889557"
+      "note": "old 2e00b15acd4f, new cab82d261bbb"
     },
     {
       "item": "The release before push: its worker is the active one and controls the page, and gives no capabilities answer (no message handler)",
@@ -15,7 +15,7 @@
     {
       "item": "After one reload and the switch: today's worker is the active one, controls the page and answers with its version, and a subscription exists",
       "pass": true,
-      "note": "version 1c43c31eb5bf, fcm.googleapis.com"
+      "note": "version 9179023810e4, fcm.googleapis.com"
     },
     {
       "item": "The switch came on within 10 s of the flip",

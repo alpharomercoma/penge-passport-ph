@@ -1,7 +1,7 @@
 // Verification harness for Task 17 (scratch only, never committed): drives the installed
 // Chrome and Firefox with throwaway profiles against the local stack.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +46,7 @@ export async function shot(page, name) {
 
 /** Every captured email, oldest first. */
 export function mails() {
-  return readdirSync(MAIL).sort().map((f) => ({ file: f, text: readFileSync(join(MAIL, f), 'utf8') }));
+  return readdirSync(MAIL).sort().map((f) => ({ file: f, at: statSync(join(MAIL, f)).mtimeMs, text: readFileSync(join(MAIL, f), 'utf8') }));
 }
 export function lastMail(kind, to) {
   const m = mails().filter((x) => x.file.endsWith(`-${kind}.txt`) && (!to || x.text.startsWith(`To: ${to}`)));
@@ -176,9 +176,22 @@ export async function waitNotes(page, count, ms = 20_000) {
 
 export const RUN = Date.now().toString(36);
 /** How many emails were captured before this point: later reads look only after it. */
-export const mailMark = () => mails().length;
+/**
+ * The mail captured so far, each file with the time it was written: the local stack numbers its files
+ * afresh after a restart and writes over old files of the same name.
+ */
+export const mailMark = () => new Map(mails().map((m) => [m.file, m.at]));
+/** The first email of a kind to an address since the mark, waiting for it: sending follows the page's answer. */
+export async function waitMail(mark, kind, to, ms = 15_000) {
+  for (let waited = 0; waited <= ms; waited += 250) {
+    const [mail] = mailSince(mark, kind, to);
+    if (mail) return mail;
+    await sleep(250);
+  }
+  throw new Error(`no ${kind} email to ${to} within ${ms / 1000} s`);
+}
 export function mailSince(mark, kind, to) {
-  return mails().slice(mark).filter((m) => m.file.endsWith(`-${kind}.txt`) && m.text.startsWith(`To: ${to}`));
+  return mails().filter((m) => mark.get(m.file) !== m.at && m.file.endsWith(`-${kind}.txt`) && m.text.startsWith(`To: ${to}`));
 }
 
 /** Waits for the page's service worker to be active. */
