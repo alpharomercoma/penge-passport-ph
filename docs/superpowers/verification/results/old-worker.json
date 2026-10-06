@@ -1,0 +1,31 @@
+{
+  "version": "Chrome/154.0.8037.98",
+  "run": "muw6raf0",
+  "results": [
+    {
+      "item": "The two builds have different workers; only the new one handles pushes",
+      "pass": true,
+      "note": "old 2e00b15acd4f, new 1d9aed889557"
+    },
+    {
+      "item": "The release before push: its worker is the active one and controls the page, and gives no capabilities answer (no message handler)",
+      "pass": true,
+      "note": "{\"controlled\":true,\"isActive\":true,\"reply\":null,\"endpoint\":null}"
+    },
+    {
+      "item": "After one reload and the switch: today's worker is the active one, controls the page and answers with its version, and a subscription exists",
+      "pass": true,
+      "note": "version 1c43c31eb5bf, fcm.googleapis.com"
+    },
+    {
+      "item": "The switch came on within 10 s of the flip",
+      "pass": true,
+      "note": "3.4 s"
+    },
+    {
+      "item": "After the upgrade, a notifications-only alert is confirmed and delivered",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo / Mon 12 Oct · for 1 person\"]"
+    }
+  ]
+}

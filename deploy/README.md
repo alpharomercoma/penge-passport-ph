@@ -434,9 +434,12 @@ pushed to, or never set up; turning off, unsubscribing and deleting are not coun
 
 ## Rolling back once push is on
 
-First, switch push off (`PUSH_MODE=off`) on the new release. The release before push does not know
-devices or channel requests, and would confirm a pending "notifications only" request as email. If it
-is really needed, in a maintenance window:
+First, switch push off (`PUSH_MODE=off`) on the new release, then wait 5 minutes before going on.
+The release before push does not know devices or channel requests, and would confirm a pending
+"notifications only" request as email. Pages already open in people's browsers are this release's;
+they read the status every minute, and an open alert form drops its notifications switch (keeping
+email) once it reads that push is off. The wait lets the pages that are awake and online do that; it
+is not a guarantee (below). If it is really needed, in a maintenance window:
 
 ```sh
 systemctl disable --now penge-check.timer
@@ -451,6 +454,25 @@ systemctl enable --now penge-check.timer
 unsubscribes people who chose push only (they had no email to fall back on). A version 2 backup (this
 release's) must be turned into version 1 before the old release can restore it:
 `admin.mjs backup-to-v1 <file> > v1.json` (it leaves out people with email off).
+
+What pages left open from this release do after the switch, until they are reloaded (accepted: a
+rollback is an emergency; at worst a person gets email alerts they can stop in one click, or signs up
+again):
+
+- A tab that did not read the status during the wait (frozen in a phone's background, or offline:
+  a failed read keeps the last status) can still send a request with email off and notifications on.
+  The release before push ignores the channels: once confirmed, that person gets email alerts, which
+  every email lets them stop in one click.
+- A confirmation page opened before the switch already showed its summary. For an email-only
+  request, which survives the rollback, pressing Confirm turns the alert on at the old server, but
+  the page shows an error (the old server's answer has no channels), and the link is used up. The
+  alert is on all the same, as its first alert email shows; signing up again with the same address
+  replaces it rather than adding a second. A request that changed channels was cancelled by
+  `push-downgrade`: its link no longer works, and that person signs up again.
+- A confirmation link opened after the switch shows the old confirmation page, which works for
+  email-only requests.
+- Service workers update themselves at the next visit; the old one does not handle pushes, and none
+  are sent.
 
 ## Rollout backups
 

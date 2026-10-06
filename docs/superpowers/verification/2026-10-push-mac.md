@@ -23,8 +23,9 @@ belongs to macOS and is not in the screenshots. "Nothing arrived" waits 10 secon
 each run's id and browser version: `results/chrome-push.json`, `results/firefox-push.json`,
 `results/chrome-more.json`, `results/cross.json`.
 
-**Count:** 53 recorded checks: 52 passed, 0 failed, 1 observation (Firefox private browsing).
-Not run in a browser: 3 (below), each with the automated test that covers it.
+**Count:** 53 recorded checks: 52 passed, 0 failed, 1 observation (Firefox private browsing),
+plus the upgrade from the release before push (5 checks, below). Not run in a browser: 2 (below),
+each with the automated test that covers it.
 
 ## Push only, in each browser (`push-flow.mjs`, 14 checks each)
 
@@ -70,13 +71,27 @@ Not run in a browser: 3 (below), each with the automated test that covers it.
 | Firefox then turns push on for the same address: one subscriber has two registered devices | pass | |
 | A test sent from Chrome is accepted, reaches Chrome, and nothing reaches Firefox (the same subscriber's other device) within 10 s | pass | |
 
+## The upgrade from the release before push (`old-worker.mjs`, 5 checks)
+
+Run afterwards, on 6 October, in Chrome `154.0.8037.98` (`results/old-worker.json`). The release before
+push (`157bad9`, in a throwaway worktree with its own `npm ci`) was built and served on port 4173; its
+worker installed and took control of the page. Then today's build was served on the same port, the
+page reloaded once, and the switch turned on.
+
+| Check | Result | Screenshot |
+| --- | --- | --- |
+| The two builds' workers differ; only today's handles pushes | pass | |
+| The old release's worker is the registration's active worker and controls the page; asked for its capabilities, it gives no answer (it has no message handler) | pass | `old-worker-before` |
+| After one reload and the switch: today's worker is the active worker, controls the page and answers with its version; a subscription exists (on `fcm.googleapis.com`) | pass | `old-worker-after` |
+| The switch came on within 10 s of the flip | pass (3.4 s) | |
+| Then, notifications only: confirmed by email, the row On, and an alert shows one notification "Dates open at Antipolo" | pass | |
+
 ## Not run in a browser
 
 | Plan item | Why | Covered by |
 | --- | --- | --- |
 | Permission dismissed (the switch stays off, no hint) | A browser's own permission prompt cannot be dismissed under automation | `apps/web/test/sheet.test.tsx`, "turns email back on when push fails to come on and email was off" (a dismissed answer) |
 | Tapping the notification | It is a macOS notification, outside the browser | `apps/web/test/pwa.test.ts`, "navigates an open window to the office instead of opening another", and the notification data checked above |
-| Old worker: a worker from the release before push, replaced within 10 s | Needs serving two releases on one port in turn | `apps/web/test/notify.test.ts`, "waits for the new worker when the real old one (from the last release) is active": the old worker is the real `sw.js` from `157bad9` and the new one the plugin's build of today's `sw.js`; the browser's update and `controllerchange` are simulated. Weaker than the browser run the plan asks for. |
 
 ## Found and fixed along the way
 
