@@ -9,7 +9,7 @@ dir=${PENGE_BACKUP_DIR:-/root/penge-backups}
 now=$(date -u +%Y%m%d%H%M%S)
 for f in "$dir"/*-expires-*; do
   # Only regular files, never a link or a folder.
-  [ -f "$f" ] && [ ! -L "$f" ] || continue
+  if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
   rest=${f##*-expires-}
   case $rest in
     [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
