@@ -42,6 +42,7 @@ import {
 } from './abroad.ts';
 import { unsubscribeLinks } from './api.ts';
 import { type DevicePassReport, notificationPass } from './devices/delivery.ts';
+import { deviceCleanup } from './devices/cleanup.ts';
 import { acquireLock, heartbeat, releaseLock, renewLock } from './devices/lock.ts';
 import { writeQueue } from './devices/queue.ts';
 import type { Transport } from './devices/transport.ts';
@@ -291,16 +292,26 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
   const started = now();
   const runId = deps.runId ?? newRunId(started);
 
-  if (await kv.get(K.scanCooldown)) {
-    log.info('the site had trouble on a recent scan; resting before the next', { runId });
-    return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
-  }
   if (!(await acquireLock(kv, runId, LOCK_TTL_SECONDS))) {
     log.warn('another check is running; skipping this one', { runId });
     return { runId, skipped: 'locked', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
   }
   const beat = heartbeat(kv, runId, LOCK_TTL_SECONDS);
   try {
+    // Notification clean-up first, every run, cooldown or not; its failure skips only the notification pass.
+    let devicesClean = false;
+    if (deps.devices) {
+      try {
+        await deviceCleanup({ kv, log, now, stampNow: deps.stampNow! }, runId);
+        devicesClean = true;
+      } catch (err) {
+        log.error('notification clean-up failed; no notifications this run', { runId, err: err as Error });
+      }
+    }
+    if (await kv.get(K.scanCooldown)) {
+      log.info('the site had trouble on a recent scan; resting before the next', { runId });
+      return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
+    }
     await restartGapsOnNewBoot(deps, deps.stampNow!);
     const holdLock = async () => {
       if (!(await renewLock(kv, runId, LOCK_TTL_SECONDS))) throw new Error('lost the checker lock; stopping this run');
@@ -356,7 +367,7 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
       if (abroadScan && !delivery.stoppedBy) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, abroadScan]));
       return delivery;
     })();
-    const devicesTask = deps.devices
+    const devicesTask = deps.devices && devicesClean
       ? notificationPass(
           {
             kv, keys: deps.keys, log, now, stampNow: deps.stampNow!, mode: deps.devices.mode, transport: deps.devices.transport,

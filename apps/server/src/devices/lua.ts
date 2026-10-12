@@ -37,6 +37,8 @@ const KEY_PREFIXES = {
   paused: K.pushPaused,
   lock: K.checkLock,
   cleanupLock: K.devCleanupLock,
+  /** The checker's lock by name, whichever lock KEY.lock is for this run. */
+  checkLock: K.checkLock,
 };
 
 const PRELUDE = `

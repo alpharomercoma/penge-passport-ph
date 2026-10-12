@@ -6,7 +6,13 @@ local WINDOW_MS = 3 * 3600000
 local MAX_DATES = 30
 local MAX_JOB_BYTES = 4096
 
-local function lock_ok() return redis.call('GET', KEY.lock) == A.run end
+local function lock_ok()
+  if redis.call('GET', KEY.lock) ~= A.run then return false end
+  -- A clean-up run (its own lock, admin.mjs device-cleanup) stops while a checker holds the checker's: it must never
+  -- take a live run's claims for abandoned ones. A checker that starts after a clean-up step finds that step done.
+  if KEY.lock ~= KEY.checkLock and redis.call('EXISTS', KEY.checkLock) == 1 then return false end
+  return true
+end
 local function slice(t, i, j)
   local out = {}
   for k = i, math.min(j, #t) do out[#out + 1] = t[k] end

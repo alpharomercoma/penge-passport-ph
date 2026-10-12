@@ -526,3 +526,206 @@ export function setCursor(kv: Kv, a: { now: number; run: string; kind: 'domestic
 export function settle(kv: Kv, a: { now: number; run: string; id: string; cid: string; stamp: Stamp; result: SendResult['kind'] | 'unattempted'; backoffUntil: number | null; svc?: string }): Promise<{ ok: boolean; outcome?: string }> {
   return settleScript.run(kv, { stats: statsKey(a.now) }, { ...a, svc: a.svc ?? 'fcm', backoffUntil: a.backoffUntil ?? false });
 }
+
+export const reclaimLockedScript = deviceScript(
+  'dev-reclaim-locked',
+  `${STORE_LIB}${DELIVERY_LIB}
+need_store() need(KEY.lock, 'string')
+if not lock_ok() then return '{"lost":true}' end
+return cjson.encode(reclaim(A.limit))
+`,
+  { reclaim: true },
+);
+
+export function reclaimLocked(kv: Kv, a: { now: number; run: string; limit: number }): Promise<{ lost?: true; expired: number; ended: number; deleted: number }> {
+  return reclaimLockedScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const garbageScript = deviceScript(
+  'dev-garbage',
+  `${ALL_LIBS}
+need_store() need(KEY.lock, 'string') need(KEY.queue, 'hash') need(KEY.queued, 'zset')
+if not lock_ok() then return '{"lost":true}' end
+local all = hgetall(KEY.garbage)
+local ids = {}
+for id, units in pairs(all) do
+  integer(units, 'garbage ' .. id)
+  ids[#ids + 1] = id
+end
+table.sort(ids)
+local removed = 0
+for i = 1, math.min(#ids, A.limit) do
+  local id = ids[i]
+  local keys = { KEY.held .. id, KEY.claim .. id, KEY.last .. id, KEY.tried .. id }
+  for _, day in ipairs(A.days) do keys[#keys + 1] = KEY.today .. id .. ':' .. day end
+  redis.call('DEL', unpack(keys))
+  redis.call('HDEL', KEY.queue, id)
+  redis.call('ZREM', KEY.queued, id)
+  redis.call('HDEL', KEY.garbage, id)
+  rec_add('units', -N(all[id]))
+  removed = removed + 1
+end
+if removed > 0 then count('garbage_removed', removed) end
+return cjson.encode({ removed = removed, left = #ids - removed })
+`,
+  { reclaim: true },
+);
+
+export function collectGarbage(kv: Kv, a: { now: number; run: string; limit: number; days: string[] }): Promise<{ lost?: true; removed: number; left: number }> {
+  return garbageScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const aliveScript = deviceScript('dev-alive', `need(KEY.ends, 'zset') return cjson.encode(redis.call('ZRANGE', KEY.ends, 0, -1))`, { reclaim: true });
+
+export async function aliveAlerts(kv: Kv): Promise<string[]> {
+  const out = await aliveScript.run<string[] | Record<string, never>>(kv, {}, { now: 0 });
+  return Array.isArray(out) ? out : [];
+}
+
+export const sweepScript = deviceScript(
+  'dev-sweep',
+  `${ALL_LIBS}${NEED_ALERT}
+for _, id in ipairs(A.ids) do need_alert(id) end
+if not lock_ok() then return '{"lost":true}' end
+-- Every claim this sweep will put back has its charged counter checked before the first write (put_back's own check
+-- would come after earlier alerts' writes).
+for _, id in ipairs(A.ids) do
+  local c = hgetall(KEY.claim .. id)
+  if c.cid ~= nil and c.run ~= A.run and c.state ~= 'sending' then charged_ok(id, c) end
+  -- And every alert's fields the pruning reads (offices, group, numbers): one damaged alert stops the chunk unwritten.
+  alert_check(id, alert_get(id))
+end
+local out = { recovered = 0, uncertain = 0, pruned = 0 }
+for _, id in ipairs(A.ids) do
+  local a = alert_get(id)
+  -- Claims left by a run that lost the lock: still claimed, put back unattempted; sending, settled as uncertain.
+  local c = hgetall(KEY.claim .. id)
+  if c.cid ~= nil and c.run ~= A.run then
+    if c.state == 'sending' then
+      redis.call('DEL', KEY.claim .. id)
+      count('claims_recovered_uncertain')
+      out.uncertain = out.uncertain + 1
+    else
+      put_back(id, c, a, false, A.stamp)
+      count('claims_recovered')
+      out.recovered = out.recovered + 1
+    end
+  end
+  -- Queued and held work: only this incarnation's, choices and window.
+  local live = {}
+  local q = job_decode(redis.call('HGET', KEY.queue, id))
+  if q then
+    local kept, drop = job_prune(q, a, A.stamp)
+    count_drops(drop)
+    out.pruned = out.pruned + drop.choices + drop.window + drop.unknown
+    if kept then
+      redis.call('HSET', KEY.queue, id, cjson.encode(kept))
+      redis.call('ZADD', KEY.queued, oldest_wall(kept), id)
+      for _, d in ipairs(kept.d) do live[dkey(d)] = true end
+    else
+      redis.call('HDEL', KEY.queue, id)
+      redis.call('ZREM', KEY.queued, id)
+    end
+  end
+  local h = job_decode(redis.call('GET', KEY.held .. id))
+  if h then
+    local kept, drop = job_prune(h, a, A.stamp)
+    count_drops(drop)
+    out.pruned = out.pruned + drop.choices + drop.window + drop.unknown
+    if kept then
+      redis.call('SET', KEY.held .. id, cjson.encode(kept))
+      for _, d in ipairs(kept.d) do live[dkey(d)] = true end
+    else
+      redis.call('DEL', KEY.held .. id)
+    end
+  end
+  local cj = job_decode(redis.call('HGET', KEY.claim .. id, 'job'))
+  if cj then for _, d in ipairs(cj.d) do live[dkey(d)] = true end end
+  -- Tries are kept only for dates still in the alert's work.
+  for field in pairs(hgetall(KEY.tried .. id)) do
+    if field ~= 'run' and not live[field] then redis.call('HDEL', KEY.tried .. id, field) end
+  end
+end
+return cjson.encode(out)
+`,
+  { reclaim: true },
+);
+
+export function sweep(kv: Kv, a: { now: number; run: string; stamp: Stamp; ids: string[] }): Promise<{ lost?: true; recovered: number; uncertain: number; pruned: number }> {
+  return sweepScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const fanoutExpireScript = deviceScript(
+  'dev-fanout-expire',
+  `${STORE_LIB}${DELIVERY_LIB}
+need(KEY.lock, 'string') need(KEY.fanouts, 'list')
+if not lock_ok() then return '{"lost":true}' end
+-- A batch whose every announcement is past its 3-hour window (or of unknown age) holds nothing sendable: it goes,
+-- even while the notification pass is not running (a cooldown, a rollback's pre-step).
+-- Every batch read and decided first; a stamp that is not one has no known age. Then the writes.
+local gone = {}
+for _, id in ipairs(redis.call('LRANGE', KEY.fanouts, 0, -1)) do
+  local fk = KEY.fanout .. id
+  local sk = fk .. ':stamps'
+  need(fk, 'list') need(sk, 'string')
+  local ok, meta = pcall(cjson.decode, redis.call('GET', sk) or 'null')
+  local live = false
+  if ok and type(meta) == 'table' and type(meta.stamps) == 'table' then
+    for _, st in ipairs(meta.stamps) do
+      if stamp_ok(st) then
+        local age = elapsed(st, A.stamp)
+        if age ~= nil and age <= WINDOW_MS then live = true end
+      end
+    end
+  end
+  if not live then gone[#gone + 1] = id end
+end
+local removed = 0
+for _, id in ipairs(gone) do
+  local fk = KEY.fanout .. id
+  redis.call('DEL', fk, fk .. ':stamps')
+  redis.call('LREM', KEY.fanouts, 0, id)
+  removed = removed + 1
+end
+if removed > 0 then count('fanout_expired', removed) end
+return cjson.encode({ removed = removed })
+`,
+  { reclaim: true },
+);
+
+export function expireFanouts(kv: Kv, a: { now: number; run: string; stamp: Stamp }): Promise<{ lost?: true; removed: number }> {
+  return fanoutExpireScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const recountScript = deviceScript(
+  'dev-recount',
+  `${STORE_LIB}${DELIVERY_LIB}
+need_store() need(KEY.lock, 'string')
+if not lock_ok() then return '{"lost":true}' end
+local alive = redis.call('ZCARD', KEY.ends)
+local rsvAlert, rsvRepl, unfinished = 0, 0, 0
+for _, cred in ipairs(redis.call('ZRANGE', KEY.ops, 0, -1)) do
+  unfinished = unfinished + 1
+  local rsv = redis.call('HGET', KEY.op .. cred, 'rsv')
+  if rsv == 'alert' then rsvAlert = rsvAlert + 1 elseif rsv == 'repl' then rsvRepl = rsvRepl + 1 end
+end
+local finishedOps, ended = 0, 0
+for _, m in ipairs(redis.call('ZRANGE', KEY.deadlines, 0, -1)) do
+  if string.sub(m, 1, 3) == 'op|' then finishedOps = finishedOps + 1 else ended = ended + 1 end
+end
+local garbage = 0
+for _, v in pairs(hgetall(KEY.garbage)) do garbage = garbage + N(v) end
+local expectedUnits = alive * ALERT_UNITS + unfinished + finishedOps + ended + garbage + (rsvAlert + rsvRepl) * ALERT_UNITS
+local out = { units = rec('units'), expectedUnits = expectedUnits, alerts = rec('alerts'), expectedAlerts = alive + rsvAlert }
+redis.call('HSET', K.stats, 'recounted', '1')
+if out.units ~= out.expectedUnits or out.alerts ~= out.expectedAlerts then count('recount_differences') end
+return cjson.encode(out)
+`,
+  { reclaim: true },
+);
+
+export async function recount(kv: Kv, now: number, run: string): Promise<{ units: number; expectedUnits: number; alerts: number; expectedAlerts: number }> {
+  const r = await recountScript.run<{ lost?: true; units: number; expectedUnits: number; alerts: number; expectedAlerts: number }>(kv, { stats: statsKey(now) }, { now, run });
+  if (r.lost) throw new LostLock();
+  return r;
+}

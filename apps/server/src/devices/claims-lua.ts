@@ -7,9 +7,12 @@ local function give_back(id, c)
   local v = tonumber(redis.call('GET', tk) or '')
   if v ~= nil and v > 0 then redis.call('DECR', tk) end
 end
--- The claim's charged counter, checked before a step's first write: today's key is a string holding a canonical integer.
+-- A claim as the claim script writes it, and its charged counter (a string holding a canonical integer), checked before
+-- a step's first write: putting it back writes or compares every one of these fields.
 local function charged_ok(id, c)
-  if c.day == nil then return end
+  for _, f in ipairs({ 'cid', 'run', 'inc', 'gen', 'rev', 'day', 'prev', 'at', 'state', 'job' }) do
+    if type(c[f]) ~= 'string' then error('damaged claim ' .. id .. ': ' .. f) end
+  end
   local tk = KEY.today .. id .. ':' .. c.day
   need(tk, 'string')
   counter(tk)

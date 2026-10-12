@@ -290,3 +290,22 @@ describe('the notification pass', () => {
     expect(pushes.sent).toHaveLength(1);
   });
 });
+
+describe('clean-up in a run', () => {
+  it('runs before the cooldown, so a resting run still cleans up', async () => {
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
+    const a = await seedAlert(w.kv, { now: w.t.now() - 1000, end: w.t.now() - 1 });
+    await w.kv.set(K.scanCooldown, 'x', { ttlSeconds: 600 });
+    expect((await w.run()).skipped).toBe('cooling down');
+    expect(await w.kv.hGetAll(K.devAlert(a.id))).toEqual({});
+  });
+
+  it('skips only the notification pass when clean-up fails; scans and email go on', async () => {
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
+    await w.kv.set(K.devGarbage, 'not a hash');
+    const report = await w.run();
+    expect(report.healthy).toBe(true);
+    expect(report.devices).toBeNull();
+    expect(w.lines.some((l) => l.includes('notification clean-up failed'))).toBe(true);
+  });
+});

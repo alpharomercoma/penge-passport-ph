@@ -3,6 +3,7 @@
 //   node admin.mjs backup > subscribers.json          every subscriber, still encrypted
 //   node admin.mjs restore subscribers.json[.gz] --yes
 //   node admin.mjs scans 2026-10-01 [abroad] > day.jsonl
+//   node admin.mjs device-cleanup                      notification clean-up (the rollback's pre-step)
 //
 // The daily backups the checker stores in R2 (backups/subscribers/date=…/)
 // restore the same way once downloaded. `scans` rebuilds a UTC day's scan
@@ -15,13 +16,18 @@ import { exportSubscribers, importSubscribers } from './backup.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { K } from './keys.ts';
 import { connectRedis } from './kv.ts';
-import { silentLog } from './log.ts';
+import { stampAt } from './clock.ts';
+import { deviceCleanup } from './devices/cleanup.ts';
+import { acquireLock, releaseLock } from './devices/lock.ts';
+import { log, silentLog } from './log.ts';
 import { r2Sink, readSpool } from './r2.ts';
 import { rebuild, RECORD_SCHEMA, type ScanRecord } from './record.ts';
 
-const USAGE = 'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl\n';
+const COMMANDS = ['backup', 'restore', 'scans', 'device-cleanup'];
+const USAGE =
+  'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl | admin.mjs device-cleanup\n';
 const [command, file, confirm] = process.argv.slice(2);
-if (command !== 'backup' && command !== 'restore' && command !== 'scans') {
+if (!command || !COMMANDS.includes(command)) {
   process.stderr.write(USAGE);
   process.exit(2);
 }
@@ -61,6 +67,41 @@ if (command === 'scans') {
     `${records.length} records (${waiting.length} still in the spool), ${states.length} states${gaps.length ? `, ${gaps.length} gaps:\n${gaps.join('\n')}` : ''}\n`,
   );
   process.exitCode = gaps.length ? 1 : 0;
+}
+if (command === 'device-cleanup') {
+  // The rollback's pre-step (deploy/README.md): an older release's checker does not clean notification alerts. It takes
+  // its own lock (a "cleanup-…" run: pp:lock:device-cleanup), never the checker's, logs a failure and always exits 0,
+  // so it can never stop the old checker or email. It does nothing while any checker run holds pp:lock:check (only this
+  // release's checker touches pp:dev:*, and its own run cleans up anyway).
+  const runId = `cleanup-${Date.now().toString(36)}`;
+  try {
+    const config = loadConfig();
+    // node-redis retries even its first connection for ever: past its 10 s connect timeout, the clean-up is given up
+    // (process.exit below ends the retries), so the rollback's pre-step never waits on a Valkey that is down.
+    const kv = await Promise.race([
+      connectRedis(config.redisUrl, (err) => process.stderr.write(`redis: ${err.message}\n`)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('could not connect to Valkey within 10 s')), 10_000).unref()),
+    ]);
+    try {
+      if (await kv.get(K.checkLock)) {
+        log.warn('a check is running; device clean-up skipped');
+      } else if (await acquireLock(kv, runId, 300)) {
+        try {
+          const r = await deviceCleanup({ kv, log, now: Date.now, stampNow: () => stampAt(Date.now()) }, runId);
+          log.info('device clean-up done', { ...r });
+        } finally {
+          await releaseLock(kv, runId);
+        }
+      } else {
+        log.warn('another device clean-up is running; skipped');
+      }
+    } finally {
+      await kv.close().catch(() => {});
+    }
+  } catch (err) {
+    log.error('device clean-up failed', { err: err as Error });
+  }
+  process.exit(0);
 }
 if (command === 'restore' && (!file || confirm !== '--yes')) {
   process.stderr.write('restore puts subscribers back without displacing anyone; add --yes to go ahead\n');
