@@ -20,16 +20,16 @@ export const skipRegistration = () => settle(null);
 export const registration = () => done;
 export const workerFailed = () => failed;
 
-function ask(worker: ServiceWorker, ms: number): Promise<{ push?: boolean } | null> {
+function ask(worker: ServiceWorker, ms: number): Promise<{ push?: boolean; deviceAlerts?: number } | null> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    const finish = (answer: { push?: boolean } | null) => {
+    const finish = (answer: { push?: boolean; deviceAlerts?: number } | null) => {
       clearTimeout(timer);
       channel.port1.close();
       resolve(answer);
     };
     const timer = setTimeout(() => finish(null), ms);
-    channel.port1.onmessage = (e) => finish(e.data as { push?: boolean });
+    channel.port1.onmessage = (e) => finish(e.data as { push?: boolean; deviceAlerts?: number });
     worker.postMessage({ type: 'capabilities' }, [channel.port2]);
   });
 }
@@ -63,7 +63,8 @@ export async function readyWorker(timeoutMs = 10_000): Promise<{ registration: S
     while (!expired) {
       const active = reg.active ?? (await until(navigator.serviceWorker.ready))?.active ?? null;
       if (expired) return null;
-      if (active && (await until(ask(active, 1000)))?.push) return { registration: reg };
+      // Only a worker of this design (deviceAlerts: 1); an older one is asked to update, and waited for.
+      if (active && (await until(ask(active, 1000)))?.deviceAlerts === 1) return { registration: reg };
       if (expired) return null;
       // Swapped while we asked: ask the new one.
       if (reg.active && reg.active !== active) continue;

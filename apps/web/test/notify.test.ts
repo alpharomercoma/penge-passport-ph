@@ -107,7 +107,7 @@ describe('turning push on', () => {
     vi.resetModules();
     const { readyWorker: realReady, register } = await vi.importActual<typeof import('../src/notify/worker.ts')>('../src/notify/worker.ts');
     const swListeners: Record<string, () => void> = {};
-    const newWorker = { postMessage: (_d: unknown, ports: MessagePort[]) => ports[0]!.postMessage({ push: true }) } as unknown as ServiceWorker;
+    const newWorker = { postMessage: (_d: unknown, ports: MessagePort[]) => ports[0]!.postMessage({ push: true, deviceAlerts: 1 }) } as unknown as ServiceWorker;
     const reg: { active: ServiceWorker; update: ReturnType<typeof vi.fn> } = {
       // The old worker never answers; while it is being asked, the browser swaps in the new one.
       active: { postMessage: () => { setTimeout(() => { reg.active = newWorker; swListeners.controllerchange?.(); }, 10); } } as unknown as ServiceWorker,
@@ -125,7 +125,7 @@ describe('turning push on', () => {
     vi.resetModules();
     const { readyWorker: realReady, register } = await vi.importActual<typeof import('../src/notify/worker.ts')>('../src/notify/worker.ts');
     const swListeners: Record<string, () => void> = {};
-    const newWorker = { postMessage: (_d: unknown, ports: MessagePort[]) => ports[0]!.postMessage({ push: true }) } as unknown as ServiceWorker;
+    const newWorker = { postMessage: (_d: unknown, ports: MessagePort[]) => ports[0]!.postMessage({ push: true, deviceAlerts: 1 }) } as unknown as ServiceWorker;
     const reg: { active: ServiceWorker; update: ReturnType<typeof vi.fn> } = {
       active: { postMessage: () => {} } as unknown as ServiceWorker, // the old worker: silent
       // Its fetch of sw.js stalls; meanwhile the install that was already under way finishes.

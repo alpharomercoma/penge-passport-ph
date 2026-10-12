@@ -123,6 +123,7 @@ function worker(opts: { online?: boolean; oldCaches?: string[]; indexedDB?: IDBF
       return { addAll: async (urls: string[]) => urls.forEach((u) => cache.set(urlOf(u), `cached ${urlOf(u)}`)) };
     },
     keys: async () => [...stored.keys()],
+    has: async (name: string) => stored.has(name),
     delete: async (name: string) => stored.delete(name),
     // Stored as a server sending "Vary: Origin" answers a request without one (vite preview does).
     match: async (r: Req, o: { cacheName: string; ignoreVary?: boolean }) => {
@@ -177,7 +178,8 @@ describe('service worker', () => {
     expect([...w.stored.get(w.cacheName)!.keys()]).toEqual(w.shell.map((u) => new URL(u, SCOPE).href));
     expect(w.self.skipWaiting).toHaveBeenCalled();
     await w.lifecycle('activate');
-    expect([...w.stored.keys()].sort()).toEqual([w.cacheName, ...others].sort());
+    // The one-time reload's marker is kept for good.
+    expect([...w.stored.keys()].sort()).toEqual([w.cacheName, 'pengepassportph-device-alerts-v1', ...others].sort());
     expect(w.self.clients.claim).toHaveBeenCalled();
   });
 
@@ -273,7 +275,7 @@ describe('service worker', () => {
     const w = worker();
     const port = { postMessage: vi.fn() };
     await w.fire('message', { data: { type: 'capabilities' }, ports: [port] });
-    expect(port.postMessage).toHaveBeenCalledWith({ version: expect.stringMatching(/^[0-9a-f]{12}$/), push: true });
+    expect(port.postMessage).toHaveBeenCalledWith({ version: expect.stringMatching(/^[0-9a-f]{12}$/), push: true, deviceAlerts: 1 });
   });
 
   it('keeps the notification mark the same drawing as the Android monochrome icon', () => {

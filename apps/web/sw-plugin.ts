@@ -38,7 +38,7 @@ export function serviceWorker(): Plugin {
       }
       for (const name of PUBLIC_SHELL) hash.update(`${name}\n`).update(readFileSync(join(publicDir, name)));
       const source = worker
-        .replace('/* __SHARED__ */', () => shared)
+        .replace('/* __STATE__ */', () => shared)
         .replace('__VERSION__', () => hash.digest('hex').slice(0, 12))
         .replace('__SHELL__', () => JSON.stringify(shell));
       this.emitFile({ type: 'asset', fileName: 'sw.js', source });

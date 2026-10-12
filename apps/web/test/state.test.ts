@@ -10,12 +10,15 @@ export function fakeLocks() {
   const queues = new Map<string, Promise<unknown>>();
   return {
     held: [] as string[],
-    request(name: string, fn: () => Promise<unknown>) {
+    request(name: string, a: unknown, b?: unknown) {
+      // (name, fn) or (name, { ifAvailable }, fn): with ifAvailable, a held name gives fn(null) at once.
+      const fn = (typeof a === 'function' ? a : b) as (lock: { name: string } | null) => Promise<unknown>;
+      if (typeof a === 'object' && (a as { ifAvailable?: boolean } | null)?.ifAvailable && this.held.includes(name)) return Promise.resolve().then(() => fn(null));
       const prev = queues.get(name) ?? Promise.resolve();
       const run = prev.then(async () => {
         this.held.push(name);
         try {
-          return await fn();
+          return await fn({ name });
         } finally {
           this.held.splice(this.held.indexOf(name), 1);
         }
