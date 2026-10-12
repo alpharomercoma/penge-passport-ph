@@ -80,7 +80,11 @@ envset() {
   # Every other line kept: the keys above all.
   [ "\$(grep -cvE "^\$1=" "\$f" || true)" = "\$(grep -cvE "^\$1=" "\$tmp" || true)" ] || { rm -f "\$tmp"; die "server.env rewrite lost lines"; }
   grep -q "^EMAIL_ENC_KEY=" "\$tmp" || { rm -f "\$tmp"; die "server.env rewrite lost EMAIL_ENC_KEY"; }
-  chown --reference="\$f" "\$tmp"; chmod --reference="\$f" "\$tmp"; sync -f "\$tmp" 2>/dev/null || true; mv "\$tmp" "\$f"
+  # Each step checked on its own (this can run where errexit is off, inside an if).
+  chown --reference="\$f" "\$tmp" || { rm -f "\$tmp"; die "could not keep server.env's owner"; }
+  chmod --reference="\$f" "\$tmp" || { rm -f "\$tmp"; die "could not keep server.env's mode"; }
+  sync -f "\$tmp" 2>/dev/null || true
+  mv "\$tmp" "\$f" || { rm -f "\$tmp"; die "could not replace server.env"; }
 }
 envget() { grep -E "^\$1=" /etc/penge/server.env | tail -1 | cut -d= -f2- || true; }
 timerOn() { systemctl enable --now penge-check.timer && [ "\$(systemctl is-active penge-check.timer)" = active ]; }
@@ -105,7 +109,7 @@ restoreOrig() {
   local orig; orig=\$(state orig_release)
   [ -d "/opt/penge/\$orig" ] || { echo "!! \$orig is gone from the server"; return 1; }
   quiesce || { echo "!! could not stop the checker"; return 1; }
-  envset PUSH_MODE off
+  envset PUSH_MODE off || { echo "!! could not set PUSH_MODE=off"; return 1; }
   if [ "\$(readlink /opt/penge/current)" != "\$orig" ]; then ln -sfn "\$orig" /opt/penge/current.new && mv -T /opt/penge/current.new /opt/penge/current || { echo "!! could not switch current back"; return 1; }; fi
   [ "\$(readlink /opt/penge/current)" = "\$orig" ] || { echo "!! current is \$(readlink /opt/penge/current)"; return 1; }
   restartApi off || { echo "!! penge-api did not restart on \$orig"; return 1; }
@@ -115,8 +119,13 @@ restoreOrig() {
 tokenOk() { [[ \$(envget PUSH_OWNER_TOKEN) =~ ^[A-Za-z0-9_-]{32,256}\$ ]]; }
 # One check on what is current, now; prints its run id if it finished healthy (not skipped), and fails otherwise.
 oneCheck() {
-  systemctl start penge-check.service || true
-  local inv; inv=\$(systemctl show -p InvocationID --value penge-check.service)
+  local before inv
+  before=\$(systemctl show -p InvocationID --value penge-check.service)
+  # A run of its own, started now (on the release that is current), that systemd counts as a success.
+  systemctl start penge-check.service || { echo "the check did not run (or was not healthy)" >&2; return 1; }
+  inv=\$(systemctl show -p InvocationID --value penge-check.service)
+  { [ -n "\$inv" ] && [ "\$inv" != "\$before" ]; } || { echo "no new check ran (another may have been running): run check again" >&2; return 1; }
+  [ "\$(systemctl show -p Result --value penge-check.service)" = success ] || { echo "the check did not succeed" >&2; return 1; }
   journalctl _SYSTEMD_INVOCATION_ID="\$inv" -o cat --no-pager | /usr/local/bin/node -e '
     let t = ""; process.stdin.on("data", (c) => (t += c)).on("end", () => {
       const done = t.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((l) => l && l.msg === "check finished").pop();
@@ -201,6 +210,9 @@ stop)
   say "The window starts: server.env kept as it was; no new check; a running one finishes; the API stops"
   remote '
     need staged
+    # Checked before anything stops: activate refuses other uploads (they could get the original pruned).
+    others=$(find /opt/penge/releases -mindepth 1 -maxdepth 1 -type d -name "*.partial" ! -name "$(state release).partial" | wc -l)
+    [ "$others" = 0 ] || die "other uploads wait in /opt/penge/releases (*.partial): remove them before the window"
     install -d -m 0700 /root/penge-backups
     if [ -z "$(state orig_env)" ]; then
       exp=$(date -u -d "+14 days" +%Y%m%dT%H%M%SZ)
@@ -448,6 +460,9 @@ abort)
     if grep -qx "maxmemory 128mb" /etc/valkey/penge.conf; then echo "(Valkey keeps maxmemory 128mb: harmless)"; fi
     restartApi || die "penge-api did not restart and become ready on $orig (journalctl -u penge-api); the timer stays off, the rollout state is kept"
     timerOn || die "penge-api runs on $orig, but the timer did not start; the rollout state is kept"
+    # The unused upload goes too, so the next window does not stop for it.
+    id=$(state release)
+    if [ -n "$id" ] && [ -d "/opt/penge/releases/$id.partial" ]; then rm -rf "/opt/penge/releases/$id.partial"; fi
     mv "$STATE" "$STATE.aborted-$(date -u +%Y%m%dT%H%M%SZ)"
     echo "running: $orig, penge-api ready, timer on"
   '
