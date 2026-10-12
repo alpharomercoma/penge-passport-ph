@@ -46,7 +46,8 @@ end
 -- The same for a credential's operation record, and for the alerts finishing it may touch.
 local function op_check(cred, o)
   if o.op == nil then return end
-  for _, f in ipairs({ 'seq', 'maxseq', 'exp', 'acks' }) do if o[f] ~= nil and o[f] ~= '' then integer(o[f], 'op ' .. f) end end
+  -- Every writer sets these four: one missing or empty is damage, refused before a script's first write.
+  for _, f in ipairs({ 'seq', 'maxseq', 'exp', 'acks' }) do integer(o[f], 'op ' .. f) end
   if o.other ~= nil and o.other ~= '' then alert_check(o.other, alert_get(o.other)) end
   if o.alert ~= nil and o.alert ~= '' then alert_check(o.alert, alert_get(o.alert)) end
 end

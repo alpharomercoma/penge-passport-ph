@@ -214,6 +214,21 @@ for (const [name, make] of valkeyTargets()) {
       expect((await dispatchBegin(kv, gate(c, a.op, { epItems: [ep] }))).o).toMatchObject({ why: 'limited' });
     });
 
+    it('limits a rotation\'s or re-setup\'s pushes to an endpoint another alert owns by that endpoint too, not only the maintenance pool', async () => {
+      const kv = await make();
+      const victim = await seedAlert(kv, { now: T0 });
+      const mine = await seedAlert(kv, { now: T0 });
+      const inc = (await kv.hGetAll(K.devAlert(mine.id))).inc!;
+      const a = setup(mine.cred, { seq: 2, kind: 'rotate', sub: victim.sub, cap: { incarnation: inc, generation: 1 } });
+      expect((await admit(kv, a)).outcome).toBe('pending');
+      const ep = { cur: 'pp:rate:dev-push-ep:1:e', prev: 'pp:rate:dev-push-ep:0:e', overlap: 1, max: 0, ttl: 60, bucket: 'dev-push-ep' };
+      expect((await dispatchBegin(kv, gate(mine.cred, a.op, { ep: victim.ep, epItems: [ep] }))).o).toMatchObject({ dsp: 'unsent', why: 'limited' });
+      // Its own endpoint is the maintenance pool's alone.
+      const own = setup(mine.cred, { seq: 3, kind: 'rotate', sub: mine.sub, cap: { incarnation: inc, generation: 1 }, now: T0 + SETUP_MS + 1, exp: T0 + 2 * SETUP_MS });
+      expect((await admit(kv, own)).outcome).toBe('pending');
+      expect((await dispatchBegin(kv, gate(mine.cred, own.op, { now: T0 + SETUP_MS + 1, ep: mine.ep, epItems: [ep] }))).go).toBe(true);
+    });
+
     it('ends an expired operation at the gate instead of sending', async () => {
       const kv = await make();
       const c = credential();
