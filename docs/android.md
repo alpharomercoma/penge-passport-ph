@@ -160,6 +160,10 @@ From 1.1.0 the app shows the site's alert notifications as its own. `twa-manifes
 `DelegationService`: Chrome hands the site's notifications to the app, which shows them with its
 name and `monochromeIconUrl` (the one-colour mark, `icons/monochrome-512.png`) in the status bar.
 
+- Notifications need no email: the alerts form's "Notifications on this device" switch sets up a
+  notification alert for this phone alone.
+- Setting up shows a "Setting up notifications…" notification first (the ready check): the alert
+  starts once the phone has shown it, so notifications never start on a phone that cannot show them.
 - On Android 13 and later, turning the switch on in the alert form shows Android's own permission
   prompt naming the app. Denied, the form says to allow it in Settings › Apps › PassportPH ›
   Notifications.
@@ -176,7 +180,9 @@ a notification with the app's name and icon, and a tap opening the office. Its r
 
 **For the owner, in Play Console, with 1.1.0:**
 1. **Data safety:** add "Device or other IDs" (the push subscription's endpoint), collected for
-   app functionality, encrypted in transit, deletable on request; not shared.
+   app functionality, encrypted in transit, deletable on request (turning notifications off, or
+   "Stop alerts / delete data"). Push services (Google's, for Chrome on Android) receive it as
+   service providers delivering the notifications; it is not otherwise shared.
 2. **App signing:** Play's app-signing certificate SHA-256 in `assetlinks.json` (see below), so a
    copy installed from Play opens without an address bar and its notifications are delegated.
 3. **Upload** `pengepassportph-2.aab` (version 1.1.0) to the testing track.

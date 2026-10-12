@@ -156,3 +156,16 @@ export function recordingLog() {
 
 /** The confirmation token in a confirmation email's link. */
 export const confirmToken = (text: string) => /\/confirm#token=([A-Za-z0-9_-]{43})/.exec(text)?.[1];
+
+const b64key = (n: number) => Buffer.alloc(n, 7).toString('base64');
+/** A configuration loadConfig accepts: the required settings and nothing else. */
+export const validEnv: Record<string, string> = {
+  REDIS_URL: 'redis://localhost:6379',
+  R2_ENDPOINT: 'https://r2.example',
+  R2_BUCKET: 'b',
+  R2_ACCESS_KEY_ID: 'id',
+  R2_SECRET_ACCESS_KEY: 'secret',
+  EMAIL_ENC_KEY: b64key(32),
+  EMAIL_HMAC_KEY: b64key(32),
+  TOKEN_SECRET: b64key(32),
+};

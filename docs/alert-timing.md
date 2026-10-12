@@ -29,12 +29,9 @@ The 2-minute floor was 5 minutes while checks ran every 15. When they went back 
 September 2026, it had to come down. A check emails 2 to 4 minutes into its run, so two checks' emails
 can be under 5 minutes apart, and a 5-minute floor would have skipped every other check.
 
-**One pace for every channel.** An alert goes by email, push or both, as the person chose, and the pace
-counts alerts, not channels: one alert to both is one alert. The daily email limit and a mail pause stop
-email only; push goes on. When push carries an alert that email could not (the limit, a pause, mail
-errors), that email is not kept to go later: the person was told. Once an alert is due (its pace allows it and
-its dates are verified), it waits, uncharged, only when no channel can carry it. It counts as delivered when any channel delivered it or may have (a timed-out push,
-an email that may have gone); only when every channel surely failed is it tried again at a later check.
+**Each kind of alert keeps its own pace.** Email alerts and notification alerts are separate alerts, each
+with its own pace, chosen in the same form. The daily email limit and a mail pause stop email only;
+notifications go on, and the notification stop (`pp:push:paused`) stops notifications only.
 
 **Nothing is dropped for coming too soon.** What a check finds before a person's next email is due waits in a
 signed record (`pp:held:<id>`, listed in `pp:held-subs`) and goes out with that email. Before sending:
@@ -52,6 +49,23 @@ For posts abroad, a waiting alert is considered only after that post is checked 
 check queues no newly opened date. A healthy abroad pass cannot release an unverified date at home.
 The calendar lookup time shown in the email comes from that run's office observation. Calendar
 availability is still the DFA's date-level flag; the checker does not verify every hourly time slot.
+
+## Notifications
+
+A notification alert follows the same rules as an email alert, with these differences:
+
+- **Pace**: the same two choices and the same gaps (60 minutes, or one per check and never within 2
+  minutes), measured with the same stamps, so they hold across reboots as email's do (below).
+- **Daily cap**: the same value as email's (`ALERTS_PER_SUBSCRIBER_PER_DAY`, 288), counted per alert per
+  Manila day, separately from email.
+- **A date's age** is counted from its original announcement, kept with the work, so a date waiting for its
+  pace never gains a new 3-hour window. When that age cannot be known (a reboot between the announcement
+  and the send, which the stamps cannot bridge), the date is dropped and counted, never given a new
+  window: unlike email, where such a date's window starts again.
+- **One attempt per run** for each alert: a send refused by the push service goes back, and is tried at
+  a later run while its window lasts.
+- **60 seconds per batch**: a run sends notifications in batches, each with its own deadline, so a slow
+  push service delays a batch, never the run's email.
 
 ## How time is measured
 

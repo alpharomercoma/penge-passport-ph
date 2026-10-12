@@ -368,6 +368,30 @@ protects copies of the database and its backups, not a server that is itself com
 The journal (kept 14 days) holds two recipient lines from the first test sends on 26 September, before
 Postfix had its own log; they age out by 10 October.
 
+**Notifications.** The spec's retention table, word for word (`docs/superpowers/specs/2026-10-06-alerts-redesign-design.md`,
+"Privacy and data"):
+
+| Item | Where | Normal life | While the checker is not running |
+|---|---|---|---|
+| The push subscription (an address at the browser maker's push service, and keys), encrypted; the alert's offices, group size and pace, plain, next to a random id | `pp:dev:<id>`, `pp:dev:site`, indexes | Until turned off, gone, or 180 days after the last opening that reached us | Ended alerts are removed by later admissions or the next run |
+| An operation: while unfinished, the subscription, choices and a nonce, encrypted; then its result | `pp:dev:op:<credential hash>` | Unfinished: until acknowledged or expired (5 minutes) and ended by clean-up; the result: until the next operation, or 24 hours and then the next clean-up | Ended by the next admission for that credential, by admissions' clean-up of up to 20, or by the next run |
+| That an alert ended or its subscription was gone, with the date (and for gone, the subscription's fingerprint), under a hash of the device's credential | `pp:dev:ended` | 30 days, or until the device turns off; deleted by the next clean-up after that (normally within 5 minutes) | Deleted by the next clean-up or admission after the deadline; if both stop, when either resumes |
+| Queued, held and claimed work (offices and dates), plain | `pp:dev:queue`, `held`, `claim`, `fanout` | Sendable for 3 hours after the opening; deleted by the next clean-up after that (every run, normally every 5 minutes) | Until the next run |
+| Pace stamp, today's count, tries | `pp:dev:last`, `today`, `tried` | With the alert; today's count 2 days | The same |
+| Rate-limit counters, keyed by keyed hashes of the IP address, the credential or the endpoint | Valkey | About 2 hours | The same |
+| Deleted data in the database's own files (email data too) | Valkey's append-only file **and** its snapshot (`dump.rdb`; production has `save 3600 1 300 100 60 10000`), two separate copies | Until **both** have been rewritten after the deletion: an append-only rewrite and a snapshot that each started after it completed; normally within the hour | Longer if either fails; the daily report shows each one's last success and status |
+| On the device: the credential, retired credentials, the operation in progress, the last renewal time | The browser's storage for the site (IndexedDB) | Until turned off and the server confirms deletion, or until the person clears the site's data | The same |
+| Log lines naming an internal alert id (a random number; never a subscription, credential or address) | The server's journal | 14 days (journald's retention) | The same |
+| What the push service handles | Google (Chrome, the Android app), Mozilla (Firefox), Microsoft (Edge on Windows), Apple (Safari) | The message is encrypted; the service keeps an undelivered message at most its `TTL` (30 minutes for alerts and tests, 5 for setups). Its own records of delivery (the endpoint, times, sizes) are kept under its own policy, not ours | |
+
+Reading the daily report's "Last append-only rewrite known finished" line: Valkey gives no time for a
+rewrite, so the checker brackets it between two of its runs, as "started after <first time>, finished by
+<second time>". Data deleted before the first time is out of the append-only file. "Last successful
+database snapshot" is when the last snapshot of `dump.rdb` finished, not when it started: a snapshot that
+started before a deletion can still hold the deleted data, and the next one to finish does not. Never turn the append-only file off, and never signal a
+running rewrite: either cancels the rewrite without the report noticing, and deleted data then stays in
+the file.
+
 **Visitors' network addresses.** No access log is kept. The API counts requests per address to limit
 them, under a keyed hash of the address (never the address itself), and the counters expire after about
 two hours. Caddy's error log (in the journal, 14 days) does record the visitor's address when a request
@@ -405,20 +429,48 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
   a new one and updating the DNS record.
 - Rotate the Redis password and the R2 keys from their dashboards, update `server.env`, restart the API.
 
-## Push notifications
+Backups hold email subscribers only, in version 1; the importer reads versions 1 and 2 (the channel
+release's). Notification alerts are never backed up: they live only in Valkey and on the device. Restore
+with the API and the checker stopped (`systemctl disable --now penge-check.timer`, wait for
+`penge-check.service` to be inactive, `systemctl stop penge-api`), then start both again. If Valkey itself
+is lost, email subscribers come back from a backup; devices find their alert gone at their next opening and
+ask the person to set up again.
 
-Alerts can also go as push notifications, to browsers and to the Android app (1.1.0 and later), as a
-second channel on the same subscription. Set in `/etc/penge/server.env`, then `systemctl restart
-penge-api` (the checker reads it on its next run):
+## Notifications
+
+A notification alert belongs to one device (a browser, an installed web app, or the Android app 1.1.0 and
+later) and needs no email address. The alerts form offers both kinds behind switches; a person can have
+either, both, or neither. Setting one up asks the browser for a push subscription and then sends this
+device a **ready check**: the device shows a "Setting up notifications…" notification, and the alert starts
+only once it has (then "Notifications are ready" follows), so an alert never exists for a device that
+cannot show notifications. An alert lasts 180
+days after the last opening that reached us (each opening of the site renews it), until it is turned off,
+or until the push service says the subscription is gone.
+
+Set in `/etc/penge/server.env`, then `systemctl restart penge-api` (a checker run reads it when it starts,
+so a run already going keeps its mode):
 
 | Setting | What it does |
 |---|---|
-| `PUSH_MODE` | `off` (the default: no switch is offered, nothing is sent), `owner` (only `PUSH_OWNER_EMAILS` may turn push on; the switch shows only after opening the site with `?push=owner`, which the browser remembers for the session, and the server refuses any other address), `live` (everyone) |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | The keys browsers subscribe with (`npx web-push generate-vapid-keys`). **Keep an offline copy of the private key**: a new pair makes every subscription stop working until each browser turns push on again |
+| `PUSH_MODE` | `off`, `owner` or `live` (below) |
+| `PUSH_OWNER_TOKEN` | For `owner` mode: at least 32 random characters (below) |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | The keys browsers subscribe with (`npx web-push generate-vapid-keys`). Kept with the server's configuration (a copy in the password manager). **Never rotate them while alerts exist**: every subscription would stop working until each device sets up again |
 | `VAPID_SUBJECT` | `mailto:` a monitored address of the site, never a personal one: push services use it to reach us |
-| `PUSH_OWNER_EMAILS` | For `owner` mode: the addresses allowed to turn push on, comma-separated |
+| `DEVICE_ALERT_LIMIT`, `DEVICE_RECORD_LIMIT` | 270 alerts and 1,700 storage units at most (the defaults and the ceilings: a larger value is refused at start). Measured on Valkey 8.1: at those limits notification data takes at most 15.9 MB, under a quarter of `maxmemory 64mb`. New setups are also refused while Valkey is above 70% of `maxmemory` |
 
-**Emergency stops.** Push alone (email goes on), and email alone (push goes on):
+What each mode allows:
+
+| | `off` | `owner` | `live` |
+|---|---|---|---|
+| Switch shown | No | Only with the owner token stored | Yes |
+| Setup for a new alert | `off` | Owner token required | Yes |
+| Setup with a captured alert, rotation | `unavailable` (tried again at the next opening) | Yes, without the token | Yes |
+| Ready, read, renew, change, turn off | Yes (so people can see and stop their alert) | Yes | Yes |
+| Tests | `unavailable` | Yes | Yes |
+| Alert sends | No: work waits uncharged and is dropped after its 3-hour window | Yes | Yes |
+
+**Emergency stops.** Notifications alone (email goes on), and email alone (notifications go on). The
+notification stop is checked by every send, setup and test, in every mode, at once:
 
 ```sh
 sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning SET pp:push:paused 1'
@@ -427,83 +479,229 @@ sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL"
 sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning DEL pp:mail:paused'
 ```
 
-While a channel is stopped, alerts that only it could carry wait, uncharged, and go when it is back
-(or are dropped once older than 3 hours). The daily numbers show pushes accepted by the push service, and the
-others (refused, uncertain, gone); subscribers with push (and push only); subscribers with email off and
-no registered device; devices registered and waiting; and devices removed by the checker (gone when
-pushed to, or never set up; turning off, unsubscribing and deleting are not counted there).
-
-## Rolling back once push is on
-
-First, switch push off (`PUSH_MODE=off`) on the new release, then wait 5 minutes before going on.
-The release before push does not know devices or channel requests, and would confirm a pending
-"notifications only" request as email. Pages already open in people's browsers are this release's;
-they read the status every minute, and an open alert form drops its notifications switch (keeping
-email) once it reads that push is off. The wait lets the pages that are awake and online do that; it
-is not a guarantee (below). If it is really needed, in a maintenance window:
+**The owner link** (`owner` mode). Make a token, set it, restart the API, then open the site once in each
+browser or app that should be allowed to set up:
 
 ```sh
+openssl rand -base64 33 | tr '+/' '-_' | tr -d '='      # → PUSH_OWNER_TOKEN=... in /etc/penge/server.env
+systemctl restart penge-api
+# then open https://alphaexperiments.com/pengepassportph/#owner=<token>
+```
+
+The page moves the token from the address bar to the browser's storage before anything else runs (a
+fragment never reaches the server or its logs). It is sent with new setups only. To revoke it, change it and
+restart the API: setups admitted with the old one are refused when they would become alerts, and a page
+still holding the old one forgets it when its next new setup is refused.
+
+**Limits.** The daily report flags alerts or records at 80% of their limit, and a snapshot or an
+append-only rewrite that failed or has not finished in 2 hours.
+
+**Clean-up.** Every checker run removes ended and expired alerts and operations, and the delivery work past
+its window. `admin.mjs device-cleanup` does the same by hand, without sending (it takes its own lock, never
+the checker's, and always exits 0):
+
+```sh
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs device-cleanup'
+```
+
+## Rolling back once notifications are on
+
+The releases before this one know nothing of notification alerts (`pp:dev:*`), and the older of them also
+start with this configuration only if `PUSH_MODE=off` and no owner setting. So, in this order:
+
+```sh
+# 1. Every send stops at once.
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning SET pp:push:paused 1'
+# 2. No new check starts; wait for a running one to finish (its lock lasts 20 minutes at most).
 systemctl disable --now penge-check.timer
-systemctl stop penge-check.service penge-api
-sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs push-downgrade --yes'
-ln -sfn /opt/penge/releases/<the release before push> /opt/penge/current
-systemctl start penge-api
+until s=$(systemctl show -p ActiveState --value penge-check.service); [ "$s" = inactive ] || [ "$s" = failed ]; do sleep 5; done
+journalctl -u penge-check -n 20 --no-pager    # "failed" is a run that ended unhealthy (exit 3): read why, then go on
+# 3. Settings both older releases start with.
+#    In /etc/penge/server.env: PUSH_MODE=off, and remove PUSH_OWNER_TOKEN.
+# 4. Keep this release's clean-up, outside releases/ (pruning cannot remove it), and run it before each old check.
+#    The drop-in is not in a release: copy it from your Mac first (into the server's copy of deploy/):
+#      scp deploy/systemd/penge-check.service.d/device-cleanup.conf root@213.250.173.234:/root/penge-deploy/
+install -d -o root -g root /opt/penge/device-cleanup && cp -a /opt/penge/current/server/. /opt/penge/device-cleanup/
+install -D -m 0644 /root/penge-deploy/device-cleanup.conf /etc/systemd/system/penge-check.service.d/device-cleanup.conf
+systemctl daemon-reload
+systemctl cat penge-check.service | grep -q 'device-cleanup/admin.mjs device-cleanup' && echo drop-in installed
+# 5. Switch to the older release, one already on the server (ls /opt/penge/releases), and see it live:
+penge-activate <older-release-id>        # prints "live: <older-release-id>"; restarts the API
+readlink /opt/penge/current              # …/releases/<older-release-id>
 systemctl enable --now penge-check.timer
 ```
 
-`push-downgrade` removes every device, cancels pending requests that change channels, and
-unsubscribes people who chose push only (they had no email to fall back on). A version 2 backup (this
-release's) must be turned into version 1 before the old release can restore it:
-`admin.mjs backup-to-v1 <file> > v1.json` (it leaves out people with email off).
+The drop-in runs `/opt/penge/device-cleanup/admin.mjs device-cleanup` before each run of the old checker,
+in the same service activation (so the two never overlap): the `-` lets the old checker start whatever it
+returns, and `timeout` ends it within 130 s, far inside the service's 15-minute start limit, so a hung
+clean-up (Valkey unreachable, a script that never returns) cannot stop email. Nothing outlives its stated
+life by more than the time between clean-ups.
 
-What pages left open from this release do after the switch, until they are reloaded (accepted: a
-rollback is an emergency; at worst a person gets email alerts they can stop in one click, or signs up
-again):
+What remains while rolled back: stored notification alerts stop, and stay stored; notifications the push
+service had already accepted may still be shown by the old worker, with their own titles; a deletion a
+device retries gets `404` and stays retired until rolled forward; email works unchanged.
 
-- A tab that did not read the status during the wait (frozen in a phone's background, or offline:
-  a failed read keeps the last status) can still send a request with email off and notifications on.
-  The release before push ignores the channels: once confirmed, that person gets email alerts, which
-  every email lets them stop in one click.
-- A confirmation page opened before the switch already showed its summary. For an email-only
-  request, which survives the rollback, pressing Confirm turns the alert on at the old server, but
-  the page shows an error (the old server's answer has no channels), and the link is used up. The
-  alert is on all the same, as its first alert email shows; signing up again with the same address
-  replaces it rather than adding a second. A request that changed channels was cancelled by
-  `push-downgrade`: its link no longer works, and that person signs up again.
-- A confirmation link opened after the switch shows the old confirmation page, which works for
-  email-only requests.
-- Service workers update themselves at the next visit; the old one does not handle pushes, and none
-  are sent.
+**Rolling forward:**
+
+```sh
+# 1. No check runs while switching (the clean-up stays in place until this release is up).
+systemctl disable --now penge-check.timer
+until s=$(systemctl show -p ActiveState --value penge-check.service); [ "$s" = inactive ] || [ "$s" = failed ]; do sleep 5; done
+# 2. Deploy this release again ("Deploying"). If penge-activate falls back to the old release, stop here: the
+#    drop-in keeps cleaning; re-enable the timer and find out why.
+# 3. Only once this release is current and ready, remove the rollback's clean-up:
+rm /etc/systemd/system/penge-check.service.d/device-cleanup.conf && rm -rf /opt/penge/device-cleanup
+systemctl daemon-reload
+# 4. PUSH_MODE and PUSH_OWNER_TOKEN back in /etc/penge/server.env, then:
+systemctl restart penge-api
+sudo -u penge sh -c 'set -a; . /etc/penge/server.env; valkey-cli -u "$REDIS_URL" --no-auth-warning DEL pp:push:paused'
+systemctl enable --now penge-check.timer
+```
+
+Claims left by the run that was stopped are recovered by the next run of this release.
+
+## Leaving the channel design (one maintenance window)
+
+Production ran `05cee09` (push as a second channel on email subscriptions, `PUSH_MODE=owner` with
+`PUSH_OWNER_EMAILS`). Moving to this release, once, in a short window. Everything runs as root on the
+server, except the upload in step 2, from your Mac:
+
+1. Stop everything that writes:
+
+   ```sh
+   systemctl disable --now penge-check.timer
+   until s=$(systemctl show -p ActiveState --value penge-check.service); [ "$s" = inactive ] || [ "$s" = failed ]; do sleep 5; done
+journalctl -u penge-check -n 20 --no-pager    # "failed" is a run that ended unhealthy (exit 3): read why, then go on
+   systemctl stop penge-api
+   ```
+
+2. **Stage** the new release without activating it: build it (`deploy/release.sh build <dir>`) and upload
+   it the way `release.sh ship` does, but stop before `penge-activate`:
+
+   ```sh
+   COPYFILE_DISABLE=1 tar --no-xattrs -C <dir>/<release> -cz . | ssh penge-deploy@213.250.173.234 penge-receive <release>
+   ```
+
+   It now sits unpacked under `/opt/penge/releases/<release>.partial`. Its maintenance commands read only
+   `REDIS_URL`, so they run with production's current `server.env` (which still names `PUSH_OWNER_EMAILS`).
+   Inspect, read only:
+
+   ```sh
+   R=/opt/penge/releases/<release>.partial/server
+   sudo -u penge sh -c "set -a; . /etc/penge/server.env; node $R/admin.mjs channel-inspect"
+   ```
+
+   Expected: every list empty, `pendingChannels: false`, `stops: []`.
+
+3. Backups into `/root/penge-backups/`, each named with its expiry 14 days on (`penge-backup-expire` deletes
+   them then; see "Rollout backups"):
+
+   ```sh
+   install -d -m 0700 /root/penge-backups
+   now=$(date -u +%Y%m%dT%H%M%SZ); exp=$(date -u -d '+14 days' +%Y%m%dT%H%M%SZ)
+   install -m 0600 /etc/penge/server.env /root/penge-backups/server.env-$now-expires-$exp
+   # the subscriber export, with the CURRENT release (it runs with the current configuration)
+   sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs backup' > /root/penge-backups/subscribers-$now-expires-$exp.json
+   chmod 0600 /root/penge-backups/subscribers-$now-expires-$exp.json
+   # only if step 2 found anything: exactly the keys the clean will change or delete
+   sudo -u penge sh -c "set -a; . /etc/penge/server.env; node $R/admin.mjs channel-dump" > /root/penge-backups/channel-keys-$now-expires-$exp.json
+   chmod 0600 /root/penge-backups/channel-keys-$now-expires-$exp.json
+   # every backup made, and the JSON ones readable: do not go on to step 4 otherwise
+   for f in /root/penge-backups/*-$now-expires-$exp*; do test -s "$f" || echo "EMPTY: $f"; done
+   for f in /root/penge-backups/*-$now-expires-$exp.json; do node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$f" || echo "UNREADABLE: $f"; done
+   ```
+
+4. Only if step 2 found anything, clean by the table (`channel-clean` without `--yes` shows the inspection
+   and changes nothing):
+
+   ```sh
+   sudo -u penge sh -c "set -a; . /etc/penge/server.env; node $R/admin.mjs channel-clean --yes"
+   ```
+
+   | Found | What happens |
+   |---|---|
+   | `pp:push:*` (devices, indexes, credentials, pending and revoked markers), except `pp:push:paused` | Deleted (their owner sets up again) |
+   | A subscriber with `emailOn` absent or `1` (any `pushOn`) | Channel fields removed (`HDEL`); stays an email subscriber |
+   | A subscriber with `emailOn=0` | **Stop**: the owner decides (never turned into email consent) |
+   | A pending request with `emailOn=0` | Cancelled, with its indexes (never turned into email consent) |
+   | A pending request with `emailOn` absent or `1` | Kept as an email request (token, choices, address untouched); channel fields removed |
+   | `pp:pending:channels` | Deleted |
+   | `pp:reserved:*` | Kept if a kept pending request still needs it; otherwise deleted |
+
+   It stops, changing nothing, on a subscriber with email off or any malformed flag, and says which.
+
+5. In `/etc/penge/server.env`: `PUSH_MODE=off`, remove `PUSH_OWNER_EMAILS`, add `PUSH_OWNER_TOKEN`. Then:
+
+   ```sh
+   penge-activate <release>        # starts the API on the new release; prints "live: <release>"
+   ```
+
+   **If it fails** ("did not become ready", "rolled back to …", exit 1), stop here: it has switched back to
+   `05cee09`, which runs with this configuration. Leave `PUSH_MODE=off`, `systemctl enable --now
+   penge-check.timer` so email goes on, and find out why before trying again.
+
+   If it succeeded, run one check now and see it finish healthy on the new release before anything else:
+
+   ```sh
+   readlink /opt/penge/current                                  # …/releases/<release>
+   systemctl start penge-check.service                          # one run, now (a oneshot: it waits for the run)
+   systemctl show -p Result --value penge-check.service         # success (exit-code means unhealthy: read the journal)
+   journalctl -u penge-check -n 50 --no-pager
+   systemctl enable --now penge-check.timer
+   # only then: PUSH_MODE=owner in server.env, and
+   systemctl restart penge-api
+   ```
+
+   Both `157bad9` and `05cee09` start with this configuration. That matters if `penge-activate`'s own
+   fallback switches back to `05cee09` because the new release did not become ready: that can happen only
+   at this first deploy, while no notification alert exists, so it needs no clean-up. Every later deploy
+   falls back to a release that already knows notification alerts.
+
+What remains: an old page left open in a browser is reloaded by the new service worker when it first
+activates. A tab frozen through that reload and resumed later could still remove the browser's
+subscription (at once if its old device was confirmed, after 48 hours otherwise): the push service then
+answers that it is gone, the alert ends, and the row asks the person to set up again.
 
 ## Rollout backups
 
 Before a rollout that changes the server, copies are made by hand into `/root/penge-backups/`, each
 named with the time it expires: `server.env-<stamp>-expires-<YYYYMMDDTHHMMSSZ>` and
 `subscribers-<stamp>-expires-<YYYYMMDDTHHMMSSZ>.json` (14 days later). `deploy/penge-backup-expire.sh`
-deletes those past their expiry time; `provision.sh` copies its units, and it is installed once by hand:
+deletes those past their expiry time. It is installed once by hand: copy it and its units from your Mac
+into the server's copy of `deploy/`, then, as root on the server:
 
 ```sh
-install -m 0755 deploy/penge-backup-expire.sh /usr/local/sbin/penge-backup-expire
+# from your Mac
+scp deploy/penge-backup-expire.sh deploy/systemd/penge-backup-expire.service deploy/systemd/penge-backup-expire.timer root@213.250.173.234:/root/penge-deploy/
+# on the server
+install -d -m 0700 /root/penge-backups
+install -m 0755 /root/penge-deploy/penge-backup-expire.sh /usr/local/sbin/penge-backup-expire
+install -m 0644 /root/penge-deploy/penge-backup-expire.service /root/penge-deploy/penge-backup-expire.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now penge-backup-expire.timer
+systemctl start penge-backup-expire.service && systemctl status --no-pager penge-backup-expire.service   # ran, and exited 0
 ```
 
 The timer runs hourly (and once on start if a run was missed while the server was down), so a backup
 goes about an hour after its expiry time at most while the server is up. To restore one:
 
 ```sh
-# server.env
-install -m 0640 -o root -g penge /root/penge-backups/server.env-<stamp>-expires-<stamp> /etc/penge/server.env
-# subscribers: a copy the penge user can read, removed straight after
+# with the API and the checker stopped (as in "Keys and backups")
+# 1. subscribers first, with the CURRENT release and the CURRENT server.env (the email and token keys are the same):
+#    a copy the penge user can read, removed straight after
 install -m 0600 -o penge -g penge /root/penge-backups/subscribers-<stamp>-expires-<stamp>.json /var/lib/penge/restore.json
 sudo -u penge sh -c 'set -a; . /etc/penge/server.env; node /opt/penge/current/server/admin.mjs restore /var/lib/penge/restore.json --yes'
 shred -u /var/lib/penge/restore.json
-# the previous release: ONLY before anyone has turned push on or asked for it.
-# After that, use "Rolling back once push is on" (stop, push-downgrade, then switch).
+# 2. server.env, only to return to the release it belongs to. Once notifications are on, roll back as
+#    "Rolling back once notifications are on" says instead, keeping PUSH_MODE=off and neither PUSH_OWNER_EMAILS
+#    nor PUSH_OWNER_TOKEN: a server.env saved before this release names PUSH_OWNER_EMAILS, which this release
+#    and its pinned clean-up refuse (the clean-up would then do nothing on every run).
+install -m 0640 -o root -g penge /root/penge-backups/server.env-<stamp>-expires-<stamp> /etc/penge/server.env
 ln -sfn /opt/penge/releases/<previous> /opt/penge/current && systemctl restart penge-api
 ```
 
-A restore never displaces a subscriber who now holds the same address (it lists them as skipped), and
-never brings devices back: a restored subscriber has push off.
+A restore never displaces a subscriber who now holds the same address (it lists them as skipped). The
+channel design's key dump (`channel-keys-…-expires-….json`) is for reading back by hand if the owner
+decides something it removed should return; nothing restores it automatically.
 
 ## Daily numbers
 
@@ -524,6 +722,16 @@ in Valkey 40 days.
 SELECT day, visitors, counts.officeViews, counts.confirmed, counts.alertsSent
 FROM read_json('r2://pengepassportph/stats/v1/*/stats.json') ORDER BY day;
 ```
+
+Notification alerts are counted separately, under `pp:stats:v2:` in Valkey and as `devices` in the same
+`stats.json` (null for days before this release). Most counters are added inside the atomic step that makes
+the change, so retries and crashes never count twice; tests and some refused requests are counted just
+after, best effort (a crash, or more than 50 counts waiting at once, can lose one). The counters: operations started, completed and expired; changes;
+alerts turned off, ended and gone; notifications accepted, not confirmed and refused; dates dropped;
+requests refused, by reason; tests. Its gauges are read when the report is made: alerts active, alerts and
+reservations against `DEVICE_ALERT_LIMIT`, storage units against `DEVICE_RECORD_LIMIT`, and the last
+snapshot and append-only rewrite (above), with flags at 80% of a limit and for a failed or late rewrite.
+The deploy day is split: its report says when notification counting began ("Counting began at").
 
 ## Raising the email limit
 

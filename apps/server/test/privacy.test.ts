@@ -62,3 +62,17 @@ describe('the privacy page', () => {
     expect(page).toContain('keep your address for up to 4 days');
   });
 });
+
+describe("the runbook's retention", () => {
+  // The spec's retention table, word for word (docs/superpowers/specs/2026-10-06-alerts-redesign-design.md, "Retention").
+  const runbook = read('../../../deploy/README.md').replace(/\s+/g, ' ');
+  it.each([
+    'Until turned off, gone, or 180 days after the last opening that reached us',
+    'Unfinished: until acknowledged or expired (5 minutes) and ended by clean-up; the result: until the next operation, or 24 hours and then the next clean-up',
+    '30 days, or until the device turns off; deleted by the next clean-up after that (normally within 5 minutes)',
+    'Sendable for 3 hours after the opening; deleted by the next clean-up after that (every run, normally every 5 minutes)',
+    'Until **both** have been rewritten after the deletion: an append-only rewrite and a snapshot that each started after it completed; normally within the hour',
+  ])('states %s', (line) => {
+    expect(runbook).toContain(line);
+  });
+});

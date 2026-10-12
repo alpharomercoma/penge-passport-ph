@@ -134,22 +134,30 @@ The Python package mirrors this layout in `packages/python/src/penge_passport_ph
 The website, its API and the alerting checker are built on the Node.js package: see
 [deploy/README.md](../deploy/README.md) for how they run and the checker's guardrails.
 
-## Alerts by email and push
+## Alerts: email and notifications
 
-The website's alerts have two channels on one subscription: email and Web Push. A person turns push on
-in the alert form, in the browser or app that should get the notifications. That browser makes a random
-credential (kept in its IndexedDB) and a push subscription; the request carries only the credential's
-hash. The confirmation email and the confirmation page say which channels the request turns on, and for
-which device. Confirming binds that credential to the subscriber: a credential has one owner, and a
-turned-off credential is marked off for 3 days, longer than any sign-up link lives, so an older link
-cannot turn it back on. The browser then registers its subscription with
-its credential, and keeps it current (a renewed subscription is a higher revision; an older one never
-overwrites a newer). A form sent without push changes the offices, group and pace, and leaves every
-device as it was.
+The website offers two kinds of alert behind one form, each with its own switch: **email** and
+**notifications**. A person can have either, both, or neither, and each stands on its own.
 
-Each alert goes to every channel the person has that can carry it now: email within the daily limit,
-push within a per-pass budget. A push service's "gone" removes that device, but only if it still has the
-endpoint the push went to. A device that never finishes setting up is removed at the first check after 48 hours
-(before the subscriber exists, its keys expire 72 hours after the last request for it). The device itself can ask how it is, send itself a test (three an hour),
-or turn itself off. The details, and the reasons for each rule, are in
-`docs/superpowers/specs/2026-10-05-push-notifications-design.md`.
+**Email alerts** work as they always have: the address, encrypted, a confirmation link, the offices, group
+size and pace, and a one-click unsubscribe in every email.
+
+**Notification alerts** belong to one device (a browser, an installed web app, or the Android app) and
+need no email. The device makes a random credential, kept in its IndexedDB, and asks the browser for a push
+subscription. Setting up is an **operation**: the server stores it and sends this device a push through
+the push service; the device's service worker shows "Setting up notifications…" and acknowledges it, and
+only then does the alert start (and "Notifications are ready" follow). So an alert never exists for a device that cannot show notifications.
+A device has at most one alert; changing it, sending a test and turning it off are operations on that
+alert. An alert lasts 180 days after the last opening that reached the server, and each opening renews it.
+
+Every write to notification data (`pp:dev:*` in Valkey) is a Lua script, so each step (admission,
+activation, a send's claim and settlement, clean-up) is atomic and checks everything before its first
+write. A checker run does three things side by side: the posts abroad, the email pass, and the
+notification pass; notification clean-up runs first, every run. Queueing an opening is two writes: the
+first records the open dates, the announcement marks and the email jobs, as before; the second turns the
+oldest pending batch of openings into notification work. Notification numbers are counted under `pp:stats:v2:`
+(email's stay where they were), most inside the same scripts, tests and some refused requests just after,
+best effort; the daily report shows both.
+
+The details, and the reasons for each rule, are in
+`docs/superpowers/specs/2026-10-06-alerts-redesign-design.md`.

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,6 +6,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../src/config.ts';
+import { validEnv } from './helpers.ts';
 import {
   decryptEmail,
   emailIndex,
@@ -172,16 +174,7 @@ describe('scan rules', () => {
 
 describe('config', () => {
   const b64 = (n: number) => Buffer.alloc(n, 7).toString('base64');
-  const env = {
-    REDIS_URL: 'redis://localhost:6379',
-    R2_ENDPOINT: 'https://r2.example',
-    R2_BUCKET: 'b',
-    R2_ACCESS_KEY_ID: 'id',
-    R2_SECRET_ACCESS_KEY: 'secret',
-    EMAIL_ENC_KEY: b64(32),
-    EMAIL_HMAC_KEY: b64(32),
-    TOKEN_SECRET: b64(32),
-  };
+  const env = { ...validEnv };
 
   it('defaults to dry-run and safe limits', () => {
     const config = loadConfig(env);
@@ -577,5 +570,33 @@ describe('log lines', () => {
     const text = line('error', 'alert email refused', { err: smtp, nested: { to: 'juan@example.com' }, list: ['x@y.co'] });
     expect(text).not.toMatch(/@/);
     expect(JSON.parse(text)).toMatchObject({ level: 'error', msg: 'alert email refused', err: expect.stringContaining('<address>'), nested: { to: '<address>' } });
+  });
+});
+
+const baseEnv = () => ({ ...validEnv });
+describe('the rollback pre-step', () => {
+  it('runs device clean-up before the old checker, never stopping it, within 130 s', () => {
+    const conf = readFileSync(join(import.meta.dirname, '../../../deploy/systemd/penge-check.service.d/device-cleanup.conf'), 'utf8');
+    expect(conf).toMatch(/^\[Service\]$/m);
+    expect(conf).toMatch(/^ExecStartPre=-\/usr\/bin\/timeout --kill-after=10s 120s \/usr\/local\/bin\/node --enable-source-maps \/opt\/penge\/device-cleanup\/admin\.mjs device-cleanup$/m);
+    // The same Node the checker itself runs with (deploy/node-install.sh links it at /usr/local/bin/node).
+    const check = readFileSync(join(import.meta.dirname, '../../../deploy/systemd/penge-check.service'), 'utf8');
+    const node = /^ExecStart=(\S+)/m.exec(check)?.[1];
+    expect(conf).toContain(`120s ${node} `);
+  });
+
+  it('documents every new setting in the env example, and no owner addresses', () => {
+    const env = readFileSync(join(import.meta.dirname, '../../../deploy/server.env.example'), 'utf8');
+    for (const name of ['PUSH_MODE', 'PUSH_OWNER_TOKEN', 'DEVICE_ALERT_LIMIT', 'DEVICE_RECORD_LIMIT', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) expect(env).toContain(name);
+    expect(env).not.toContain('PUSH_OWNER_EMAILS');
+  });
+
+  it('gives limits in the env example that the server accepts: the measured ceilings', () => {
+    const text = readFileSync(join(import.meta.dirname, '../../../deploy/server.env.example'), 'utf8');
+    const value = (name: string) => text.match(new RegExp(`^${name}=(.*)$`, 'm'))?.[1];
+    expect(value('DEVICE_ALERT_LIMIT')).toBe('270');
+    expect(value('DEVICE_RECORD_LIMIT')).toBe('1700');
+    const env = { ...baseEnv(), DEVICE_ALERT_LIMIT: value('DEVICE_ALERT_LIMIT')!, DEVICE_RECORD_LIMIT: value('DEVICE_RECORD_LIMIT')! };
+    expect(loadConfig(env).devices).toEqual({ alertLimit: 270, recordLimit: 1700 });
   });
 });
