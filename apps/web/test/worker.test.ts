@@ -10,7 +10,7 @@ const SCOPE = 'https://penge.example/pengepassportph/';
 const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: `B${'A'.repeat(86)}`, auth: 'A'.repeat(22) } };
 
 /** The built worker in a fake `self`, with a fake server for /api/device-alerts. */
-function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; onShow?: (title: string) => Promise<void>; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void> } = {}) {
+function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; pages?: { url: string; controlled: boolean }[]; onShow?: (title: string) => Promise<void>; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void> } = {}) {
   const listeners: Record<string, ((e: any) => void)[]> = {};
   const shown: { title: string; body: string; tag?: string | undefined }[] = [];
   const posted: { path: string; body: unknown; auth: string | null }[] = [];
@@ -18,6 +18,9 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
   const indexedDB = new IDBFactory();
   const locks = fakeLocks();
   const navigated: string[] = [];
+  // Open pages: controlled ones use this registration already (an earlier worker's, switched to the new one when it
+  // activates); claim() adopts the rest (a first visit); matchAll lists only controlled ones.
+  const pages = (o.pages ?? [{ url: `${SCOPE}?office=486`, controlled: true }]).map((p) => ({ ...p }));
   const cachesStore = new Set<string>();
   const self = {
     registration: {
@@ -37,9 +40,12 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
     addEventListener: (t: string, f: (e: any) => void) => (listeners[t] ??= []).push(f),
     skipWaiting: () => {},
     clients: {
-      claim: async () => {},
+      claim: async () => {
+        for (const p of pages) p.controlled = true;
+      },
       // Chromium settles a navigation only once it commits, which (on a first activation) waits for the activation.
-      matchAll: async () => [{ url: `${SCOPE}?office=486`, navigate: (u: string) => (navigated.push(u), o.navigateHangs ? new Promise(() => {}) : Promise.resolve()) }],
+      matchAll: async () =>
+        pages.filter((p) => p.controlled).map((p) => ({ url: p.url, navigate: (u: string) => (navigated.push(u), o.navigateHangs ? new Promise(() => {}) : Promise.resolve()) })),
     },
   };
   const fetchFake = async (url: string, init: { method?: string; headers: Record<string, string>; body?: string }) => {
@@ -147,6 +153,15 @@ describe('the worker and the ready check', () => {
     const s = await S.readState(w.env);
     expect(s.op).toMatchObject({ kind: 'rotate', phase: 'sent', result: null });
     expect(s.op!.expiresAt).toBeGreaterThan(Date.now() + 290_000);
+  });
+
+  it('never reloads a first visit: only pages an earlier worker controlled, not the ones it claims', async () => {
+    const w = worker({ pages: [{ url: `${SCOPE}?office=486`, controlled: true }, { url: `${SCOPE}`, controlled: false }] });
+    await w.fire('activate', {});
+    expect(w.navigated).toEqual([`${SCOPE}?office=486`]);
+    const first = worker({ pages: [{ url: `${SCOPE}`, controlled: false }] });
+    await first.fire('activate', {});
+    expect(first.navigated).toEqual([]);
   });
 
   it('never waits, while activating, for the pages it reloads', async () => {

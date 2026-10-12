@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  clickText, emailSwitch, launch, linkIn, mailMark, waitMail, ORIGIN, pushSwitch, resetRateLimits, RUN, send, sleep, SITE, waitText, workerReady,
+  clickText, emailSwitch, launch, openSheet, ORIGIN, pickOffice, pushSwitch, resetRateLimits, RUN, send, sleep, SITE, waitText, workerReady,
 } from './lib.mjs';
 
 // Screenshots for eye review go outside the repository; audit.json is copied into results/.
@@ -12,7 +12,7 @@ const OUT = process.env.AUDIT_OUT ?? join(tmpdir(), 'penge-audit');
 mkdirSync(OUT, { recursive: true });
 const WIDTHS = [320, 360, 375, 390, 412, 768, 1280];
 const findings = [];
-const STATES = 19; // every audit() call below
+const STATES = 31; // every audit() call below: 15 single states, 13 row states, 3 pages
 
 /** Runs in the page: what sticks out or is clipped. */
 function inspect() {
@@ -42,7 +42,8 @@ function inspect() {
     if ((r.right > W + 0.5 || r.left < -0.5) && !scrollsX(el) && !(parent && (parent.right > W + 0.5 || parent.left < -0.5))) {
       out.push({ kind: 'past the edge', el: name(el), left: Math.round(r.left), right: Math.round(r.right), W });
     }
-    const clipsX = cs.overflowX === 'hidden' || cs.overflowX === 'clip' || cs.textOverflow === 'ellipsis';
+    // A text field scrolls what is typed in it: a long address is not clipped.
+    const clipsX = !el.matches('input, textarea') && (cs.overflowX === 'hidden' || cs.overflowX === 'clip' || cs.textOverflow === 'ellipsis');
     if (clipsX && el.scrollWidth > el.clientWidth + 1) out.push({ kind: 'clipped sideways', el: name(el), need: el.scrollWidth, has: el.clientWidth });
     const clipsY = cs.overflowY === 'hidden' || cs.overflowY === 'clip' || Number(cs.webkitLineClamp) > 0;
     if (clipsY && el.scrollHeight > el.clientHeight + 1) out.push({ kind: 'clipped vertically', el: name(el), need: el.scrollHeight, has: el.clientHeight });
@@ -62,20 +63,34 @@ function inspect() {
 }
 
 const done = [];
-async function audit(page, state, { full = false, inDialog = false, prep } = {}) {
+/**
+ * `prep` runs in the page before each inspection (with `arg`); `expect` is [selector, ...texts]: the state shown must
+ * contain every one of them there (its words and its actions), or the inspection is of the wrong screen and counts as
+ * a finding.
+ */
+async function audit(page, state, { full = false, inDialog = false, prep, arg, expect, holds } = {}) {
   for (const width of WIDTHS) {
     await page.setViewport({ width, height: width < 700 ? 780 : 900, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
     await sleep(400);
-    // A width change re-lays out the sheet: scroll it to the part this state is about, each time.
-    if (prep) {
-      await page.evaluate(prep);
-      await sleep(200);
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
+      await sleep(150);
+      if (prep) {
+        await page.evaluate(prep, arg);
+        await sleep(100);
+      }
+      if (expect) {
+        const seen = await page.evaluate(([sel, ...texts]) => texts.every((t) => (document.querySelector(sel)?.textContent ?? '').includes(t)), expect);
+        if (!seen) findings.push({ state, width, scheme, kind: 'not the expected state', expect });
+      }
+      // `holds`: what the state must be beyond its words (switch values, disabled controls, which retries show).
+      if (holds && !(await page.evaluate(holds))) findings.push({ state, width, scheme, kind: 'not the expected state', holds: holds.toString().slice(0, 200) });
+      const found = await page.evaluate(inspect);
+      for (const f of found) findings.push({ state, width, scheme, ...f });
+      const file = `${state}-${width}-${scheme}.png`;
+      if (inDialog) await (await page.$('[role="dialog"]')).screenshot({ path: join(OUT, file) }).catch(() => page.screenshot({ path: join(OUT, file) }));
+      else await page.screenshot({ path: join(OUT, file), fullPage: full });
     }
-    const found = await page.evaluate(inspect);
-    for (const f of found) findings.push({ state, width, ...f });
-    const file = `${state}-${width}.png`;
-    if (inDialog) await (await page.$('[role="dialog"]')).screenshot({ path: join(OUT, file) }).catch(() => page.screenshot({ path: join(OUT, file) }));
-    else await page.screenshot({ path: join(OUT, file), fullPage: full });
   }
   done.push(state);
   console.log(state, findings.filter((f) => f.state === state).length, 'findings');
@@ -88,13 +103,12 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 16; K) AppleWebKit/537.36 (KHTML, l
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1';
 await page.setUserAgent({ userAgent: IPHONE });
 await page.setViewport({ width: 360, height: 780, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-await page.goto(SITE, { waitUntil: 'networkidle0' });
-await clickText(page, 'button', 'Email alerts');
-await page.waitForSelector('[role="dialog"]');
-await audit(page, 'sheet-iphone-tab', { prep: () => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }) });
-await page.setUserAgent({ userAgent: ANDROID });
-await browser.defaultBrowserContext().overridePermissions(ORIGIN, ['notifications']);
 try {
+  await page.goto(SITE, { waitUntil: 'networkidle0' });
+  await openSheet(page);
+  await audit(page, 'sheet-iphone-tab', { prep: () => document.querySelector('.channels')?.scrollIntoView({ block: 'center' }), expect: ['[role="dialog"]', 'add this site to your Home Screen'] });
+  await page.setUserAgent({ userAgent: ANDROID });
+  await browser.defaultBrowserContext().overridePermissions(ORIGIN, ['notifications']);
   await page.goto(SITE, { waitUntil: 'networkidle0' });
   await workerReady(page);
   await page.setViewport({ width: 360, height: 780, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
@@ -109,7 +123,7 @@ try {
   }, inspect.toString());
   console.log('self-test', planted);
   if (!planted.includes('page scrolls sideways') || !planted.includes('clipped sideways')) throw new Error('the check misses planted problems');
-  await audit(page, 'home', { full: true });
+  await audit(page, 'home', { full: true, expect: ['main', 'DFA offices in the Philippines have open dates'] });
   await clickText(page, 'button', 'Abroad');
   await sleep(600);
   await audit(page, 'home-abroad', { full: true });
@@ -123,47 +137,108 @@ try {
   await sleep(600);
   await audit(page, 'by-date', { full: true });
 
-  // The sheet: top, the switches, the end.
+  // The alerts form.
+  resetRateLimits();
   await page.goto(SITE, { waitUntil: 'networkidle0' });
   await page.setViewport({ width: 360, height: 780, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-  await clickText(page, 'button', 'Email alerts');
-  await page.waitForSelector('[role="dialog"]');
+  await openSheet(page);
+  await pickOffice(page);
   await page.evaluate(() => document.activeElement?.blur?.());
-  await audit(page, 'sheet-top');
+  const DIALOG = '[role="dialog"]';
+  await audit(page, 'form-both-off', {
+    expect: [DIALOG, 'How should we tell you?', 'Email', 'Browser notifications'],
+    holds: () => [...document.querySelectorAll('[role="dialog"] [role="switch"]')].every((e) => e.getAttribute('aria-checked') === 'false') && document.querySelector('[role="dialog"] button[type="submit"]')?.disabled === true,
+  });
+  await (await emailSwitch(page)).evaluate((e) => e.click());
+  await audit(page, 'form-email-only', { prep: () => document.querySelector('input[type="email"]')?.scrollIntoView({ block: 'center' }), expect: [DIALOG, 'Send confirmation email'] });
+  await (await emailSwitch(page)).evaluate((e) => e.click());
   await (await pushSwitch(page)).evaluate((e) => e.click());
-  await page.waitForFunction(() => [...document.querySelectorAll('[role="switch"]')].at(-1)?.getAttribute('aria-checked') === 'true', { timeout: 20_000 });
-  await audit(page, 'sheet-switches', { prep: () => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }) });
+  await page.waitForFunction((el) => el.getAttribute('aria-checked') === 'true', { timeout: 20_000 }, await pushSwitch(page));
+  await audit(page, 'form-notifications-on', { expect: [DIALOG, 'Turn on notifications'] });
+  // Notifications only, sending (the setup request held), then refused (answered "full", as the server answers when
+  // notifications are at their limit; a 503 would only be retried).
+  const held = [];
+  const holdSetup = (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/api/device-alerts')) return void held.push(req);
+    return void req.continue();
+  };
+  await page.setRequestInterception(true);
+  page.on('request', holdSetup);
+  await clickText(page, 'button[type="submit"]', 'Turn on notifications');
+  await page.waitForFunction(() => document.querySelector('button[type="submit"]')?.getAttribute('aria-busy') === 'true', { timeout: 20_000 });
+  for (let i = 0; i < 80 && held.length === 0; i++) await sleep(250);
+  await audit(page, 'form-busy', { prep: () => { const d = document.querySelector('.sheet'); d.scrollTop = d.scrollHeight; }, expect: [DIALOG, 'Working'], holds: () => document.querySelector('[role="dialog"] fieldset.form-body')?.disabled === true && document.querySelector('[role="dialog"] button[type="submit"]')?.getAttribute('aria-busy') === 'true' });
+  page.off('request', holdSetup);
+  for (const req of held.splice(0)) await req.respond({ status: 200, contentType: 'application/json', body: '{"outcome":"full","operation":null}' });
+  await page.setRequestInterception(false);
+  await page.waitForSelector('[role="dialog"] .sheet-result-failed', { timeout: 60_000 });
+  await audit(page, 'form-results-notify-failed', { prep: () => { const d = document.querySelector('.sheet'); d.scrollTop = d.scrollHeight; }, expect: [DIALOG, 'Notifications are full right now.', 'Try notifications again'] });
+  const failedWith = await page.$eval('[role="dialog"] .sheet-result-failed', (e) => e.textContent ?? '');
+  console.log('notification failure shown:', failedWith);
   await (await emailSwitch(page)).evaluate((e) => e.click());
-  await audit(page, 'sheet-push-only', { prep: () => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }) });
-  await audit(page, 'sheet-end', { prep: () => { const d = document.querySelector('.sheet'); d.scrollTop = d.scrollHeight; } });
-
-  // Sign up push only, then every row state.
-  await (await emailSwitch(page)).evaluate((e) => e.click());
-  const email = `audit-${RUN}@example.com`;
-  const mark = mailMark();
-  await send(page, email);
-  await audit(page, 'sheet-sent');
-  const mail = (await waitMail(mark, 'confirm', email)).text;
+  await audit(page, 'form-both-on', { prep: () => document.querySelector('input[type="email"]')?.scrollIntoView({ block: 'center' }), expect: [DIALOG, 'Turn on notifications and send confirmation email'] });
+  // Both results, one retry: email refused by the mail server, notifications on.
+  await fetch('http://127.0.0.1:8787/dev/mail-fail', { method: 'POST' });
+  await send(page, `audit-${RUN}@example.com`);
+  await waitText(page, 'Notifications are on for this device.', 60_000);
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === 'Try email again'), { timeout: 30_000 });
+  await audit(page, 'form-results-one-retry', { prep: () => { const d = document.querySelector('.sheet'); d.scrollTop = d.scrollHeight; }, expect: [DIALOG, 'Notifications are on for this device.', 'Try email again'], holds: () => ![...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === 'Try notifications again') });
+  await fetch('http://127.0.0.1:8787/dev/mail-ok', { method: 'POST' });
+  await clickText(page, '[role="dialog"] button', 'Try email again');
+  await waitText(page, 'Check your inbox for a link to start email alerts.');
+  await audit(page, 'form-results-both-ok', { prep: () => { const d = document.querySelector('.sheet'); d.scrollTop = d.scrollHeight; }, expect: [DIALOG, 'Notifications are on for this device.', 'Check your inbox for a link to start email alerts.'] });
+  await page.keyboard.press('Escape');
+  // Change mode.
   await page.goto(SITE, { waitUntil: 'networkidle0' });
-  await waitText(page, 'Waiting for you to confirm by email.', 20_000);
-  await audit(page, 'row-waiting');
-  await page.goto(linkIn(mail, '/confirm'), { waitUntil: 'networkidle0' });
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Confirm alert' && !b.disabled), { timeout: 15_000 });
-  await audit(page, 'confirm-preview', { full: true });
-  await clickText(page, 'button', 'Confirm alert');
-  await waitText(page, 'Notifications are on for this device.', 20_000);
-  await audit(page, 'confirm-done', { full: true });
-  await page.goto(SITE, { waitUntil: 'networkidle0' });
-  await waitText(page, 'Notifications on this device: On', 20_000);
-  await audit(page, 'row-on');
+  await clickText(page, '.device-row button', 'Change');
+  await page.waitForSelector('[role="dialog"]');
+  await audit(page, 'form-change', { expect: ['[role="dialog"]', 'Save'] });
+  await page.keyboard.press('Escape');
+  // The row in every state, written through the VITE_LOCAL_DEBUG hook (the local stack's build sets it).
+  const longest = 'Ciudad Autónoma de Buenos Aires (Philippine Embassy in the Argentine Republic, Argentina)';
+  const alert = (o = {}) => ({ alertId: 'a'.repeat(22), incarnation: 'i'.repeat(22), generation: 1, revision: 1, fingerprint: 'f', endsAt: Date.now() + 179 * 86_400_000, choices: { siteIds: [486], applicants: 5, pace: 'hourly' }, ...o });
+  const rows = {
+    'row-on-longest': { kind: 'on', alert: alert({ officeNames: [longest] }), renewFailing: false },
+    'row-on-renewal-note': { kind: 'on', alert: alert(), renewFailing: true },
+    'row-setting-up': { kind: 'setting-up', slow: false },
+    'row-setting-up-slow': { kind: 'setting-up', slow: true },
+    'row-blocked': { kind: 'blocked' },
+    'row-ended': { kind: 'ended', endedAt: Date.now() - 86_400_000 },
+    'row-again': { kind: 'again' },
+    'row-off-unconfirmed': { kind: 'off', unsubscribed: false, deleted: true },
+    'row-off-pending': { kind: 'off', unsubscribed: true, deleted: false },
+    'row-off-both-unfinished': { kind: 'off', unsubscribed: false, deleted: false },
+    'row-cant-check': { kind: 'cant-check' },
+    'row-legacy': { kind: 'legacy' },
+    'row-updating': { kind: 'updating' },
+  };
+  // What each state's row must say (the hook's state, written again before every inspection).
+  const says = {
+    'row-on-longest': [longest, 'Change', 'Send a test', 'Turn off'],
+    'row-on-renewal-note': ["We couldn't renew it just now", 'Change', 'Send a test', 'Turn off'],
+    'row-setting-up': ['Setting up notifications on this device', 'Turn off'],
+    'row-setting-up-slow': ['Still setting up.', 'Turn off'],
+    'row-blocked': ['Notifications are blocked on this device', 'Set up again'],
+    'row-ended': ['Notifications on this device ended on', 'Set up again'],
+    'row-again': ['Notifications need setting up again', 'Set up again'],
+    'row-off-unconfirmed': ["This browser didn't stop its subscription.", 'Try again'],
+    'row-off-pending': ["Notifications are off on this device. Deleting them from our server when you're back online.", 'Try again'],
+    'row-off-both-unfinished': ["This browser didn't stop its subscription. Block notifications for this site in its settings to be sure. Deleting them", 'Try again'],
+    'row-cant-check': ["Can't check notifications on this device right now.", 'Turn off'],
+    'row-legacy': ['Close other tabs of this site'],
+    'row-updating': ["Updating this device's notifications", 'Turn off'],
+  };
+  for (const [name, view] of Object.entries(rows)) {
+    await audit(page, name, { prep: (v) => window.__pengeRowView(v), arg: view, expect: ['.device-row', ...says[name]] });
+  }
+  // The form's hint when notifications are blocked for the site.
   const cdp = await page.createCDPSession();
   await cdp.send('Browser.setPermission', { origin: ORIGIN, permission: { name: 'notifications' }, setting: 'denied' });
   await page.reload({ waitUntil: 'networkidle0' });
-  await sleep(1500);
-  await audit(page, 'row-blocked');
-  await clickText(page, 'button', 'Email alerts');
-  await page.waitForSelector('[role="dialog"]');
-  await audit(page, 'sheet-blocked-hint', { prep: () => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }) });
+  await openSheet(page);
+  await (await pushSwitch(page)).evaluate((e) => e.click());
+  await waitText(page, 'blocked for this site');
+  await audit(page, 'form-blocked-hint', { expect: ['[role="dialog"]', 'Notifications are blocked for this site.'] });
 
   for (const path of ['privacy', 'delete-data', 'unsubscribe']) {
     await page.goto(new URL(path, SITE).href, { waitUntil: 'networkidle0' });
@@ -177,3 +252,4 @@ try {
   writeFileSync(join(OUT, 'audit.json'), JSON.stringify({ version, run: RUN, widths: WIDTHS, finished: done.length === STATES, states: done, findings }, null, 2));
   await browser.close();
 }
+process.exitCode = done.length === STATES && findings.length === 0 ? 0 : 1;

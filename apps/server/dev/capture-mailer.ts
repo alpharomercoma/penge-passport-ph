@@ -7,11 +7,15 @@ import type { Mail, Mailer, SendResult } from '../src/mailer.ts';
 export class CaptureMailer implements Mailer {
   readonly mode = 'live' as const;
   readonly captured: Mail[] = [];
+  /** Set by the local stack's /dev/mail-fail: every email is refused as a mail server refuses one, until cleared. */
+  refuseNext = false;
   private readonly dir: string;
   constructor(dir: string) {
     this.dir = join(dir, 'mail');
   }
   async send(mail: Mail): Promise<SendResult> {
+    // The shape wasRefused() recognises (an SMTP 5xx answer): surely not sent.
+    if (this.refuseNext) throw Object.assign(new Error('refused by the local stack'), { responseCode: 550 });
     this.captured.push(mail);
     mkdirSync(this.dir, { recursive: true });
     const n = String(this.captured.length).padStart(3, '0');

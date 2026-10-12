@@ -1,0 +1,110 @@
+{
+  "browser": "firefox/157.0.1",
+  "results": [
+    {
+      "item": "A 05cee09 page signs up and confirms an email alert",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "A 157bad9 page signs up and confirms an email alert",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "A 05cee09 page asking for notifications is told to reload",
+      "pass": true,
+      "note": "{\"status\":409,\"body\":{\"error\":\"This page is out of date. Reload it.\",\"code\":\"reload\"}}"
+    },
+    {
+      "item": "A resumed 05cee09 page, confirmed, told \"missing\": drops its subscription",
+      "pass": true,
+      "note": "{\"before\":true,\"asked\":1,\"after\":false}"
+    },
+    {
+      "item": "A resumed 05cee09 page, unconfirmed, asked 49 hours ago, told \"missing\": drops its subscription",
+      "pass": true,
+      "note": "{\"before\":true,\"asked\":1,\"after\":false}"
+    },
+    {
+      "item": "A resumed 05cee09 page, unconfirmed, asked 1 hour ago, told \"missing\": keeps its subscription",
+      "pass": true,
+      "note": "{\"before\":true,\"asked\":1,\"after\":true}"
+    },
+    {
+      "item": "One origin, a frozen 05cee09 tab (confirmed, frozen before reading its subscription) resumed with \"missing\": removes the new alert's subscription",
+      "pass": true,
+      "note": "{\"frozenOk\":true,\"replaced\":true,\"asked\":1,\"after\":\"none\"}"
+    },
+    {
+      "item": "Removed: the next send gets gone, and the server ends the alert as gone",
+      "pass": true,
+      "note": "{\"test\":\"gone\",\"state\":\"gone\"}"
+    },
+    {
+      "item": "Reopened, the row asks to set up again",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "One origin, a frozen 05cee09 tab (unconfirmed, asked 49 hours ago, frozen before reading its subscription) resumed with \"missing\": removes the new alert's subscription",
+      "pass": true,
+      "note": "{\"frozenOk\":true,\"replaced\":true,\"asked\":1,\"after\":\"none\"}"
+    },
+    {
+      "item": "Removed: the next send gets gone, and the server ends the alert as gone",
+      "pass": true,
+      "note": "{\"test\":\"gone\",\"state\":\"gone\"}"
+    },
+    {
+      "item": "Reopened, the row asks to set up again",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "One origin, a frozen 05cee09 tab (unconfirmed, asked 1 hour ago, frozen before reading its subscription) resumed with \"missing\": leaves the new alert's subscription",
+      "pass": true,
+      "note": "{\"frozenOk\":true,\"replaced\":true,\"asked\":1,\"after\":\"B\"}"
+    },
+    {
+      "item": "Left: the next send is accepted and the alert stays on",
+      "pass": true,
+      "note": "{\"test\":\"accepted\",\"state\":\"active\"}"
+    },
+    {
+      "item": "One origin, a frozen 05cee09 tab (confirmed, frozen with its request in flight) resumed with \"missing\": removes or leaves the new alert's subscription",
+      "pass": true,
+      "note": "{\"frozenOk\":true,\"replaced\":true,\"asked\":1,\"after\":\"none\"}"
+    },
+    {
+      "item": "Removed: the next send gets gone, and the server ends the alert as gone",
+      "pass": true,
+      "note": "{\"test\":\"gone\",\"state\":\"gone\"}"
+    },
+    {
+      "item": "Reopened, the row asks to set up again",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "One origin, a 05cee09 tab with an empty database beside a new setup: asks nothing and leaves the new subscription",
+      "pass": true,
+      "note": "{\"frozenOk\":true,\"replaced\":true,\"asked\":0,\"after\":\"B\"}"
+    },
+    {
+      "item": "Left: the next send is accepted and the alert stays on",
+      "pass": true,
+      "note": "{\"test\":\"accepted\",\"state\":\"active\"}"
+    },
+    {
+      "item": "Today's worker reloads an open 05cee09 tab on its first activation",
+      "pass": true,
+      "note": "http://localhost:4173/pengepassportph/assets/index-CsIc4SHG.js"
+    },
+    {
+      "item": "A 05cee09 credential is retired before setup: its database deleted, its subscription replaced, and setup succeeds",
+      "pass": true,
+      "note": "{\"legacy\":false,\"replaced\":true}"
+    }
+  ]
+}

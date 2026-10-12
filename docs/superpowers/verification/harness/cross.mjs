@@ -1,8 +1,8 @@
-// Firefox's refusals, and two browsers: ask in Chrome, confirm in Firefox; a test reaches only the browser that asks.
+// Firefox's refusals, and two browsers each with a notification alert of its own: an opening reaches both, and a
+// test reaches only the browser that sends it.
 import { writeFileSync } from 'node:fs';
 import {
-  checked, clickText, devicesOf, devOpen, emailSwitch, launch, linkIn, mailMark, mailSince, newNotes, openSheet, ORIGIN, publishedDay, pushIds, pushSwitch, resetRateLimits, RUN,
-  send, shot, shown, signUpAndConfirm, sleep, SITE, waitText, workerReady,
+  checked, clickText, devOpen, emailSwitch, launch, newNotes, notifyOnly, openSheet, ORIGIN, pickOffice, publishedDay, pushSwitch, REPO, resetRateLimits, RUN, shot, shown, sleep, waitText,
 } from './lib.mjs';
 
 const results = [];
@@ -21,7 +21,7 @@ const versions = {};
   try {
     await openSheet(page);
     await waitText(page, 'Notifications are blocked for this site. Allow them from the padlock in the address bar, then try again.');
-    await page.evaluate(() => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }));
+    await page.evaluate(() => document.querySelector('[role="switch"]')?.scrollIntoView({ block: 'center' }));
     await shot(page, 'firefox-denied-hint');
     record('Firefox, denied: the padlock hint shows as the sheet opens', true);
   } catch (err) {
@@ -31,20 +31,36 @@ const versions = {};
   }
 }
 
-// Firefox with its push connection off: subscribe() refuses; the switch goes back off, email stays on.
+/** Notifications only, pressed: resolves with the text it ended on, setup done or refused. */
+async function tryNotify(page) {
+  await openSheet(page);
+  await pickOffice(page);
+  const mail = await emailSwitch(page);
+  if ((await checked(mail)) === 'true') await mail.click();
+  await (await pushSwitch(page)).click();
+  await page.waitForFunction((el) => el.getAttribute('aria-checked') === 'true', { timeout: 20_000 }, await pushSwitch(page));
+  await clickText(page, 'button[type="submit"]', 'Turn on notifications');
+  const ends = ['Notifications are on for this device.', "This notification setup didn't finish.", "This browser can't finish setting up notifications."];
+  await page.waitForFunction((t) => t.some((x) => document.body.innerText.includes(x)), { timeout: 60_000 }, ends);
+  return page.evaluate((t) => t.find((x) => document.body.innerText.includes(x)), ends);
+}
+
+// Firefox with its push connection off: subscribe() refuses; the form says the setup didn't finish, offers a retry, and
+// still says so after the page's 30 s clock tick.
 {
   const ff = await launch('firefox', { prefs: { 'permissions.default.desktop-notification': 1, 'dom.push.connection.enabled': false } });
   const page = await ff.newPage();
   try {
-    await openSheet(page);
-    const push = await pushSwitch(page);
-    await push.click();
-    await waitText(page, 'This browser would not turn notifications on (private windows often refuse). Email still works.', 20_000);
-    await page.evaluate(() => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }));
+    const end = await tryNotify(page);
     await shot(page, 'firefox-subscribe-failed');
-    record('A browser that will not subscribe: the switch goes back off with the reason, email stays on', (await checked(await pushSwitch(page))) === 'false' && (await checked(await emailSwitch(page))) === 'true');
+    const retry = () => page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === 'Try notifications again'));
+    record("A browser that will not subscribe: the form says the setup didn't finish, with a retry", end === "This notification setup didn't finish." && (await retry()), end);
+    await sleep(35_000);
+    const still = await page.evaluate(() => document.body.innerText.includes("This notification setup didn't finish."));
+    record('…and still says so 35 s later', still && (await retry()));
   } catch (err) {
-    record('Subscribe refused', false, String(err));
+    record('Subscribe refused', false, `${err}: ${await page.evaluate(() => document.querySelector('[role="dialog"]')?.innerText ?? document.body.innerText).catch(() => '')}`.slice(0, 600));
+    await shot(page, 'firefox-subscribe-failed').catch(() => {});
   } finally {
     await ff.close();
   }
@@ -55,17 +71,9 @@ const versions = {};
   const ff = await launch('firefox', { prefs: { 'permissions.default.desktop-notification': 1, 'browser.privatebrowsing.autostart': true } });
   const page = await ff.newPage();
   try {
-    await openSheet(page);
-    const push = await pushSwitch(page);
-    await push.click();
-    await page.waitForFunction(
-      () => [...document.querySelectorAll('[role="switch"]')].at(-1)?.getAttribute('aria-checked') === 'true' || document.body.innerText.includes('would not turn notifications on'),
-      { timeout: 20_000 },
-    );
-    const on = (await checked(await pushSwitch(page))) === 'true';
-    await page.evaluate(() => document.querySelector('fieldset.channels')?.scrollIntoView({ block: 'center' }));
+    const end = await tryNotify(page);
     await shot(page, 'firefox-private');
-    record('Firefox in private browsing', null, on ? 'the switch turned on: Firefox 157 allowed the subscription' : 'the switch went back off with the reason');
+    record('Firefox in private browsing', null, end);
   } catch (err) {
     record('Firefox in private browsing', false, String(err));
   } finally {
@@ -73,7 +81,7 @@ const versions = {};
   }
 }
 
-// Ask in Chrome, confirm in Firefox; then a test from Chrome reaches Chrome only.
+// Chrome and Firefox, each with its own notification alert.
 const chrome = await launch('chrome');
 versions.chrome = await chrome.version();
 await chrome.defaultBrowserContext().overridePermissions(ORIGIN, ['notifications']);
@@ -81,56 +89,34 @@ const cpage = await chrome.newPage();
 const ff = await launch('firefox', { prefs: { 'permissions.default.desktop-notification': 1 } });
 const fpage = await ff.newPage();
 try {
-  const email = `cross-${RUN}@example.com`;
-  await openSheet(cpage);
-  await (await pushSwitch(cpage)).click();
-  await cpage.waitForFunction(() => [...document.querySelectorAll('[role="switch"]')].at(-1)?.getAttribute('aria-checked') === 'true', { timeout: 20_000 });
-  const mark = mailMark();
-  await send(cpage, email);
-  // Chrome waits on its home page, where the row polls while waiting.
-  await cpage.goto(SITE, { waitUntil: 'networkidle0' });
-  await waitText(cpage, 'Waiting for you to confirm by email.', 15_000);
-  await shot(cpage, 'chrome-cross-waiting');
-  await fpage.goto(linkIn(mailSince(mark, 'confirm', email)[0].text, '/confirm'), { waitUntil: 'networkidle0' });
-  await fpage.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Confirm alert' && !b.disabled), { timeout: 15_000 });
-  const idsBefore = pushIds();
-  const t0 = Date.now(); // from the press in Firefox
-  await clickText(fpage, 'button', 'Confirm alert');
-  const chromeOn = cpage.waitForFunction(() => document.body.innerText.includes('Notifications on this device: On'), { timeout: 45_000 }).then(() => Date.now() - t0);
-  await waitText(fpage, 'Notifications are on for the device where you asked for them. Open the app there once to finish.');
-  await shot(fpage, 'firefox-confirm-elsewhere');
-  record('Confirmed in Firefox: it says notifications are on where they were asked for', true);
-  const subscriber = [...pushIds()].filter((x) => !idsBefore.has(x))[0];
-  const ms = await chromeOn; // no reload: the row's own 30 s poll
-  record('Back in Chrome, without reloading, the row turns On within 30 s of the press in Firefox', ms <= 30_000, `${ms} ms`);
-  await shot(cpage, 'chrome-cross-on');
+  await notifyOnly(cpage);
+  await notifyOnly(fpage);
+  record('Both browsers set up a notification alert of their own', true);
   let before = await shown(cpage);
-  await devOpen(486, publishedDay(3));
-  const fresh = await newNotes(cpage, before);
-  record('An alert reaches Chrome', fresh.length === 1 && fresh[0].title === 'Dates open at Antipolo', JSON.stringify(fresh.map((n) => n.title)));
-
-  // Firefox gets a push device of its own for the same address: one subscriber, two devices.
-  await fpage.goto(SITE, { waitUntil: 'networkidle0' });
-  await workerReady(fpage);
-  await signUpAndConfirm(fpage, email, { emailOn: false, pushOn: true });
-  await fpage.goto(SITE, { waitUntil: 'networkidle0' });
-  await waitText(fpage, 'Notifications on this device: On', 20_000);
-  const devices = Object.values(devicesOf(subscriber));
-  record('One subscriber now has two registered devices (Chrome and Firefox)', devices.length === 2 && devices.every((d) => d.startsWith('r|')), JSON.stringify(devices.map((d) => d.slice(0, 2))));
   const ffBefore = await shown(fpage);
+  await devOpen(486, publishedDay(3));
+  const inChrome = await newNotes(cpage, before);
+  const inFirefox = await newNotes(fpage, ffBefore);
+  record('An opening reaches both browsers, once each', inChrome.length === 1 && inFirefox.length === 1 && [...inChrome, ...inFirefox].every((n) => n.title === 'Dates open at Antipolo'), JSON.stringify({ chrome: inChrome.map((n) => n.title), firefox: inFirefox.map((n) => n.title) }));
+  await sleep(500);
   before = await shown(cpage);
-  const answer = cpage.waitForResponse((r) => r.url().endsWith('/api/push/test'));
+  const ffQuiet = await shown(fpage);
+  const answer = cpage.waitForResponse((r) => r.url().endsWith('/mine/test'));
   await clickText(cpage, '.device-row button', 'Send a test');
-  record('A test from Chrome is accepted', (await answer).status() === 200);
-  const inChrome = await newNotes(cpage, before.filter((n) => n.tag !== 'test'));
-  const inFirefox = await newNotes(fpage, ffBefore, 10_000);
-  record('The test reaches Chrome, and not Firefox (another device of the same subscriber) within 10 s', inChrome.some((n) => n.title === 'Test notification') && inFirefox.length === 0, `chrome ${JSON.stringify(inChrome.map((n) => n.title))}, firefox ${inFirefox.length}`);
+  const res = await answer;
+  const body = await res.json().catch(() => null);
+  record('A test from Chrome is accepted', res.status() === 200 && body?.test === 'accepted', JSON.stringify(body));
+  // The test notification itself (this fresh profile has shown none before, so its tag is new).
+  const testChrome = (await newNotes(cpage, before)).filter((n) => n.title === 'Test notification');
+  const testFirefox = await newNotes(fpage, ffQuiet, 10_000);
+  record('The test notification reaches Chrome, and nothing reaches Firefox within 10 s', testChrome.length === 1 && testFirefox.length === 0, `chrome ${JSON.stringify(testChrome.map((n) => n.title))}, firefox ${testFirefox.length}`);
 } catch (err) {
   record('two browsers', false, String(err?.stack ?? err));
   await shot(cpage, 'cross-error-chrome').catch(() => {});
   await shot(fpage, 'cross-error-firefox').catch(() => {});
 } finally {
-  writeFileSync(new URL('./cross.json', import.meta.url), JSON.stringify({ versions, run: RUN, results }, null, 2));
+  writeFileSync(`${REPO}/docs/superpowers/verification/results/cross.json`, JSON.stringify({ versions, run: RUN, results }, null, 2));
   await chrome.close();
   await ff.close();
 }
+process.exitCode = results.every((r) => r.pass !== false) ? 0 : 1;

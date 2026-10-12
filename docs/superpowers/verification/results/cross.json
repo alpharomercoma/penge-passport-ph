@@ -1,9 +1,9 @@
 {
   "versions": {
-    "firefox": "firefox/157.0",
-    "chrome": "Chrome/154.0.8037.98"
+    "firefox": "firefox/157.0.1",
+    "chrome": "Chrome/154.0.8037.99"
   },
-  "run": "muvryrke",
+  "run": "mv5l2tr9",
   "results": [
     {
       "item": "Firefox, denied: the padlock hint shows as the sheet opens",
@@ -11,42 +11,37 @@
       "note": ""
     },
     {
-      "item": "A browser that will not subscribe: the switch goes back off with the reason, email stays on",
+      "item": "A browser that will not subscribe: the form says the setup didn't finish, with a retry",
+      "pass": true,
+      "note": "This notification setup didn't finish."
+    },
+    {
+      "item": "…and still says so 35 s later",
       "pass": true,
       "note": ""
     },
     {
       "item": "Firefox in private browsing",
       "pass": null,
-      "note": "the switch turned on: Firefox 157 allowed the subscription"
+      "note": "Notifications are on for this device."
     },
     {
-      "item": "Confirmed in Firefox: it says notifications are on where they were asked for",
+      "item": "Both browsers set up a notification alert of their own",
       "pass": true,
       "note": ""
     },
     {
-      "item": "Back in Chrome, without reloading, the row turns On within 30 s of the press in Firefox",
+      "item": "An opening reaches both browsers, once each",
       "pass": true,
-      "note": "28700 ms"
-    },
-    {
-      "item": "An alert reaches Chrome",
-      "pass": true,
-      "note": "[\"Dates open at Antipolo\"]"
-    },
-    {
-      "item": "One subscriber now has two registered devices (Chrome and Firefox)",
-      "pass": true,
-      "note": "[\"r|\",\"r|\"]"
+      "note": "{\"chrome\":[\"Dates open at Antipolo\"],\"firefox\":[\"Dates open at Antipolo\"]}"
     },
     {
       "item": "A test from Chrome is accepted",
       "pass": true,
-      "note": ""
+      "note": "{\"test\":\"accepted\"}"
     },
     {
-      "item": "The test reaches Chrome, and not Firefox (another device of the same subscriber) within 10 s",
+      "item": "The test notification reaches Chrome, and nothing reaches Firefox within 10 s",
       "pass": true,
       "note": "chrome [\"Test notification\"], firefox 0"
     }

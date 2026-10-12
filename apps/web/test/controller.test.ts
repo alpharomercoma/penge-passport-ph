@@ -87,6 +87,72 @@ describe('setting up on this device', () => {
     expect(w.c.view).toMatchObject({ kind: 'on', alert: { choices } });
   });
 
+  it("shows the alert on when the worker stores it while the page's own read is out (the worker's write wins the fence)", async () => {
+    const w = world();
+    const mine = w.server.api.mine.bind(w.server.api);
+    let raced = false;
+    w.server.api.mine = async (credential: string) => {
+      const answer = await mine(credential);
+      if (!raced && answer.state === 'active') {
+        // As sw.js does after the ready check: the known alert, fenced by the version it read first.
+        raced = true;
+        const s = await S.readState(w.env);
+        const a = answer.alert;
+        await S.setKnown(w.env, { credential, known: { alertId: a.alertId, incarnation: a.incarnation, generation: a.generation, revision: a.revision, fingerprint: a.fingerprint, endsAt: Date.parse(a.endsAt), choices: a.choices }, version: s.knownVersion });
+      }
+      return answer;
+    };
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    expect(raced).toBe(true);
+    expect(w.c.view).toMatchObject({ kind: 'on', alert: { choices } });
+  });
+
+  /** The worker's known write lands while the page's success read is out, every time (as sw.js does after the ready check). */
+  const workerWinsFence = (w: ReturnType<typeof world>) => {
+    const mine = w.server.api.mine.bind(w.server.api);
+    let races = 0;
+    w.server.api.mine = async (credential: string) => {
+      const answer = await mine(credential);
+      const s = await S.readState(w.env);
+      if (answer.state === 'active' && s.op?.result === 'active') {
+        races++;
+        const a = answer.alert;
+        await S.setKnown(w.env, { credential, known: { alertId: a.alertId, incarnation: a.incarnation, generation: a.generation, revision: a.revision, fingerprint: a.fingerprint, endsAt: Date.parse(a.endsAt), choices: a.choices }, version: s.knownVersion });
+      }
+      return answer;
+    };
+    return () => races;
+  };
+
+  it('a re-setup with new choices shows them, even when the worker stores the alert first', async () => {
+    const w = world();
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    const races = workerWinsFence(w);
+    const next = { siteIds: [486], applicants: 3, pace: 'hourly' as const };
+    expect(await w.c.setup(next)).toEqual({ ok: true, text: TEXT.on });
+    expect(races()).toBeGreaterThan(0);
+    expect(w.c.view).toMatchObject({ kind: 'on', alert: { choices: next } });
+  });
+
+  it("an older setup's success never replaces a newer operation's row", async () => {
+    const w = world();
+    const races = workerWinsFence(w);
+    // While the older result takes its browser proof, a newer setup begins (another tab, say).
+    const subscription = w.browser.subscription;
+    let begun = false;
+    w.browser.subscription = async () => {
+      const s = await S.readState(w.env);
+      if (!begun && s.op?.result === 'active') {
+        begun = true;
+        await S.begin(w.env, { kind: 'setup', choices: { siteIds: [486], applicants: 2, pace: 'asap' }, captured: null, now: w.now() });
+      }
+      return subscription();
+    };
+    await w.c.setup(choices);
+    expect(begun && races() > 0).toBe(true);
+    expect(w.c.view.kind).not.toBe('on');
+  });
+
   it('a setup push that arrives after 4 minutes still completes; one after expiry never does', async () => {
     const late = world({ deliverAfterMs: 240_000 });
     const views: string[] = [];

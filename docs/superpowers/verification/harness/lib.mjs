@@ -1,7 +1,7 @@
 // Verification harness for Task 17 (scratch only, never committed): drives the installed
 // Chrome and Firefox with throwaway profiles against the local stack.
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdtempSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,13 +14,15 @@ export const ORIGIN = 'http://localhost:4173';
 export const IMG = join(REPO, 'docs/superpowers/verification/img');
 const MAIL = join(REPO, '.local/mail');
 
+/** Headless unless HEADED=1: the runs never open windows over the person's work. */
+const HEADLESS = process.env.HEADED !== '1';
 export async function launch(kind, opts = {}) {
   const dir = mkdtempSync(join(tmpdir(), `penge-${kind}-`));
   if (kind === 'chrome') {
     return puppeteer.launch({
       browser: 'chrome',
       executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      headless: false,
+      headless: HEADLESS,
       userDataDir: dir,
       defaultViewport: { width: 1100, height: 900 },
       args: ['--no-first-run', '--no-default-browser-check', '--window-size=1100,1000', ...(opts.args ?? [])],
@@ -29,7 +31,7 @@ export async function launch(kind, opts = {}) {
   return puppeteer.launch({
     browser: 'firefox',
     executablePath: '/Applications/Firefox.app/Contents/MacOS/firefox',
-    headless: false,
+    headless: HEADLESS,
     userDataDir: dir,
     defaultViewport: { width: 1100, height: 900 },
     // Remote control turns Firefox's push connection off; a person's Firefox has it on.
@@ -57,8 +59,34 @@ export function linkIn(text, path) {
   return m ? m[0].replace('http://localhost:4173', ORIGIN) : null;
 }
 
+/**
+ * Docker on this machine only, found and pinned as scripts/local-stack.sh does (DOCKER_CONTEXT wins over DOCKER_HOST,
+ * which wins over the current context): a remote daemon is never asked to change anything.
+ */
+let dockerHost = null;
+function localDocker() {
+  if (dockerHost) return dockerHost;
+  const inspect = (...ctx) => {
+    try {
+      return execFileSync('docker', ['context', 'inspect', ...ctx, '--format', '{{.Endpoints.docker.Host}}'], { encoding: 'utf8' }).trim();
+    } catch {
+      return 'unknown';
+    }
+  };
+  const host = process.env.DOCKER_CONTEXT ? inspect(process.env.DOCKER_CONTEXT) : (process.env.DOCKER_HOST ?? inspect());
+  if (!host.startsWith('unix://')) throw new Error(`Docker points at ${host}, not this machine; refusing`);
+  return (dockerHost = host);
+}
+let marked = false;
+/** valkey-cli in the local stack's container, once it is known to carry the disposable mark local-stack.sh sets. */
 export function valkey(...args) {
-  return execFileSync('docker', ['exec', 'penge-local-valkey', 'valkey-cli', ...args], { encoding: 'utf8' }).trim();
+  const { DOCKER_CONTEXT: _, ...env } = process.env;
+  const cli = (a) => execFileSync('docker', ['exec', 'penge-local-valkey', 'valkey-cli', ...a], { encoding: 'utf8', env: { ...env, DOCKER_HOST: localDocker() } }).trim();
+  if (!marked) {
+    if (cli(['GET', 'pp:test:disposable']) !== '1') throw new Error('the local Valkey is not marked disposable; refusing');
+    marked = true;
+  }
+  return cli(args);
 }
 export const scan = (pattern) => valkey('--scan', '--pattern', pattern).split('\n').filter(Boolean);
 
@@ -96,48 +124,91 @@ export async function waitText(page, text, timeout = 15_000) {
 
 export async function openSheet(page) {
   await page.goto(SITE, { waitUntil: 'networkidle0' });
-  await clickText(page, 'button', 'Email alerts');
+  await clickText(page, 'button', 'Alerts');
   await page.waitForSelector('[role="dialog"]');
 }
 
-export async function pushSwitch(page) {
-  await page.waitForFunction(() => [...document.querySelectorAll('[role="switch"]')].some((e) => /notifications/i.test(e.textContent ?? '')), { timeout: 15_000 });
-  return (await page.$$('[role="switch"]')).at(-1);
+/** The switch in the open sheet whose name matches, once it shows. */
+async function namedSwitch(page, pattern) {
+  await page.waitForFunction((src) => [...document.querySelectorAll('[role="switch"]')].some((e) => new RegExp(src).test((e.textContent ?? '').trim())), { timeout: 15_000 }, pattern.source);
+  for (const h of await page.$$('[role="switch"]')) {
+    if (pattern.test((await h.evaluate((e) => e.textContent ?? '')).trim())) return h;
+  }
+  throw new Error(`no switch named ${pattern}`);
 }
-export async function emailSwitch(page) {
-  return (await page.$$('[role="switch"]'))[0];
-}
+export const pushSwitch = (page) => namedSwitch(page, /^(Browser notifications|Notifications on this device)$/);
+export const emailSwitch = (page) => namedSwitch(page, /^Email$/);
 export const checked = (h) => h.evaluate((e) => e.getAttribute('aria-checked'));
 
-/** Fills the email and sends the form (offices: the one already chosen, or Antipolo). */
-export async function send(page, email) {
+/** In the open sheet: picks Antipolo if no office is chosen. */
+export async function pickOffice(page) {
   const chips = await page.$$('.chips .chip');
-  if (chips.length === 0) {
-    await page.type('input[type="search"]', 'Antipolo');
-    await page.click('.pick input[type="checkbox"]');
-  }
-  await page.type('input[type="email"]', email);
-  // "As soon as possible": several alerts within the hour in these checks would otherwise wait for the pace.
-  const pace = await page.$('select[id$="-pace"]');
-  if (pace) await pace.select('asap');
-  await clickText(page, 'button[type="submit"]', 'Send confirmation email');
-  await waitText(page, 'Check your inbox');
+  if (chips.length > 0) return;
+  await page.type('input[type="search"]', 'Antipolo');
+  await page.click('.pick input[type="checkbox"]');
 }
 
-/** Signs up in this page with the given channels, confirms in the same page, and returns to home. */
-export async function signUpAndConfirm(page, email, { emailOn = true, pushOn = true } = {}) {
-  await openSheet(page);
-  if (pushOn) {
-    const push = await pushSwitch(page);
-    await push.click();
-    await page.waitForFunction(() => [...document.querySelectorAll('[role="switch"]')].at(-1)?.getAttribute('aria-checked') === 'true', { timeout: 20_000 });
+/** "As soon as possible": several alerts within the hour in these checks would otherwise wait for the pace. */
+async function paceAsap(page) {
+  const pace = await page.$('select[id$="-pace"]');
+  if (pace) await pace.select('asap');
+}
+
+const SUBMITS = ['Turn on notifications and send confirmation email', 'Turn on notifications', 'Send confirmation email'];
+async function submit(page) {
+  for (const h of await page.$$('button[type="submit"]')) {
+    const t = (await h.evaluate((e) => e.textContent ?? '')).trim();
+    if (SUBMITS.includes(t)) return h.click();
   }
-  if (!emailOn) await (await emailSwitch(page)).click();
+  throw new Error('no submit button');
+}
+
+/** Fills the email (switching Email on first) and sends the form; the caller waits for what it expects. */
+export async function send(page, email) {
+  await pickOffice(page);
+  const mail = await emailSwitch(page);
+  if ((await checked(mail)) !== 'true') {
+    await mail.click();
+    await page.waitForFunction((el) => el.getAttribute('aria-checked') === 'true', { timeout: 5_000 }, mail);
+  }
+  await page.type('input[type="email"]', email);
+  await paceAsap(page);
+  await submit(page);
+}
+
+/** Opens the sheet, turns on a notification alert for this device alone, and closes the sheet; `beforePress` runs just before the press. */
+export async function notifyOnly(page, { beforePress } = {}) {
+  await openSheet(page);
+  await pickOffice(page);
+  await paceAsap(page);
+  const mail = await emailSwitch(page);
+  if ((await checked(mail)) === 'true') await mail.click();
+  const push = await pushSwitch(page);
+  if ((await checked(push)) !== 'true') await push.click();
+  await page.waitForFunction((el) => el.getAttribute('aria-checked') === 'true', { timeout: 20_000 }, push);
+  // The form as it is about to be sent (a caller checks what it shows or asks for).
+  if (beforePress) await beforePress();
+  await clickText(page, 'button[type="submit"]', 'Turn on notifications');
+  await waitText(page, 'Notifications are on for this device.', 60_000);
+  // Closed, so the row's buttons are not behind the sheet.
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'), { timeout: 5_000 });
+}
+
+/** The device row's text, or null when there is none. */
+export function rowText(page) {
+  return page.evaluate(() => document.querySelector('.device-row')?.textContent ?? null);
+}
+
+/** Signs up for email alerts in this page, confirms in the same page, and returns to home. */
+export async function signUpAndConfirm(page, email) {
+  await openSheet(page);
   await send(page, email);
+  await waitText(page, 'Check your inbox');
   const link = linkIn(lastMail('confirm', email).text, '/confirm');
   await page.goto(link, { waitUntil: 'networkidle0' });
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Confirm alert' && !b.disabled), { timeout: 15_000 });
-  await clickText(page, 'button', 'Confirm alert');
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Confirm email alert' && !b.disabled), { timeout: 15_000 });
+  await clickText(page, 'button', 'Confirm email alert');
   await page.waitForFunction(() => /You are subscribed|Your alert is updated/.test(document.body.innerText), { timeout: 15_000 });
   await sleep(1000);
   return link;
@@ -224,4 +295,52 @@ export async function newNotes(page, before, ms = 20_000) {
     await sleep(500);
   }
   return fresh;
+}
+
+export const PIDS = join(REPO, '.local/pids');
+export const MARKER = 'vite preview --host 127.0.0.1 --port 4173';
+
+export const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+/** Stops the web server on 4173, only if it is the one the pid file names and still what it says (null: already gone). */
+export function stopWeb() {
+  const [pid, ...marker] = readFileSync(join(PIDS, 'web.pid'), 'utf8').trim().split(' ');
+  if (!alive(Number(pid))) return null;
+  const command = execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' }).trim();
+  if (!command.includes(marker.join(' '))) throw new Error(`pid ${pid} is not the web server: ${command}`);
+  process.kill(Number(pid));
+  return Number(pid);
+}
+/** Waits until a process has exited, so its port is free. */
+export async function gone(pid) {
+  if (pid === null) return;
+  for (let i = 0; i < 40; i++) {
+    if (!alive(pid)) return;
+    await sleep(250);
+  }
+  throw new Error(`pid ${pid} did not exit`);
+}
+/**
+ * Serves a build on 4173 from an apps/web directory and, once that process is the one listening and
+ * serving the expected worker, records it where local-stack.sh looks.
+ */
+export async function serveWeb(webDir, want) {
+  const log = openSync(join(REPO, '.local/web.log'), 'a');
+  const child = spawn(join(REPO, 'node_modules/.bin/vite'), ['preview', '--host', '127.0.0.1', '--port', '4173', '--strictPort'], {
+    cwd: webDir, env: { ...process.env, BASE_PATH: 'pengepassportph' }, detached: true, stdio: ['ignore', log, log],
+  });
+  child.unref();
+  await waitServing(want);
+  const listener = execFileSync('lsof', ['-nP', '-iTCP:4173', '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim().split('\n');
+  if (!alive(child.pid) || !listener.includes(String(child.pid))) throw new Error(`the new server (pid ${child.pid}) is not the one on 4173 (${listener.join(', ')})`);
+  writeFileSync(join(PIDS, 'web.pid'), `${child.pid} ${MARKER}\n`);
+}
+export async function waitServing(want) {
+  for (let i = 0; i < 60; i++) {
+    const text = await fetch(new URL('sw.js', SITE)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+    if (text && want(text)) return text;
+    await sleep(500);
+  }
+  throw new Error('4173 did not serve the expected build');
 }

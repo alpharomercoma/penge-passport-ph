@@ -1,8 +1,9 @@
 // The installable app: the manifest, its icons, and the service worker's rules
 // (src/sw.js), run here against a fake cache and network.
 import 'fake-indexeddb/auto';
+import { execFileSync } from 'node:child_process';
 import { webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -288,4 +289,28 @@ describe('service worker', () => {
       expect(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`).toBe(`${size}x${size}`);
     }
   });
+});
+
+describe('the local debug hook', () => {
+  /** The built page's scripts, from `vite build` into a scratch directory with VITE_LOCAL_DEBUG as given. */
+  const scripts = (debug: string | undefined) => {
+    const out = mkdtempSync(join(tmpdir(), 'penge-build-'));
+    // As `npm run build` runs it: a production build, not the test run's mode.
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'production', VITE_LOCAL_DEBUG: debug ?? '' };
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST') || k === 'TEST' || k === 'MODE') delete env[k];
+    if (debug === undefined) delete env.VITE_LOCAL_DEBUG;
+    execFileSync(join(web, '../../node_modules/.bin/vite'), ['build', '--outDir', out, '--emptyOutDir', '--logLevel', 'error'], { cwd: web, env });
+    return readdirSync(join(out, 'assets'))
+      .filter((f) => f.endsWith('.js'))
+      .map((f) => readFileSync(join(out, 'assets', f), 'utf8'))
+      .join('\n');
+  };
+
+  it("is in the local stack's build, and never in the release build", () => {
+    const debugBuild = scripts('1');
+    const releaseBuild = scripts(undefined);
+    expect(releaseBuild.includes('jsxDEV')).toBe(false); // a production build, as released
+    expect(debugBuild.includes('__pengeRowView')).toBe(true);
+    expect(releaseBuild.includes('__pengeRowView')).toBe(false);
+  }, 180_000);
 });

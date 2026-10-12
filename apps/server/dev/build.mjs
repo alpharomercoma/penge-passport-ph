@@ -11,6 +11,8 @@ await build({
   format: 'esm',
   target: 'node22',
   sourcemap: true,
+  // The local stack runs from the repository, where wasmoon (the Lua engine for MemoryKv) is installed.
+  external: ['wasmoon'],
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   logLevel: 'info',
 });

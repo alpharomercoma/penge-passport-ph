@@ -8,7 +8,7 @@ for (const p of await b.pages()) {
 if (!page) throw new Error('no visible page on localhost:4173');
 const out = await t(page.evaluate(async () => {
   const probe = (u) => { const d = document.createElement('div'); d.style.cssText = `position:fixed;top:0;height:${u};width:1px`; document.body.append(d); const h = d.getBoundingClientRect().height; d.remove(); return Math.round(h); };
-  [...document.querySelectorAll('button')].find((x) => x.textContent.includes('Email alerts')).click();
+  [...document.querySelectorAll('button')].find((x) => x.textContent.includes('Alerts')).click();
   await new Promise((r) => setTimeout(r, 1200));
   document.activeElement?.blur?.();
   await new Promise((r) => setTimeout(r, 600));

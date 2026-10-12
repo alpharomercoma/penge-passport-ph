@@ -1,0 +1,140 @@
+{
+  "browser": "Chrome/154.0.8037.99",
+  "results": [
+    {
+      "item": "No email was asked for",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "The ready check showed its notification",
+      "pass": true,
+      "note": "[\"Notifications are ready\"]"
+    },
+    {
+      "item": "The row says what is on and until when",
+      "pass": true,
+      "note": "Notifications on this device: Antipolo · for 1 person · as soon as possible · until 11 Apr 2027ChangeSend a testTurn off"
+    },
+    {
+      "item": "The server holds no email for it",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "An opening arrives as a notification, with when it was checked",
+      "pass": true,
+      "note": "{\"title\":\"Dates open at Antipolo\",\"body\":\"Fri 16 Oct · for 1 person · Checked 02:35\",\"tag\":\"alert-local67-1791830135008-QB2o1rEjrNrwPsLmUws7BQ\",\"data\":{\"office\":486,\"date\":\"2026-10-16\",\"people\":1}}"
+    },
+    {
+      "item": "Change has no switches and no email field",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Changed: after a reload the row says 2 people",
+      "pass": true,
+      "note": "Notifications on this device: Antipolo · for 2 people · as soon as possible · until 11 Apr 2027ChangeSend a testTurn off"
+    },
+    {
+      "item": "Changed: the next opening's notification is for 2 people, and opens that office, date and group",
+      "pass": true,
+      "note": "[{\"body\":\"Mon 19 Oct · for 2 people · Checked 02:37\",\"data\":{\"office\":486,\"date\":\"2026-10-19\",\"people\":2}}]"
+    },
+    {
+      "item": "The test notification arrived",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Turned off: nothing left on the server",
+      "pass": true,
+      "note": "QB2o1rEjrNrwPsLmUws7BQ"
+    },
+    {
+      "item": "Turned off: the browser has no subscription",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Offline: the browser unsubscribed before reconnecting, and the server still holds the alert",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Offline, reopened: the pending deletion is remembered",
+      "pass": true,
+      "note": "{\"credential\":null,\"retired\":1}"
+    },
+    {
+      "item": "Back online: the deletion went through",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "An ended alert says so, with its date",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Both on, email refused: notifications on, and a retry for email only",
+      "pass": true,
+      "note": "[\"\",\" Email\",\" Browser notifications\",\"Antipolo\",\"Add another office\",\"Try email again\",\"Turn on notifications and send confirmation email\"]"
+    },
+    {
+      "item": "Email again, after the mail server is back: a confirmation email with its link was sent",
+      "pass": true,
+      "note": "captured"
+    },
+    {
+      "item": "The email alert is confirmed",
+      "pass": true,
+      "note": "both-1791830282965@example.com"
+    },
+    {
+      "item": "Both on: one opening gives one alert email and one notification",
+      "pass": true,
+      "note": "{\"mail\":true,\"notes\":[\"Dates open at Antipolo\"]}"
+    },
+    {
+      "item": "Both on, notifications refused: the confirmation email goes out, both results show together, and only notifications offer a retry",
+      "pass": true,
+      "note": "{\"mail\":true,\"bothShown\":true,\"retries\":[\"Try notifications again\"]}"
+    },
+    {
+      "item": "Delete this device's data: nothing left on the server, no subscription, and no row",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Delete this device's data: the email alert stays",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Email only: no notification alert was made",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "item": "Email only: an alert email, and no notification within 10 s",
+      "pass": true,
+      "note": "{\"mail\":true,\"notes\":0}"
+    },
+    {
+      "item": "Dismissed: asked once; the switch stays off, no hint, Email untouched",
+      "pass": true,
+      "note": "asked 1"
+    },
+    {
+      "item": "Denied: the switch stays off, with the \"blocked for this site\" hint",
+      "pass": true,
+      "note": "AlertsHow should we tell you? Email Browser notificationsNotifications are blocked for this site. Allow them in the site settings (the icon left of the address), then try again.OfficesSearch officesLu"
+    },
+    {
+      "item": "Blocked while on: the row says it was turned off, and the server holds nothing",
+      "pass": true,
+      "note": ""
+    }
+  ]
+}

@@ -920,7 +920,16 @@ export class DeviceController {
       // And still is after the proof's wait: the same epoch, `known` untouched, and still this activation.
       const last = await S.readState(this.d.env);
       const stable = last.epoch === now.epoch && last.knownVersion === now.knownVersion;
-      if (serverOk && isThis(now) && isThis(last) && stable && proof === 'ok') return { ok: true, text: TEXT.on };
+      if (serverOk && isThis(now) && isThis(last) && stable && proof === 'ok') {
+        // The row shows it, whoever stored it: the worker stores the same alert after the ready check, and its write can
+        // win the fence the read above was refused by, leaving that read nothing to show. Only while this operation is
+        // still the device's latest (a newer one's row stands), and only if the row does not show exactly this alert.
+        const k = last.known!;
+        const v = this.view.kind === 'on' ? this.view.alert : null;
+        const same = !!v && v.alertId === k.alertId && v.incarnation === k.incarnation && v.generation === k.generation && v.revision === k.revision && v.fingerprint === k.fingerprint && v.endsAt === k.endsAt && JSON.stringify(v.choices) === JSON.stringify(k.choices);
+        if (last.op?.op === op.op && !same) this.show({ kind: 'on', alert: k, renewFailing: false });
+        return { ok: true, text: TEXT.on };
+      }
       if (proof === 'unknown') return { ok: false, text: TEXT.cantFinish, retry: true };
       return { ok: false, text: TEXT.again, retry: true };
     }

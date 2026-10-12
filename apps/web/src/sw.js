@@ -22,8 +22,10 @@ self.addEventListener('install', (event) => {
 });
 
 // A new build's worker takes over at once and drops the last build's files.
-// The first activation of a worker of this design reloads every page it controls, so no page of an older release
-// (which could touch the browser's subscription) stays open (spec: "Old pages and the shared subscription").
+// The first activation of a worker of this design reloads every page an earlier worker controlled, so no page of an
+// older release (which could touch the browser's subscription) stays open (spec: "Old pages and the shared
+// subscription"). Those pages are listed before claim(): the pages claim() adopts are first visits, already of this
+// release, and reloading them would only interrupt the person (a form being filled, a setup running).
 const MARKER = `${PREFIX}device-alerts-v1`;
 
 self.addEventListener('activate', (event) => {
@@ -31,11 +33,12 @@ self.addEventListener('activate', (event) => {
     (async () => {
       const keys = await caches.keys();
       await Promise.all(keys.filter((key) => key.startsWith(PREFIX) && key !== CACHE && key !== MARKER).map((key) => caches.delete(key)));
+      const earlier = await self.clients.matchAll({ type: 'window' });
       await self.clients.claim();
       if (await caches.has(MARKER)) return;
       await caches.open(MARKER);
       // Started, never awaited: a navigation settles only once it commits, which waits for this activation (Chromium).
-      for (const client of await self.clients.matchAll({ type: 'window' })) void Promise.resolve(client.navigate?.(client.url)).catch(() => undefined);
+      for (const client of earlier) void Promise.resolve(client.navigate?.(client.url)).catch(() => undefined);
     })(),
   );
 });

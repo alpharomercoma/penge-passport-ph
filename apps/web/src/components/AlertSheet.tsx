@@ -94,13 +94,15 @@ export function AlertSheet({ api, status, offices, selected, initialApplicants =
   // Changing any choice after a submission makes the next press a new submission. While a submission runs the form's
   // controls are disabled (a fieldset), so its outcomes always belong to the choices shown.
   const submission = useRef(0);
+  // By value: the page passes the same offices in a new array whenever it re-renders (its clock ticks every 30 s).
+  const selectedKey = selected.join(',');
   useEffect(() => {
     if (busyRef.current.email || busyRef.current.notify) return;
     submission.current++;
     snapshot.current = null;
     setEmailOutcome(IDLE);
     setNotifyOutcome(IDLE);
-  }, [selected, applicants, pace]);
+  }, [selectedKey, applicants, pace]);
   // The address is email's alone: changing it resets email's outcome, never a notification setup that succeeded.
   useEffect(() => {
     if (busyRef.current.email) return;

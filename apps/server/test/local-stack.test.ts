@@ -86,4 +86,12 @@ describe('the local stack', () => {
     expect(stack.mailer.captured.at(-1)!.kind).toBe('alert');
     await stack.close();
   });
+
+  it('serves the device routes to its own pages\' origin, and refuses others', async () => {
+    const stack = await buildLocal({ kvUrl: null, dir: mkdtempSync(join(tmpdir(), 'penge-local-')) });
+    const call = (origin: string) => stack.app.request('/api/device-alerts', { method: 'POST', headers: { 'content-type': 'application/json', origin, authorization: `Device ${'c'.repeat(43)}` }, body: '{}' });
+    expect((await call('http://localhost:4173')).status).toBe(400); // past the origin check, refused for its body
+    expect((await call('https://evil.example')).status).toBe(403);
+    await stack.close();
+  });
 });

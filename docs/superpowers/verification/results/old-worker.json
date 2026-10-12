@@ -1,11 +1,11 @@
 {
-  "version": "Chrome/154.0.8037.98",
-  "run": "muw7f30w",
+  "version": "Chrome/154.0.8037.99",
+  "run": "mv5l2gru",
   "results": [
     {
       "item": "The two builds have different workers; only the new one handles pushes",
       "pass": true,
-      "note": "old 2e00b15acd4f, new cab82d261bbb"
+      "note": "old 2e00b15acd4f, new 979533a871b9"
     },
     {
       "item": "The release before push: its worker is the active one and controls the page, and gives no capabilities answer (no message handler)",
@@ -13,19 +13,24 @@
       "note": "{\"controlled\":true,\"isActive\":true,\"reply\":null,\"endpoint\":null}"
     },
     {
-      "item": "After one reload and the switch: today's worker is the active one, controls the page and answers with its version, and a subscription exists",
+      "item": "After one reload, today's worker reloads the page once more on its first activation",
       "pass": true,
-      "note": "version 9179023810e4, fcm.googleapis.com"
+      "note": "2 navigations"
     },
     {
-      "item": "The switch came on within 10 s of the flip",
+      "item": "After one reload: today's worker is the active one, controls the page, answers deviceAlerts: 1, and a subscription exists",
       "pass": true,
-      "note": "3.4 s"
+      "note": "fcm.googleapis.com"
     },
     {
-      "item": "After the upgrade, a notifications-only alert is confirmed and delivered",
+      "item": "Notifications came on within 60 s of the press, the ready check included",
       "pass": true,
-      "note": "[\"Dates open at Antipolo / Mon 12 Oct · for 1 person\"]"
+      "note": "5.9 s"
+    },
+    {
+      "item": "After the upgrade, a notification alert is delivered",
+      "pass": true,
+      "note": "[\"Dates open at Antipolo / Sun 18 Oct · for 1 person · Checked 02:26\"]"
     }
   ]
 }

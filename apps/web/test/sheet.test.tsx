@@ -392,6 +392,25 @@ describe('each kind of alert on its own', () => {
     expect(controller.setup).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps each result and its retry when the page re-renders with the same offices (Home's clock tick)", async () => {
+    live();
+    const controller = { setup: vi.fn(async () => ({ ok: false, text: "This notification setup didn't finish.", retry: true })), change: vi.fn() } as unknown as DeviceController;
+    // As Home passes them: the same offices, in a new array at every render.
+    function Form({ tick }: { tick: number }) {
+      const [chosen, setChosen] = useState<number[]>([486]);
+      const selected = chosen.filter(() => tick >= 0);
+      return <AlertSheet api={fakeApi()} status={LIVE} offices={OFFICES} selected={selected} onSelectedChange={setChosen} onClose={() => {}} controller={controller} />;
+    }
+    const view = render(<Form tick={0} />);
+    const sheet = screen.getByRole('dialog');
+    fireEvent.click(await within(sheet).findByRole('switch', { name: 'Browser notifications' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Turn on notifications' }));
+    await within(sheet).findByText("This notification setup didn't finish.");
+    view.rerender(<Form tick={1} />);
+    expect(within(sheet).queryByText("This notification setup didn't finish.")).toBeTruthy();
+    expect(within(sheet).queryByRole('button', { name: 'Try notifications again' })).toBeTruthy();
+  });
+
   it('turns the notification choice off when notifications stop being available', async () => {
     live();
     const controller = { setup: vi.fn(async () => ({ ok: true, text: 'x' })), change: vi.fn() } as unknown as DeviceController;

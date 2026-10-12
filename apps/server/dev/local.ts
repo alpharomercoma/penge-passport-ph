@@ -11,6 +11,8 @@ import webpush from 'web-push';
 import { createApi } from '../src/api.ts';
 import { type CheckDeps, runCheck } from '../src/checker.ts';
 import type { PushConfig } from '../src/config.ts';
+import { webPushTransport } from '../src/devices/transport.ts';
+import { installLua } from './lua-engine.ts';
 import { K } from '../src/keys.ts';
 import { connectRedis, type Kv, MemoryKv, type WriteOp } from '../src/kv.ts';
 import { log } from '../src/log.ts';
@@ -21,7 +23,7 @@ import { FakeDfa } from './fake-upstream.ts';
 
 const BASE = 'http://localhost:4173/pengepassportph';
 
-function secrets(dir: string) {
+export function secrets(dir: string) {
   mkdirSync(dir, { recursive: true });
   const file = join(dir, 'secrets.json');
   if (!existsSync(file)) {
@@ -37,7 +39,7 @@ function secrets(dir: string) {
 }
 
 /** Records go nowhere: the local stack has no R2. */
-const noSink: SnapshotSink = { store: async () => 'uploaded' };
+export const noSink: SnapshotSink = { store: async () => 'uploaded' };
 
 /** Only the throwaway Valkey that scripts/local-stack.sh starts, and only once it is marked disposable. */
 async function localKv(url: string): Promise<Kv> {
@@ -54,21 +56,29 @@ async function localKv(url: string): Promise<Kv> {
 }
 
 export async function buildLocal(o: { kvUrl: string | null; dir: string }) {
+  // In-process (tests): MemoryKv runs the device scripts' real Lua.
+  if (!o.kvUrl) await installLua();
   const kv: Kv = o.kvUrl ? await localKv(o.kvUrl) : new MemoryKv();
   const { keys, vapid } = secrets(o.dir);
   const mailer = new CaptureMailer(o.dir);
   const upstream = new FakeDfa();
   const push: PushConfig = { mode: 'live', vapid, ownerToken: null };
+  const transport = webPushTransport(vapid);
   // Lookups (group dates, hours) answered by the fake DFA: no network here either.
   const lookups = createLookups({ kv, upstream, log });
   const app = createApi({
-    kv, keys, mailer, log, publicBaseUrl: BASE, push, lookups,
+    kv, keys, mailer, log, publicBaseUrl: BASE, push, lookups, pushTransport: transport,
+    devices: { alertLimit: 50, recordLimit: 350 },
+    // The pages the local stack serves: vite preview over http, the https proxy, and the phone's view of that proxy
+    // (PENGE_PHONE_ORIGIN, e.g. https://192.168.1.20:8443, set only when testing on a phone; never in production).
+    devOrigins: ['http://localhost:4173', 'https://localhost:8443', ...(process.env.PENGE_PHONE_ORIGIN ? [process.env.PENGE_PHONE_ORIGIN] : [])],
     // With MemoryKv the API is called in-process (tests): there is no socket to read an address from.
     ...(o.kvUrl ? {} : { clientIp: () => '127.0.0.1' }),
   });
   const deps: CheckDeps = {
     kv, upstream, sink: noSink, mailer, keys, log, publicBaseUrl: BASE,
     mailDailyLimit: 2500, alertsPerSubscriberPerDay: 288, client: 'penge-local',
+    devices: { mode: 'live', transport }, deviceLimits: { alertLimit: 50, recordLimit: 350 },
   };
   let n = 0;
   const runOnce = () => runCheck({ ...deps, runId: `local${++n}-${Date.now()}` });
@@ -100,6 +110,9 @@ export async function buildLocal(o: { kvUrl: string | null; dir: string }) {
     await clear();
     return c.json({ delivery: report.delivery });
   });
+  // The harness's "both kinds, one failing": the next email is refused as the mail server refuses one.
+  devApp.post('/dev/mail-fail', (c) => ((mailer.refuseNext = true), c.json({ ok: true })));
+  devApp.post('/dev/mail-ok', (c) => ((mailer.refuseNext = false), c.json({ ok: true })));
   devApp.route('/', app);
   return { app, devApp, kv, mailer, deps, upstream, runOnce, close: () => kv.close() };
 }

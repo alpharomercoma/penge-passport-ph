@@ -12,7 +12,10 @@ export function rowText(view: RowView, names: (id: number) => string): string {
   switch (view.kind) {
     case 'on': {
       const { choices, endsAt } = view.alert;
-      const offices = choices.siteIds.length > 1 ? `${names(choices.siteIds[0]!)} and ${choices.siteIds.length - 1} more` : names(choices.siteIds[0]!);
+      // The local stack's layout audit names offices of any length (VITE_LOCAL_DEBUG builds only).
+      const debugNames = import.meta.env.VITE_LOCAL_DEBUG === '1' ? (view.alert as { officeNames?: string[] }).officeNames : undefined;
+      const nameOf = (id: number) => debugNames?.[choices.siteIds.indexOf(id)] ?? names(id);
+      const offices = choices.siteIds.length > 1 ? `${nameOf(choices.siteIds[0]!)} and ${choices.siteIds.length - 1} more` : nameOf(choices.siteIds[0]!);
       const pace = choices.pace === 'asap' ? 'as soon as possible' : 'at most once an hour';
       return `Notifications on this device: ${offices} · ${people(choices.applicants)} · ${pace} · until ${formatShortDate(endsAt)}`;
     }
@@ -40,6 +43,8 @@ export function rowText(view: RowView, names: (id: number) => string): string {
 export function DeviceRow({ controller, onChange, onSetUp, names }: { controller: DeviceController; offices?: unknown; onChange: (choices: AlertChoices) => void; onSetUp: () => void; names: (id: number) => string }) {
   const [view, setView] = useState<RowView>(controller.view);
   const [note, setNote] = useState<string | null>(null);
+  // The local stack's layout audit shows every state through this (VITE_LOCAL_DEBUG builds only; never released).
+  if (import.meta.env.VITE_LOCAL_DEBUG === '1') (window as unknown as { __pengeRowView?: (v: RowView) => void }).__pengeRowView = setView;
   useEffect(() => {
     const off = controller.subscribe(setView);
     const run = () => void controller.reconcile().then(setView, () => undefined);

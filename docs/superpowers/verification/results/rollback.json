@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-13",
+  "where": "local stack Valkey (penge-local-valkey, 127.0.0.1:6391); nothing reached production, R2 or a real mail server",
+  "notes": [
+    "DEVICE_ALERT_LIMIT/DEVICE_RECORD_LIMIT 270/1700 in rollback.env (this release's caps since Task 19), not the brief's 300/1750, which this release refuses",
+    "old worktrees needed their penge-passport-ph library built for tsx",
+    "one stray run of mine (a broken pipe) left pp:lock:check behind; released by compare-and-delete on its own run id"
+  ],
+  "steps": [
+    {
+      "step": "0. Setup",
+      "command": "rehearsal browsers: profile A notifyOnly (alert FPAH-vhldqebPduIKIPk0w, tab left open); profile B notifyOnly, then Turn off while offline",
+      "output": "A row: 'Notifications on this device: Antipolo \u00b7 for 1 person \u00b7 as soon as possible \u00b7 until 11 Apr 2027'; B row: 'Notifications are off on this device. Deleting them from our server when you're back online.'; B's credential still on the server (EXISTS 1)",
+      "pass": true
+    },
+    {
+      "step": "1a. Pause",
+      "command": "docker exec penge-local-valkey valkey-cli SET pp:push:paused 1",
+      "output": "OK",
+      "pass": true
+    },
+    {
+      "step": "1b. 157bad9 starts with the new configuration",
+      "command": "(set -a; . .local/rollback.env; set +a; exec node /tmp/penge-old-157bad9/apps/server/dist/server.mjs); curl http://127.0.0.1:8790/api/ready",
+      "output": "157bad9 ready: yes ({\"ok\":true})",
+      "pass": true
+    },
+    {
+      "step": "1c. 05cee09 starts with the new configuration",
+      "command": "same, /tmp/penge-old-05cee09",
+      "output": "05cee09 ready: yes ({\"ok\":true})",
+      "pass": true
+    },
+    {
+      "step": "1d. Each older checker runs against the same data",
+      "command": "npx tsx docs/superpowers/verification/harness/old-check.mts /tmp/penge-old-<c>",
+      "output": "157bad9 {\"healthy\":true,\"emailed\":0}; 05cee09 {\"healthy\":true,\"emailed\":0}",
+      "pass": true
+    },
+    {
+      "step": "1e. Email continuity, 157bad9",
+      "command": "old-check.mts /tmp/penge-old-157bad9 486 2026-10-19",
+      "output": "{\"healthy\":true,\"emailed\":2}; alert emails 'Mon 19 Oct 2026' captured for both confirmed subscribers, including the one in .local/email-subscriber.txt (both-1791824790316@example.com)",
+      "pass": true
+    },
+    {
+      "step": "1f. Email continuity, 05cee09",
+      "command": "old-check.mts /tmp/penge-old-05cee09 486 2026-10-20",
+      "output": "First runs held the alert: 05cee09 spaces 'asap' alerts 2 minutes apart, and the subscribers had just been emailed (17:36:42) and stamped again by this release's run (17:38:50). After the window (17:41:01, the date's announced mark cleared as /dev/open does): {\"healthy\":true,\"emailed\":2}; 'Tue 20 Oct 2026' captured for both subscribers, including both-1791824790316@example.com",
+      "pass": true
+    },
+    {
+      "step": "2. Expire the alert and clean up with this release's admin",
+      "command": "HSET pp:dev:FPAH-vhldqebPduIKIPk0w end <now-1h>; ZADD pp:dev:ends <same> FPAH-vhldqebPduIKIPk0w; node apps/server/dist/admin.mjs device-cleanup (with .local/rollback.env)",
+      "output": "exit 0; 'device clean-up done' ended 1, garbage 1; after: EXISTS pp:dev:<id> 0, ZSCORE pp:dev:ends <id> nil, pp:dev:held/last/tried:<id> 0, HEXISTS pp:dev:queue <id> 0 (the alert had no delivery keys beforehand either)",
+      "pass": true
+    },
+    {
+      "step": "3. Roll forward",
+      "command": "DEL pp:push:paused; reload A's tab; B back online and reloaded",
+      "output": "A row: 'Notifications on this device ended on 13 Oct 2026. Turn them on again to keep getting them.'; A's credential key gone; B's retired credential key gone (EXISTS 0) and B shows no row",
+      "pass": true
+    }
+  ]
+}
