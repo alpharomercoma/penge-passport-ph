@@ -376,13 +376,18 @@ describe('setting up on this device', () => {
     const subscribe = w.browser.subscribe;
     const subscription = w.browser.subscription;
     w.browser.subscription = async () => null; // the push service dropped it: a new one is made
+    // The rotation is known to be waiting for its subscription (not assumed to be after some milliseconds: under a
+    // loaded run it could still be before its lookup, and meet the failing one installed below).
+    let reachedSubscribe = () => {};
+    const reached = new Promise<void>((r) => (reachedSubscribe = r));
     w.browser.subscribe = async (vapid) => {
+      reachedSubscribe();
       await held;
       w.browser.subscription = subscription;
       return subscribe(vapid);
     };
     const rotation = (w.c as unknown as { rotate(c: string, k: S.Known): Promise<unknown> }).rotate(s.credential!, s.known!);
-    await new Promise((r) => setTimeout(r, 20));
+    await reached;
     w.advance(11_000);
     const lookup = w.browser.subscription;
     w.browser.subscription = async () => {
