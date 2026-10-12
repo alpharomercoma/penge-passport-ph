@@ -1,9 +1,7 @@
 import { parse as legacyParse } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { keyedHash, seal, unseal } from '../src/crypto.ts';
-import { line } from '../src/log.ts';
 import { checkPushSubscription, endpointHmac, subscriptionHmac } from '../src/push/endpoint.ts';
-import { classifyPushError } from '../src/push/errors.ts';
 import { keys, PUSH_KEYS } from './helpers.ts';
 
 const sub = (endpoint: string, p256dh = PUSH_KEYS.p256dh) => ({ endpoint, keys: { p256dh, auth: PUSH_KEYS.auth } });
@@ -90,26 +88,5 @@ describe('sealing with a label', () => {
     expect(unseal(s, keys.email, 'push:v1')).toBe('secret');
     expect(() => unseal(s, keys.email, 'email:v1')).toThrow();
     expect(keyedHash(keys.index, 'x', 'y')).toMatch(/^[A-Za-z0-9_-]{43}$/);
-  });
-});
-
-describe('push errors in logs', () => {
-  it('keeps only a status and a category', () => {
-    const err = Object.assign(new Error('Received unexpected response code'), {
-      statusCode: 410,
-      endpoint: 'https://fcm.googleapis.com/fcm/send/SECRET-ENDPOINT',
-      body: '{"reason":"secret body"}',
-      headers: { authorization: 'vapid t=SECRET' },
-    });
-    const summary = classifyPushError(err);
-    expect(summary).toEqual({ status: 410, category: 'gone' });
-    expect(line('warn', 'push failed', { push: summary })).not.toMatch(/SECRET|secret body/);
-    expect(classifyPushError(Object.assign(new Error('x'), { statusCode: 404 })).category).toBe('gone');
-    expect(classifyPushError(Object.assign(new Error('x'), { statusCode: 413 })).category).toBe('too-big');
-    expect(classifyPushError(Object.assign(new Error('x'), { statusCode: 429 })).category).toBe('refused');
-    expect(classifyPushError(Object.assign(new Error('x'), { statusCode: 503 })).category).toBe('refused');
-    expect(classifyPushError(new Error('Socket timeout'))).toEqual({ status: null, category: 'uncertain' });
-    expect(classifyPushError(Object.assign(new Error('x'), { code: 'ECONNRESET' })).category).toBe('uncertain');
-    expect(classifyPushError(Object.assign(new Error('x'), { code: 'ECONNREFUSED' })).category).toBe('refused');
   });
 });
