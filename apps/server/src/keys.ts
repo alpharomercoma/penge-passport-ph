@@ -67,6 +67,53 @@ export const K = {
   /** Set once a day's numbers are in R2, and once they are emailed. */
   statsStored: (day: string) => `${P}stats:stored:${day}`,
   statsEmailed: (day: string) => `${P}stats:emailed:${day}`,
+  /** Device counters for a Manila day, from the alerts redesign on (stats.ts reads both schemas). */
+  statsV2: (day: string) => `${P}stats:v2:${day}`,
+  /** Hash: a notification alert (devices/store.ts): its sealed subscription and plain fields. */
+  devAlert: (id: string) => `${P}dev:${id}`,
+  /** The alert id an endpoint (by its keyed hash) belongs to: one alert per endpoint. */
+  devEndpoint: (endpointHmac: string) => `${P}dev:endpoint:${endpointHmac}`,
+  /** The alert id a device credential (by its SHA-256) owns. */
+  devCred: (credentialHash: string) => `${P}dev:cred:${credentialHash}`,
+  /** Set of "<alert id>:<group size>" following an office. */
+  devSite: (office: number | string) => `${P}dev:site:${office}`,
+  /** Sorted set: alert id by its end (ms). */
+  devEnds: `${P}dev:ends`,
+  /** Hash: a credential's current or last operation. */
+  devOp: (credentialHash: string) => `${P}dev:op:${credentialHash}`,
+  /** Sorted set: credential hashes with an unfinished operation, by its expiry (ms). */
+  devOps: `${P}dev:ops`,
+  /** Hash: a credential's end record (reason, date, fingerprint). */
+  devEnded: (credentialHash: string) => `${P}dev:ended:${credentialHash}`,
+  /** Hash: alert id → its queued job (JSON); and a sorted set of alert ids by their oldest date's announcement. */
+  devQueue: `${P}dev:queue`,
+  devQueued: `${P}dev:queued`,
+  devHeld: (id: string) => `${P}dev:held:${id}`,
+  devClaim: (id: string) => `${P}dev:claim:${id}`,
+  /** List: one fan-out batch's entries; its stamps; and the pending batches, oldest first. */
+  devFanout: (batch: string) => `${P}dev:fanout:${batch}`,
+  devFanoutStamps: (batch: string) => `${P}dev:fanout:${batch}:stamps`,
+  devFanouts: `${P}dev:fanouts`,
+  devLast: (id: string) => `${P}dev:last:${id}`,
+  devToday: (id: string, day: string) => `${P}dev:today:${id}:${day}`,
+  devTried: (id: string) => `${P}dev:tried:${id}`,
+  /** The ordering counter for activations that create an alert and for fan-out batches. */
+  devOrder: `${P}dev:order`,
+  /** Hash: storage units in use or reserved, by kind, and their total. */
+  devRecords: `${P}dev:records`,
+  /** Hash: deleted alert id → units still charged until the checker removes its delivery keys. */
+  devGarbage: `${P}dev:garbage`,
+  /** Sorted set: "<kind>|<credential hash>" by when that record is due for deletion (ms). */
+  devDeadlines: `${P}dev:deadlines`,
+  devCursor: (kind: 'domestic' | 'abroad') => `${P}dev:cursor:${kind}`,
+  /** The lock of `admin.mjs device-cleanup` (runs "cleanup-…"), never the checker's (Task 12). */
+  devCleanupLock: `${P}lock:device-cleanup`,
+  /** Where the next run's group lookups resume, domestic and abroad. */
+  scanGroupCursor: `${P}scan:groupcursor`,
+  scanAbroadCursor: `${P}scan:abroadcursor`,
+  /** A push service's backoff after a 429, shared by every sender: the time it ends (ms). */
+  pushBackoff: (service: string) => `${P}push:backoff:${service}`,
+  // The channel release's keys, removed in Task 3 with their last readers.
   /** Hash: device id → sealed device (endpoint and keys, label, created, last success, last failure). */
   pushDevices: (subscriberId: string) => `${P}push:${subscriberId}`,
   /** Hash: device id → "state|revision|credential hash|endpoint hmac|subscription hmac"; what the scripts compare. */

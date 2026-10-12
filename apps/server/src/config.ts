@@ -42,6 +42,8 @@ export interface Config {
   spoolDir: string;
   api: { host: string; port: number };
   push: PushConfig;
+  /** The notification alerts' ceilings (spec: "Bounds"): alerts plus reserving operations, and storage units. */
+  devices: { alertLimit: number; recordLimit: number };
 }
 
 export class ConfigError extends Error {
@@ -142,6 +144,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('R2_ENDPOINT must be an https:// URL');
   }
 
+  // Ceilings, not just defaults: Task 19 measured that the pp:dev namespace at these limits, with the limiter's
+  // worst case, fits in 25% of maxmemory; a larger value cannot be configured.
+  // Set but empty is a slip in server.env, not a request for the default.
+  for (const name of ['DEVICE_ALERT_LIMIT', 'DEVICE_RECORD_LIMIT']) {
+    if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
+  }
+  const alertLimit = int('DEVICE_ALERT_LIMIT', 300, 0, 300);
+  const recordLimit = int('DEVICE_RECORD_LIMIT', 1750, 0, 1750);
+  // Every alert holds ALERT_UNITS storage units (devices/store.ts); the rest is for operation records.
+  if (recordLimit < alertLimit * 5) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 5 units for every alert DEVICE_ALERT_LIMIT allows');
+
   return {
     redisUrl,
     r2:
@@ -165,6 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spoolDir: env.SPOOL_DIR?.trim() || '/var/lib/penge/spool',
     api: { host: env.API_HOST?.trim() || '127.0.0.1', port: int('API_PORT', 8787, 1, 65535) },
     push,
+    devices: { alertLimit, recordLimit },
   };
 }
 

@@ -221,6 +221,17 @@ describe('config', () => {
     expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'live', VAPID_SUBJECT: 'https://x' })).toThrow(/VAPID_SUBJECT/);
   });
 
+  it('reads the device limits, with defaults', () => {
+    expect(loadConfig(env).devices).toEqual({ alertLimit: 300, recordLimit: 1750 });
+    expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '1751' })).toThrow(/DEVICE_RECORD_LIMIT/);
+    expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '10', DEVICE_RECORD_LIMIT: '100' }).devices).toEqual({ alertLimit: 10, recordLimit: 100 });
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '-1' })).toThrow(/DEVICE_ALERT_LIMIT/);
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100', DEVICE_RECORD_LIMIT: '100' })).toThrow(/DEVICE_RECORD_LIMIT must hold/);
+    // Set but empty (a slip in server.env) is an error, not the default.
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '' })).toThrow(/DEVICE_ALERT_LIMIT/);
+    expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '  ' })).toThrow(/DEVICE_RECORD_LIMIT/);
+  });
+
   it('refuses VAPID keys of the wrong size, which web-push would refuse only when it first sends', () => {
     const vapid = { VAPID_PUBLIC_KEY: 'B'.repeat(87), VAPID_PRIVATE_KEY: 'p'.repeat(43), VAPID_SUBJECT: 'mailto:alerts@example.com', PUSH_MODE: 'live' };
     expect(loadConfig({ ...env, ...vapid }).push.vapid?.publicKey).toBe('B'.repeat(87));
