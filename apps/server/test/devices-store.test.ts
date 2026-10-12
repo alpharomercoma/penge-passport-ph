@@ -74,7 +74,7 @@ for (const [name, make] of valkeyTargets()) {
 
     it('counts a stored new setup against its IP and the global pool, and refuses past them without writing', async () => {
       const kv = await make();
-      const item = { cur: 'pp:rate:t:1:ip', prev: 'pp:rate:t:0:ip', overlap: 1, max: 1, ttl: 60, bucket: 'dev-stored-ip' };
+      const item = { cur: 'pp:rate:t:1:ip', prev: 'pp:rate:t:0:ip', overlap: 1, max: 1, ttl: 3_600_000, bucket: 'dev-stored-ip' };
       expect((await admit(kv, setup(credential(), { stored: [item] }))).outcome).toBe('pending');
       const before = await records(kv);
       expect((await admit(kv, setup(credential(), { stored: [item] }))).outcome).toBe('limited');
@@ -86,7 +86,7 @@ for (const [name, make] of valkeyTargets()) {
       const c = credential();
       const first = setup(c);
       await admit(kv, first);
-      const item = { cur: 'pp:rate:t:1:ip', prev: 'pp:rate:t:0:ip', overlap: 1, max: 5, ttl: 60, bucket: 'dev-stored-ip' };
+      const item = { cur: 'pp:rate:t:1:ip', prev: 'pp:rate:t:0:ip', overlap: 1, max: 5, ttl: 3_600_000, bucket: 'dev-stored-ip' };
       await kv.write([{ op: 'set', key: item.cur, value: '1.5' }]);
       const before = await records(kv);
       await expect(admit(kv, setup(c, { seq: 2, now: T0 + SETUP_MS + 1, exp: T0 + 2 * SETUP_MS, stored: [item] }))).rejects.toThrow(/not a counter/);
@@ -210,7 +210,7 @@ for (const [name, make] of valkeyTargets()) {
       const c = credential();
       const a = setup(c);
       await admit(kv, a);
-      const ep = { cur: 'pp:rate:dev-push-ep:1:e', prev: 'pp:rate:dev-push-ep:0:e', overlap: 1, max: 0, ttl: 60, bucket: 'dev-push-ep' };
+      const ep = { cur: 'pp:rate:dev-push-ep:1:e', prev: 'pp:rate:dev-push-ep:0:e', overlap: 1, max: 0, ttl: 3_600_000, bucket: 'dev-push-ep' };
       expect((await dispatchBegin(kv, gate(c, a.op, { epItems: [ep] }))).o).toMatchObject({ why: 'limited' });
     });
 
@@ -221,7 +221,7 @@ for (const [name, make] of valkeyTargets()) {
       const inc = (await kv.hGetAll(K.devAlert(mine.id))).inc!;
       const a = setup(mine.cred, { seq: 2, kind: 'rotate', sub: victim.sub, cap: { incarnation: inc, generation: 1 } });
       expect((await admit(kv, a)).outcome).toBe('pending');
-      const ep = { cur: 'pp:rate:dev-push-ep:1:e', prev: 'pp:rate:dev-push-ep:0:e', overlap: 1, max: 0, ttl: 60, bucket: 'dev-push-ep' };
+      const ep = { cur: 'pp:rate:dev-push-ep:1:e', prev: 'pp:rate:dev-push-ep:0:e', overlap: 1, max: 0, ttl: 3_600_000, bucket: 'dev-push-ep' };
       expect((await dispatchBegin(kv, gate(mine.cred, a.op, { ep: victim.ep, epItems: [ep] }))).o).toMatchObject({ dsp: 'unsent', why: 'limited' });
       // Its own endpoint is the maintenance pool's alone.
       const own = setup(mine.cred, { seq: 3, kind: 'rotate', sub: mine.sub, cap: { incarnation: inc, generation: 1 }, now: T0 + SETUP_MS + 1, exp: T0 + 2 * SETUP_MS });
