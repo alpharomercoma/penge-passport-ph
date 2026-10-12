@@ -550,3 +550,38 @@ return '{"gone":"deleted"}'
 export function markGone(kv: Kv, a: { now: number; id: string; inc: string; gen: number }): Promise<{ gone: 'deleted' | 'kept' | 'older' | 'none' }> {
   return goneScript.run(kv, { stats: statsKey(a.now) }, { ...a });
 }
+
+export const backoffScript = deviceScript(
+  'dev-backoff',
+  `need(K.backoff, 'string')
+local b = tonumber(redis.call('GET', K.backoff) or '0') or 0
+if A.till > b then redis.call('SET', K.backoff, I(A.till)) end
+return '"ok"'`,
+  { reclaim: true },
+);
+
+export const testCaptureScript = deviceScript(
+  'dev-test-capture',
+  `${STORE_LIB}
+need_store()
+local a = alert_get(A.id)
+if not a or a.inc ~= A.inc or is_ended(a) then return '{"state":"none"}' end
+if a.gone ~= nil and a.gone ~= '' then return '{"state":"gone"}' end
+if redis.call('EXISTS', KEY.paused) == 1 then return '{"state":"unavailable"}' end
+need(KEY.backoff .. a.svc, 'string')
+if counter(KEY.backoff .. a.svc) > NOW then return '{"state":"unavailable"}' end
+return cjson.encode({ state = 'ok', alert = a })
+`,
+  { reclaim: true },
+);
+
+/** The alert as one atomic read, with the stop and its push service's backoff, for a test send. */
+export function testCapture(kv: Kv, a: { now: number; id: string; inc: string }): Promise<{ state: 'ok'; alert: Record<string, string> } | { state: 'none' | 'gone' | 'unavailable' }> {
+  return testCaptureScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+/** A push service answered 429: every sender waits until `until` (never shortened). */
+export async function setBackoff(kv: Kv, svc: string, until: number): Promise<void> {
+  // "until" is a Lua keyword: the field is "till".
+  await backoffScript.run(kv, { backoff: K.pushBackoff(svc) }, { now: until, till: until });
+}

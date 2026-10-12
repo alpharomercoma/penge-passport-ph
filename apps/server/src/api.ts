@@ -33,6 +33,8 @@ import type { Mailer } from './mailer.ts';
 import { type Count, isPerson, type Stats } from './stats.ts';
 import { confirm, createDeletion, createPending, deleteWithToken, type Keys, previewPending, unsubscribe } from './subscribers.ts';
 import { confirmationEmail, deletionEmail } from './templates.ts';
+import { mountDeviceRoutes } from './devices/api.ts';
+import { API_SLOTS, SendSlots, type Transport } from './devices/transport.ts';
 
 export interface ApiDeps {
   kv: Kv;
@@ -49,6 +51,12 @@ export interface ApiDeps {
   stats?: Stats;
   /** Whether notifications can be set up, and the key browsers subscribe with (the status reports both). */
   push: PushConfig;
+  /** Notification alerts' ceilings; without them no notification alert can be set up. */
+  devices?: { alertLimit: number; recordLimit: number };
+  /** Sends setup and test pushes; without it they answer "unavailable". */
+  pushTransport?: Transport;
+  /** The local stack's extra origins, allowed on device changes. */
+  devOrigins?: string[];
 }
 
 export const SUBSCRIBE_MESSAGE =
@@ -429,9 +437,21 @@ export function createApi(deps: ApiDeps) {
     return c.json({ ok: true });
   });
 
+  mountDeviceRoutes(app, {
+    kv, keys, log, now, push: deps.push,
+    limits: deps.devices ?? { alertLimit: 0, recordLimit: 0 },
+    transport: deps.pushTransport ?? null,
+    slots: new SendSlots(API_SLOTS),
+    ipOf,
+    sites,
+    origins: [new URL(deps.publicBaseUrl).origin, ...(deps.devOrigins ?? [])],
+  });
+
   app.notFound((c) => fail(c, 404, 'Not found.'));
   app.onError((err, c) => {
-    log.error('api error', { path: c.req.path, err });
+    // A device route's error can come from a script whose message names keys with credential hashes: its kind only.
+    if (c.req.path.startsWith('/api/device-alerts')) log.error('api error', { path: c.req.path, error: err instanceof Error ? err.name : 'Error' });
+    else log.error('api error', { path: c.req.path, err });
     return fail(c, 500, 'Something went wrong on our side. Try again later.');
   });
 

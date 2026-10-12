@@ -2,6 +2,7 @@
 import { serve } from '@hono/node-server';
 import { PengePassportPH } from 'penge-passport-ph';
 import { createApi } from './api.ts';
+import { webPushTransport } from './devices/transport.ts';
 import { LOOKUP_REQUESTS_PER_HOUR, lookupStateDir } from './budget.ts';
 import { loadConfig } from './config.ts';
 import { connectRedis } from './kv.ts';
@@ -31,6 +32,8 @@ const app = createApi({
   publicBaseUrl: config.publicBaseUrl ?? `http://localhost:${config.api.port}`,
   stats: createStats(kv, log),
   push: config.push,
+  devices: config.devices,
+  ...(config.push.vapid ? { pushTransport: webPushTransport(config.push.vapid) } : {}),
 });
 
 const server = serve({ fetch: app.fetch, hostname: config.api.host, port: config.api.port }, (info) =>

@@ -28,3 +28,10 @@ export function buildPayload(a: { openings: Opening[]; applicants: number; decis
   // Inputs no real alert has (a huge id or date): a plain notification that opens the site.
   return JSON.stringify({ v: 1, title: 'Dates open', body: people, tag: `alert-${a.decisionId.slice(0, 64)}`, url: {} });
 }
+
+/** The ready check's push (spec, "Setting up", step 4): in the v1 envelope, so an older worker shows its title and body. */
+export function setupPayload(a: { op: string; nonce: string; expiresAt: number; offices: string[] }): string {
+  const first = [...shortName(a.offices[0] ?? 'your offices')].slice(0, NAME_CHARS).join('');
+  const body = a.offices.length > 1 ? `${first} and ${a.offices.length - 1} more` : first;
+  return JSON.stringify({ v: 1, title: 'Setting up PengePassportPH notifications', body, tag: `setup-${a.op}`, url: {}, kind: 'setup', op: a.op, nonce: a.nonce, expiresAt: new Date(a.expiresAt).toISOString() });
+}
