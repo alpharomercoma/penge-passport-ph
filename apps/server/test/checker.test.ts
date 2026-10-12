@@ -441,6 +441,30 @@ describe('checker', () => {
 });
 
 describe('checker, found by adversarial review', () => {
+  it('leaves jobs queued after domestic delivery began (the abroad scan runs beside it) to the delivery after it', async () => {
+    const w = await world();
+    await w.subscribe('ana@example.com', [486]);
+    const juan = await w.subscribe('juan@example.com', [693]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    // While the domestic drain runs, another job lands at the outbox's end, as the abroad queueing's write would.
+    const late = { id: 'late', createdAt: w.t.now(), subscriberId: juan, applicants: 1, openings: [{ id: 693, name: 'Baguio', dates: ['2026-10-06'] }] };
+    const lPop = w.kv.lPop.bind(w.kv);
+    let landed = false;
+    w.kv.lPop = async (key: string) => {
+      if (!landed && key === K.outbox) {
+        landed = true;
+        await w.kv.write([{ op: 'rPush', key: K.outbox, values: [sealJob(late, keys.token)] }]);
+      }
+      return lPop(key);
+    };
+    await w.run();
+    expect(w.mailer.sent.map((m) => m.to)).toEqual(['ana@example.com']);
+    // Not popped by the domestic drain (which could not verify it): still queued, not held or dropped.
+    expect(await w.kv.lLen(K.outbox)).toBe(1);
+    expect(await w.kv.get(K.held(juan))).toBeNull();
+  });
+
   it('loses no alert when the process dies while committing', async () => {
     const w = await world();
     await w.subscribe('ana@example.com', [486]);
@@ -1105,7 +1129,9 @@ describe('pace', () => {
       }),
       { seed: 20260929, numRuns: RUNS },
     );
-  }, 10_000 + RUNS * 10);
+    // Each run's lock renewals and queueing go through Lua scripts, which MemoryKv runs in a wasm engine (about 2 ms
+    // a call): this property's ~1,600 runs need more than the 10 ms a case they had before.
+  }, 10_000 + RUNS * 200);
 });
 
 describe('clock steps', () => {

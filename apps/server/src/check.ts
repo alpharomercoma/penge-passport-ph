@@ -4,6 +4,7 @@
 import { NAME, PengePassportPH, VERSION } from 'penge-passport-ph';
 import { ABROAD_REQUESTS_PER_HOUR, abroadStateDir, SCAN_REQUESTS_PER_HOUR, scanStateDir } from './budget.ts';
 import { runCheck } from './checker.ts';
+import { webPushTransport } from './devices/transport.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
@@ -46,6 +47,7 @@ try {
     log,
     publicBaseUrl: config.publicBaseUrl ?? 'http://localhost:8787',
     mailDailyLimit: config.mailDailyLimit,
+    devices: { mode: config.push.mode, transport: config.push.vapid ? webPushTransport(config.push.vapid) : null },
     alertsPerSubscriberPerDay: config.alertsPerSubscriberPerDay,
     client: `${NAME}@${VERSION}`,
     stats: createStats(kv, log),

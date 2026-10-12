@@ -26,7 +26,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { type Availability, CircuitOpenError, type Site } from 'penge-passport-ph';
-import { describePost, LIMITS, officeMapUrl, officePhone, type Pace, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import { describePost, LIMITS, officeMapUrl, officePhone, type Pace, type PushMode, type SiteStatus, type StatusResponse } from '@penge/contracts';
 import {
   ABROAD_DEADLINE_MS,
   ABROAD_GROUP_CAP,
@@ -41,7 +41,11 @@ import {
   writeAbroadStatus,
 } from './abroad.ts';
 import { unsubscribeLinks } from './api.ts';
+import { type DevicePassReport, notificationPass } from './devices/delivery.ts';
+import { acquireLock, heartbeat, releaseLock, renewLock } from './devices/lock.ts';
 import { writeQueue } from './devices/queue.ts';
+import type { Transport } from './devices/transport.ts';
+import { PACE_SPACING_MS } from './pace.ts';
 import { heldPairs } from './devices/scripts-delivery.ts';
 import { exportSubscribers } from './backup.ts';
 import { K, manilaDay } from './keys.ts';
@@ -94,6 +98,8 @@ export interface CheckDeps {
   /** Reads now as a stamp (clock.ts); runCheck sets it. */
   stampNow?: () => Stamp;
   runId?: string;
+  /** Notification alerts: the mode this run started with, and the push transport. Without it, none are sent. */
+  devices?: { mode: PushMode; transport: Transport | null };
 }
 
 export const ANNOUNCE_WINDOW_SECONDS = 3 * 3600;
@@ -119,7 +125,8 @@ export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
  * 4 minutes), so two checks' emails can come less than 5 minutes apart: the
  * floor has to be below that, or "asap" would skip every other check.
  */
-export const PACE_SPACING_MS: Record<Pace, number> = { hourly: 60 * 60_000, asap: 2 * 60_000 };
+// (PACE_SPACING_MS lives in pace.ts, which the notification scripts use too.)
+export { PACE_SPACING_MS } from './pace.ts';
 // Last-alert times have no expiry in Redis, which would follow the wall clock:
 // a clock jump could erase one and let an email go early. They go on unsubscribing.
 
@@ -227,6 +234,8 @@ export interface RunReport {
   queued: number;
   delivery: DeliveryReport | null;
   abroad: AbroadReport | null;
+  /** The notification pass, when the run has one. */
+  devices: DevicePassReport | null;
 }
 
 const message = (err: unknown) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err));
@@ -284,17 +293,17 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
 
   if (await kv.get(K.scanCooldown)) {
     log.info('the site had trouble on a recent scan; resting before the next', { runId });
-    return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null };
+    return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
   }
-  if (!(await kv.set(K.checkLock, runId, { nx: true, ttlSeconds: LOCK_TTL_SECONDS }))) {
+  if (!(await acquireLock(kv, runId, LOCK_TTL_SECONDS))) {
     log.warn('another check is running; skipping this one', { runId });
-    return { runId, skipped: 'locked', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null };
+    return { runId, skipped: 'locked', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
   }
+  const beat = heartbeat(kv, runId, LOCK_TTL_SECONDS);
   try {
     await restartGapsOnNewBoot(deps, deps.stampNow!);
     const holdLock = async () => {
-      if ((await kv.get(K.checkLock)) !== runId) throw new Error('lost the checker lock; stopping this run');
-      await kv.set(K.checkLock, runId, { ttlSeconds: LOCK_TTL_SECONDS });
+      if (!(await renewLock(kv, runId, LOCK_TTL_SECONDS))) throw new Error('lost the checker lock; stopping this run');
     };
     const loadSubscriber = subscriberCache(kv);
     // Said missing until its record is made: a run that stops before then is named by the next (record.ts).
@@ -317,23 +326,53 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     } else {
       log.warn('unhealthy run: no alerts, baselines unchanged', { runId, problems: scan.problems });
     }
-    // One email per person per check: the posts abroad join the next check's email.
+    // Three things side by side (spec: "A run"): the abroad scan, the email pass and the notification pass.
+    // Each catches its own errors; the email pass's error, if any, fails the run once the others are done.
     const emailed = new Set<string>();
-    let delivery = await deliver(deps, now, emailed, [scan]);
-    // Posts abroad come after the Philippines' alerts are out, so they never delay them.
-    let abroad: AbroadReport | null = null;
-    let recordAbroad: ((sink: RecordSink) => Promise<void>) | null = null;
-    if (deps.abroad) {
-      // A sweep by hand gets its time from when the posts begin; a scheduled run's posts
-      // stop at a time counted from the run's start, to end before the next run.
+    // The outbox as the domestic queueing left it: the domestic drain takes these entries only, so jobs the abroad
+    // scan queues meanwhile wait for the delivery that can verify them (as at 157bad9, where they came after it).
+    const domesticJobs = await kv.lLen(K.outbox);
+    let resolveAbroad!: (scan: DeliveryScan | null) => void;
+    const abroadReady = new Promise<DeliveryScan | null>((resolve) => (resolveAbroad = resolve));
+    const abroadTask = (async () => {
+      if (!deps.abroad) return null;
+      // A sweep by hand gets its time from when the posts begin; a scheduled run's posts stop at a time counted from
+      // the run's start, to end before the next run.
       const deadline = deps.abroadSweep ? now() + ABROAD_SWEEP_DEADLINE_MS : started + ABROAD_DEADLINE_MS;
-      const pass = await abroadPass(deps, deps.abroad, scan.runId, now, deadline, loadSubscriber, holdLock);
-      abroad = pass.report;
-      recordAbroad = pass.record;
-      // A held post can become due without any newly announced date. Recheck
-      // it only after this run's abroad observations, including their groups.
-      if (abroad.trusted && !delivery.stoppedBy) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, pass.scan]));
-    }
+      return abroadPass(deps, deps.abroad, scan.runId, now, deadline, loadSubscriber, holdLock);
+    })()
+      .then((pass) => {
+        resolveAbroad(pass && pass.report.trusted ? pass.scan : null);
+        return pass;
+      })
+      .catch((err: unknown) => {
+        resolveAbroad(null);
+        log.error('posts abroad failed this run', { runId, err: err as Error });
+        return null;
+      });
+    const emailTask = (async () => {
+      let delivery = await deliver(deps, now, emailed, [scan], domesticJobs);
+      const abroadScan = await abroadReady;
+      if (abroadScan && !delivery.stoppedBy) delivery = addDelivery(delivery, await deliver(deps, now, emailed, [scan, abroadScan]));
+      return delivery;
+    })();
+    const devicesTask = deps.devices
+      ? notificationPass(
+          {
+            kv, keys: deps.keys, log, now, stampNow: deps.stampNow!, mode: deps.devices.mode, transport: deps.devices.transport,
+            alertsPerDay: deps.alertsPerSubscriberPerDay, checks: (scans) => deliveryChecks(scans as DeliveryScan[]),
+          },
+          { run: runId, scan: scan.healthy ? scan : { healthy: false, sites: [], groups: [] }, abroadReady },
+        ).catch((err: unknown) => {
+          log.error('the notification pass failed this run', { runId, err: err as Error });
+          return null;
+        })
+      : Promise.resolve(null);
+    const [pass, emailResult, devices] = await Promise.all([abroadTask, emailTask.then((d) => ({ ok: true as const, d }), (err: unknown) => ({ ok: false as const, err })), devicesTask]);
+    if (!emailResult.ok) throw emailResult.err;
+    const delivery = emailResult.d;
+    const abroad = pass?.report ?? null;
+    const recordAbroad = pass?.record ?? null;
     // The records come after every alert is out and every post checked, so a slow R2
     // delays neither. Only what changed since the last record (record.ts); nothing at
     // all if nothing did. A run that stops before this is named by the next record.
@@ -355,9 +394,10 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     await backupOncePerDay(deps, now, runId);
     await deps.stats?.settled();
     await reportOncePerDay(deps, now());
-    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, recorded, queued, delivery, abroad };
+    return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, recorded, queued, delivery, abroad, devices };
   } finally {
-    if ((await kv.get(K.checkLock)) === runId) await kv.write([{ op: 'del', key: K.checkLock }]);
+    beat.stop();
+    await releaseLock(kv, runId);
   }
 }
 
@@ -899,6 +939,8 @@ export async function deliver(
   emailed: Set<string> = new Set(),
   /** Only scans from this invocation of runCheck; do not load these from stored history. */
   scans: readonly DeliveryScan[] = [],
+  /** At most this many outbox entries: the domestic drain takes only those queued before the abroad scan could add any. */
+  limit = 5000,
 ): Promise<DeliveryReport> {
   const { kv, log } = deps;
   const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
@@ -912,7 +954,7 @@ export async function deliver(
   };
 
   // What the checks found, one entry per person, each joining what that person already has waiting.
-  for (let i = 0; i < 5000; i++) {
+  for (let i = 0; i < Math.min(5000, limit); i++) {
     if (await paused()) break;
     const raw = await kv.lPop(K.outbox);
     if (raw === null) break;

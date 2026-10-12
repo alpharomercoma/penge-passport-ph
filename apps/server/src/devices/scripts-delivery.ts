@@ -3,7 +3,10 @@
 import type { Stamp } from '../clock.ts';
 import { K, manilaDay } from '../keys.ts';
 import type { Kv, WriteOp } from '../kv.ts';
+import { PACE_SPACING_MS } from '../pace.ts';
+import { CLAIM_LIB } from './claims-lua.ts';
 import { DELIVERY_LIB } from './delivery-lua.ts';
+import type { SendResult } from './transport.ts';
 import { deviceScript } from './lua.ts';
 import { STORE_LIB } from './store-lua.ts';
 
@@ -250,4 +253,276 @@ return cjson.encode(out)
 export async function heldPairs(kv: Kv): Promise<[number, number, number][]> {
   const out = await heldPairsScript.run<[number, number, number][] | Record<string, never>>(kv, {}, { now: 0 });
   return Array.isArray(out) ? out : [];
+}
+
+const ALL_LIBS = `${STORE_LIB}${DELIVERY_LIB}${CLAIM_LIB}`;
+// Every key a delivery step may touch for one alert, type-checked before the first write.
+const NEED_ALERT = `
+local function need_alert(id)
+  need(KEY.alert .. id, 'hash') need(KEY.held .. id, 'string') need(KEY.claim .. id, 'hash') need(KEY.last .. id, 'string')
+  need(KEY.tried .. id, 'hash') need(KEY.queue, 'hash') need(KEY.queued, 'zset') need(KEY.lock, 'string')
+end
+`;
+
+export const workListScript = deviceScript(
+  'dev-work-list',
+  `${ALL_LIBS}
+need(KEY.ends, 'zset') need(KEY.queue, 'hash')
+local seen, out = {}, {}
+for _, id in ipairs(redis.call('HKEYS', KEY.queue)) do if not seen[id] then seen[id] = true out[#out + 1] = id end end
+for _, id in ipairs(redis.call('ZRANGE', KEY.ends, 0, -1)) do
+  if not seen[id] and redis.call('EXISTS', KEY.held .. id) == 1 then seen[id] = true out[#out + 1] = id end
+end
+table.sort(out)
+return cjson.encode(out)
+`,
+  { reclaim: true },
+);
+
+export async function workList(kv: Kv): Promise<string[]> {
+  const out = await workListScript.run<string[] | Record<string, never>>(kv, {}, { now: 0 });
+  return Array.isArray(out) ? out : [];
+}
+
+export interface ClaimInput {
+  now: number;
+  run: string;
+  id: string;
+  cid: string;
+  stamp: Stamp;
+  day: string;
+  cap: number;
+  batch: 'domestic' | 'abroad';
+  /** "<office>|<group>" → the dates this run verified open for that pair, and when (ms). */
+  open: Record<string, { d: string[]; at: number }>;
+  /** The alert's offices that are posts abroad. */
+  abroad: Record<string, true>;
+}
+
+export type Job = { i: string; n: string; s: Stamp[]; d: [number, string, number, number][] };
+export type ClaimAnswer = { ok: true; job: Job; checked: number; svc: string } | { ok: false; why: 'lost' | 'none' | 'ended' | 'claimed' | 'attempted' | 'empty' | 'deferred' | 'unverified' | 'pace' | 'cap' };
+
+export const claimScript = deviceScript(
+  'dev-claim',
+  `${ALL_LIBS}${NEED_ALERT}
+local id = A.id
+need_alert(id)
+local tk = KEY.today .. id .. ':' .. A.day
+need(tk, 'string')
+if not lock_ok() then return '{"ok":false,"why":"lost"}' end
+local a = alert_get(id)
+local function no(why) count('claims_refused_' .. why) return cjson.encode({ ok = false, why = why }) end
+if not a then return no('none') end
+if is_ended(a) or (a.gone ~= nil and a.gone ~= '') then return no('ended') end
+if redis.call('EXISTS', KEY.claim .. id) == 1 then return no('claimed') end
+if redis.call('HGET', KEY.tried .. id, 'run') == A.run then return no('attempted') end
+local spacing = { asap = ${PACE_SPACING_MS.asap}, hourly = ${PACE_SPACING_MS.hourly} }
+local lastRaw = redis.call('GET', KEY.last .. id) or nil
+-- Checked before any write: the pace stamp reads as a stamp, today's count is an integer.
+local last = nil
+if lastRaw then
+  local ok, v = pcall(cjson.decode, lastRaw)
+  if not ok or not stamp_ok(v) then error('pace stamp of ' .. id) end
+  last = v
+end
+if not stamp_ok(A.stamp) then error("the run's stamp") end
+local today = counter(tk)
+alert_check(id, alert_get(id))
+-- All the alert's work, merged: held first, then queued; pruned to its incarnation, choices and window.
+local work = job_decode(redis.call('GET', KEY.held .. id))
+local queued = job_decode(redis.call('HGET', KEY.queue, id))
+if work and work.n ~= a.inc then work = nil end
+if queued and queued.n == a.inc then
+  if work then job_merge(work, queued) else work = queued end
+end
+local pruned = nil
+local drop = { choices = 0, window = 0, unknown = 0 }
+if work then pruned, drop = job_prune(work, a, A.stamp) end
+-- The merged work is bounded like any job (30 dates, 4 KB) before a claim is cut from it.
+local overflow = 0
+if pruned then pruned, overflow = job_bound(pruned) end
+-- Decide everything, and encode every value to write, before the first write.
+if spacing[a.pace] == nil then error('pace of ' .. id) end
+local function encoded(job)
+  if not job then return nil, 0 end
+  local bounded, dr = job_bound(job)
+  if bounded then return cjson.encode(bounded), dr end
+  return nil, dr
+end
+local why, heldJob, claimed, checked = nil, nil, nil, nil
+local restartPace = false
+local open, rest = {}, {}
+if not pruned then why = 'empty'
+else
+  -- Split into the dates verified open in this run and the rest.
+  local oldestOpenDomestic, oldestWaitingAbroad = nil, nil
+  for _, d in ipairs(pruned.d) do
+    local pair = A.open[I(d[1]) .. '|' .. I(d[3])]
+    local isOpen = false
+    if pair then for _, x in ipairs(pair.d) do if x == d[2] then isOpen = true end end end
+    local wall = stamp_of(pruned, d).wall
+    if isOpen then
+      open[#open + 1] = d
+      if checked == nil or pair.at < checked then checked = pair.at end
+      if not A.abroad[I(d[1])] and (oldestOpenDomestic == nil or wall < oldestOpenDomestic) then oldestOpenDomestic = wall end
+    else
+      rest[#rest + 1] = d
+    end
+    if A.abroad[I(d[1])] and not isOpen and (oldestWaitingAbroad == nil or wall < oldestWaitingAbroad) then oldestWaitingAbroad = wall end
+  end
+  heldJob = pruned
+  if #open == 0 then why = 'unverified'
+  elseif A.batch == 'domestic' and oldestWaitingAbroad ~= nil and oldestOpenDomestic ~= nil and oldestWaitingAbroad < oldestOpenDomestic then why = 'deferred'
+  elseif last and elapsed(last, A.stamp) == nil then
+    -- A stamp from another boot restarts the gap; it never shortens it.
+    why = 'pace'
+    restartPace = true
+  elseif last and elapsed(last, A.stamp) < spacing[a.pace] then why = 'pace'
+  elseif today >= A.cap then why = 'cap'
+  else
+    claimed = job_with(pruned, open)
+    heldJob = nil
+    if #rest > 0 then heldJob = job_with(pruned, rest) end
+  end
+end
+local heldJson, heldDropped = encoded(heldJob)
+local claimJson = claimed and cjson.encode(claimed) or nil
+local stampJson = cjson.encode(A.stamp)
+-- Then write.
+count_drops(drop)
+if overflow > 0 then count('dates_dropped_overflow', overflow) end
+if heldDropped > 0 then count('dates_dropped_overflow', heldDropped) end
+redis.call('HDEL', KEY.queue, id)
+redis.call('ZREM', KEY.queued, id)
+if heldJson then redis.call('SET', KEY.held .. id, heldJson) else redis.call('DEL', KEY.held .. id) end
+if why then
+  if restartPace then redis.call('SET', KEY.last .. id, stampJson) end
+  if why == 'cap' then count('dates_held_cap', #pruned.d) end
+  return no(why)
+end
+redis.call('HSET', KEY.claim .. id, 'cid', A.cid, 'run', A.run, 'inc', a.inc, 'gen', a.gen, 'rev', a.rev, 'day', A.day,
+  'prev', lastRaw or '', 'at', stampJson, 'state', 'claimed', 'job', claimJson, 'checked', I(checked))
+redis.call('SET', KEY.last .. id, stampJson)
+redis.call('INCR', tk)
+if redis.call('PTTL', tk) < 0 then redis.call('EXPIRE', tk, 172800) end
+redis.call('HSET', KEY.tried .. id, 'run', A.run)
+count('claims')
+return cjson.encode({ ok = true, job = claimed, checked = checked, svc = a.svc or 'fcm' })
+`,
+);
+
+export function claim(kv: Kv, a: ClaimInput): Promise<ClaimAnswer> {
+  return claimScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const sendGateScript = deviceScript(
+  'dev-send-gate',
+  `${ALL_LIBS}${NEED_ALERT}
+local id = A.id
+need_alert(id)
+need(KEY.backoff .. A.svc, 'string')
+if not lock_ok() then return '{"go":false,"why":"lost"}' end
+local c = hgetall(KEY.claim .. id)
+if c.cid ~= A.cid or c.state ~= 'claimed' or c.run ~= A.run then return '{"go":false,"why":"claim"}' end
+local a = alert_get(id)
+local why = nil
+if not a or a.inc ~= c.inc or a.gen ~= c.gen or a.rev ~= c.rev then why = 'changed'
+elseif is_ended(a) or (a.gone ~= nil and a.gone ~= '') then why = 'ended'
+elseif not A.modeOk then why = 'mode'
+elseif redis.call('EXISTS', KEY.paused) == 1 then why = 'paused'
+elseif (tonumber(redis.call('GET', KEY.backoff .. A.svc) or '0') or 0) > NOW then why = 'backoff'
+else
+  local job = job_decode(c.job)
+  local pruned, drop = nil, nil
+  if job then pruned, drop = job_prune(job, a, A.stamp) end
+  if not pruned or #pruned.d ~= #job.d then why = 'age' end
+end
+if why then
+  put_back(id, c, a, false, A.stamp)
+  return cjson.encode({ go = false, why = why })
+end
+redis.call('HSET', KEY.claim .. id, 'state', 'sending')
+return cjson.encode({ go = true, sub = a.sub })
+`,
+);
+
+export function sendGate(kv: Kv, a: { now: number; run: string; id: string; cid: string; stamp: Stamp; modeOk: boolean; svc: string }): Promise<{ go: true; sub: string } | { go: false; why: string }> {
+  return sendGateScript.run(kv, { stats: statsKey(a.now) }, { ...a });
+}
+
+export const settleScript = deviceScript(
+  'dev-settle',
+  `${ALL_LIBS}${NEED_ALERT}
+local id = A.id
+need_alert(id)
+need(KEY.backoff .. A.svc, 'string')
+need_store()
+local c = hgetall(KEY.claim .. id)
+-- Only the run that holds the lock settles: a run that lost it leaves its claim to the next run's recovery
+-- (a claim still "sending" is then settled as uncertain).
+if not lock_ok() or c.cid ~= A.cid then return '{"ok":false}' end
+local a = alert_get(id)
+alert_check(id, a)
+-- What the branches below may read or change, checked before the first write: the owner's operation (gone) and the
+-- claim's charged day (give_back).
+if a then need(KEY.op .. a.cred, 'hash') op_check(a.cred, hgetall(KEY.op .. a.cred)) end
+charged_ok(id, c)
+local r = A.result
+if A.backoffUntil and A.backoffUntil > (tonumber(redis.call('GET', KEY.backoff .. A.svc) or '0') or 0) then
+  redis.call('SET', KEY.backoff .. A.svc, I(A.backoffUntil))
+end
+if r == 'accepted' or r == 'uncertain' then
+  redis.call('DEL', KEY.claim .. id)
+  count('claims_' .. r)
+  return cjson.encode({ ok = true, outcome = r })
+end
+-- Passed the gate but never handed to the push service (the run stopped first): back as unattempted.
+if r == 'unattempted' then
+  put_back(id, c, a, false, A.stamp)
+  return '{"ok":true,"outcome":"unattempted"}'
+end
+if r == 'bug' then
+  give_back(id, c)
+  redis.call('DEL', KEY.claim .. id)
+  count('claims_bug')
+  return '{"ok":true,"outcome":"bug"}'
+end
+if r == 'gone' and a and a.inc == c.inc and a.gen == c.gen then
+  give_back(id, c)
+  redis.call('DEL', KEY.claim .. id)
+  count('claims_gone')
+  local o = hgetall(KEY.op .. a.cred)
+  if o.op ~= nil and o.result == '' and o.kind == 'rotate' and o.alert == id and N(o.exp) > NOW then
+    redis.call('HSET', KEY.alert .. id, 'gone', a.gen)
+    return '{"ok":true,"outcome":"kept"}'
+  end
+  alert_delete(id, a, 'gone')
+  return '{"ok":true,"outcome":"deleted"}'
+end
+-- refused, throttled, rejected, and gone for an older generation: put back as a refusal.
+if r == 'rejected' then count('claims_rejected') end
+if r == 'throttled' then count('claims_throttled') end
+put_back(id, c, a, true, A.stamp)
+return '{"ok":true,"outcome":"put-back"}'
+`,
+  { reclaim: true },
+);
+
+export const cursorScript = deviceScript(
+  'dev-cursor',
+  `${STORE_LIB}${DELIVERY_LIB}
+need(KEY.lock, 'string') need(K.cursor, 'string')
+if not lock_ok() then return 'false' end
+redis.call('SET', K.cursor, A.id)
+return 'true'
+`,
+);
+
+/** A batch's fair-order cursor moves past an alert considered; only while the run holds the lock. */
+export function setCursor(kv: Kv, a: { now: number; run: string; kind: 'domestic' | 'abroad'; id: string }): Promise<boolean> {
+  return cursorScript.run(kv, { stats: statsKey(a.now), cursor: K.devCursor(a.kind) }, { ...a });
+}
+
+export function settle(kv: Kv, a: { now: number; run: string; id: string; cid: string; stamp: Stamp; result: SendResult['kind'] | 'unattempted'; backoffUntil: number | null; svc?: string }): Promise<{ ok: boolean; outcome?: string }> {
+  return settleScript.run(kv, { stats: statsKey(a.now) }, { ...a, svc: a.svc ?? 'fcm', backoffUntil: a.backoffUntil ?? false });
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type CheckDeps, GROUP_HELD_SHARE, runCheck, scanGroupsForTest } from '../src/checker.ts';
+import type { SendResult, Transport } from '../src/devices/transport.ts';
 import { K } from '../src/keys.ts';
 import { choices, seedAlert } from './device-fixtures.ts';
 import { clock, FakeMailer, FakeUpstream, keys, MemoryKv, MemorySink, recordingLog } from './helpers.ts';
@@ -26,15 +27,16 @@ export async function deviceWorld(overrides: Partial<CheckDeps> = {}) {
 
 describe('queueing for notification alerts', () => {
   it('writes a fan-out batch with the email write, only for openings some notification alert follows', async () => {
-    const w = await deviceWorld();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
     await w.run(); // baseline
     await seedAlert(w.kv, { now: w.t.now(), order: 0, choices: choices({ siteIds: [486] }) });
     w.upstream.open.set('486', ['2026-10-09']);
     w.upstream.open.set('693', ['2026-10-09']);
     await w.run();
     // The batch was written and, in the same run, turned into a job (Task 12 runs the second write); here: only 486.
-    // Until Task 11 restores the job assertion (the notification pass runs the second write): the batch.
-    expect(await w.kv.get(K.devFanoutStamps('run2:domestic'))).not.toBeNull();
+    const queue = await w.kv.hGetAll(K.devQueue);
+    const jobs = Object.values(queue).map((j) => JSON.parse(j) as { d: unknown[] });
+    expect(jobs.flatMap((j) => j.d)).toEqual([[486, '2026-10-09', 1, 0]]);
   });
 
   it('still queues email when memory is above 85%, without the notification batch, and counts nothing written for it', async () => {
@@ -130,5 +132,161 @@ describe('queueing for notification alerts', () => {
     const groups = await scanGroupsForTest(w.deps, upstream as never, sites, async () => null, 10, 6, K.scanGroupCursor);
     expect(asked).toEqual(['20:2']);
     expect(groups.map((g) => `${g.siteId}:${g.applicants}`)).toEqual(['20:2']);
+  });
+});
+
+
+class Pushes implements Transport {
+  sent: Record<string, any>[] = [];
+  next: SendResult[] = [];
+  delayMs = 0;
+  async send(_: unknown, payload: string) {
+    if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
+    this.sent.push(JSON.parse(payload));
+    return this.next.shift() ?? { kind: 'accepted' as const, status: 201 };
+  }
+}
+
+describe('the notification pass', () => {
+  it('sends a verified opening to a notification alert, with when it was checked', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    await seedAlert(w.kv, { now: w.t.now(), order: 0, choices: choices({ siteIds: [486] }) });
+    w.upstream.open.set('486', ['2026-10-09']);
+    const report = await w.run();
+    expect(report.devices?.domestic).toMatchObject({ claimed: 1, accepted: 1 });
+    expect(pushes.sent[0]).toMatchObject({ v: 1, title: 'Dates open at Antipolo', url: { office: 486, date: '2026-10-09', people: 1 } });
+    expect(pushes.sent[0]!.body).toMatch(/· Checked \d\d:\d\d$/);
+  });
+
+  it('claims nothing once the batch\'s 60 seconds of sending are over, however long a read took', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i++) ids.push((await seedAlert(w.kv, { now: w.t.now(), order: 0, choices: choices({ siteIds: [486] }) })).id);
+    ids.sort();
+    w.upstream.open.set('486', ['2026-10-09']);
+    // Reading the second alert takes 61 seconds (a slow Valkey), after the first send started the batch's clock.
+    const hGetAll = w.kv.hGetAll.bind(w.kv);
+    w.kv.hGetAll = async (key: string) => {
+      if (key === K.devAlert(ids[1]!) && pushes.sent.length === 1) w.t.advance(61_000);
+      return hGetAll(key);
+    };
+    const report = await w.run();
+    expect(report.devices?.domestic).toMatchObject({ claimed: 1, accepted: 1, stoppedBy: 'deadline' });
+    // The abroad batch has its own 60 seconds: the second alert's work, left held, goes out there.
+    expect(report.devices?.abroad).toMatchObject({ claimed: 1, accepted: 1 });
+    expect(pushes.sent).toHaveLength(2);
+    expect(await w.kv.hGetAll(K.devClaim(ids[1]!))).toEqual({});
+  });
+
+  it('keeps email and notifications independent: mail failing does not stop pushes, and the reverse', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    const token = await (await import('../src/subscribers.ts')).createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' } as never, w.t.now());
+    await (await import('../src/subscribers.ts')).confirm(w.kv, token, w.t.now());
+    w.mailer.failNext = 3; // FakeMailer: the next sends fail as refused
+    w.upstream.open.set('486', ['2026-10-09']);
+    await w.run();
+    expect(pushes.sent).toHaveLength(1);
+    pushes.next = [{ kind: 'refused', status: 503 }];
+    w.upstream.open.set('486', ['2026-10-09', '2026-10-10']);
+    w.mailer.failNext = 0;
+    await w.run();
+    expect(w.mailer.sent.some((m) => m.kind === 'alert')).toBe(true);
+  });
+
+  it('runs the abroad batch even when the abroad scan failed, sending what was verified at home', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes }, abroad: { sites: async () => { throw new Error('down'); }, availability: async () => { throw new Error('down'); } } as never });
+    await w.run();
+    await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    const report = await w.run();
+    expect(report.devices?.abroad.stoppedBy).toBeNull();
+    expect(pushes.sent).toHaveLength(1);
+  });
+
+  it('sends nothing in off mode; the work waits uncharged', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'off', transport: pushes } });
+    await w.run();
+    const a = await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    await w.run();
+    expect(pushes.sent).toEqual([]);
+    expect(await w.kv.get(K.devToday(a.id, (await import('../src/keys.ts')).manilaDay(w.t.now())))).toBeNull();
+  });
+
+  it('stops claiming at a batch\'s 60 seconds of sending; the abroad batch, with its own 60 s, sends the rest', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    for (let i = 0; i < 12; i++) await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    pushes.send = async (_: unknown, payload: string) => {
+      w.t.advance(7_000); // each send takes 7 s of the batch's 60
+      pushes.sent.push(JSON.parse(payload));
+      return { kind: 'accepted', status: 201 };
+    };
+    const report = await w.run();
+    // 7 s a send: the domestic batch sends 9 (63 s > 60 s stops it before a tenth), and the abroad batch, which sends
+    // what was verified at home too, has its own 60 s for the 3 left.
+    expect(report.devices?.domestic).toMatchObject({ stoppedBy: 'deadline', accepted: 9 });
+    expect(report.devices?.abroad).toMatchObject({ accepted: 3 });
+    expect(pushes.sent).toHaveLength(12);
+  });
+
+  it('sends nothing more after a rejection, even to the alert that was waiting for the rejected send\'s slot', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    for (let i = 0; i < 12; i++) await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    let n = 0;
+    pushes.send = async (_: unknown, payload: string) => {
+      const mine = ++n;
+      pushes.sent.push(JSON.parse(payload));
+      // The first send is rejected after the other seven slots are taken; the ninth alert waits for its slot.
+      await new Promise((r) => setTimeout(r, mine === 1 ? 30 : 60));
+      return mine === 1 ? { kind: 'rejected', status: 401 } : { kind: 'accepted', status: 201 };
+    };
+    const report = await w.run();
+    expect(report.devices?.domestic.stoppedBy).toBe('rejected');
+    expect(pushes.sent).toHaveLength(8);
+  });
+
+  it('finishes the sends it started before a lost lock ends the batch', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    for (let i = 0; i < 3; i++) await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    let finished = 0;
+    pushes.send = async (_: unknown, payload: string) => {
+      // The first send outlives the lock: another run takes it while this send is on the wire.
+      if (pushes.sent.length === 0) await w.kv.set(K.checkLock, 'another-run');
+      pushes.sent.push(JSON.parse(payload));
+      await new Promise((r) => setTimeout(r, 20));
+      finished++;
+      return { kind: 'accepted', status: 201 };
+    };
+    await w.run().catch(() => undefined);
+    expect(finished).toBe(pushes.sent.length); // nothing still on the wire when the run returns
+    expect(pushes.sent.length).toBeLessThan(3);
+  });
+
+    it('sends one notification per alert per run, however many batches', async () => {
+    const pushes = new Pushes();
+    const w = await deviceWorld({ devices: { mode: 'live', transport: pushes } });
+    await w.run();
+    await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    await w.run();
+    expect(pushes.sent).toHaveLength(1);
   });
 });

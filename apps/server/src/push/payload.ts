@@ -8,7 +8,12 @@ const LIMIT = 3000;
 const NAME_CHARS = 80;
 const day = (d: string) => formatDate(d).replace(/ \d{4}$/, '');
 
-export function buildPayload(a: { openings: Opening[]; applicants: number; decisionId: string }): string {
+const manilaTime = (ms: number) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+
+export function buildPayload(a: { openings: Opening[]; applicants: number; decisionId: string; checkedAt: number | null }): string {
+  // When the dates were verified (the oldest lookup among them), in Manila time.
+  const checked = a.checkedAt === null ? '' : ` · Checked ${manilaTime(a.checkedAt)}`;
   const first = a.openings[0]!;
   const name = [...shortName(first.name)].slice(0, NAME_CHARS).join('');
   const title = a.openings.length === 1 ? `Dates open at ${name}` : `Dates open at ${a.openings.length} offices`;
@@ -20,10 +25,10 @@ export function buildPayload(a: { openings: Opening[]; applicants: number; decis
     const named = dates.slice(0, shown).map(day);
     const rest = dates.length - shown;
     const list = rest > 0 ? `${named.join(', ')} and ${rest} more` : named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0]!;
-    const p = make(`${list} · ${people}`);
+    const p = make(`${list} · ${people}${checked}`);
     if (Buffer.byteLength(p) <= LIMIT) return p;
   }
-  const plain = make(people);
+  const plain = make(`${people}${checked}`);
   if (Buffer.byteLength(plain) <= LIMIT) return plain;
   // Inputs no real alert has (a huge id or date): a plain notification that opens the site.
   return JSON.stringify({ v: 1, title: 'Dates open', body: people, tag: `alert-${a.decisionId.slice(0, 64)}`, url: {} });
