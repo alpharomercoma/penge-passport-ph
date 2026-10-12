@@ -12,6 +12,8 @@ export const K = {
   emailIndex: (index: string) => `${P}idx:${index}`,
   /** Held while one address's subscription is being changed. */
   addressLock: (index: string) => `${P}lock:idx:${index}`,
+  /** Held while a backup is being restored: one restore at a time (backup.ts). */
+  importLock: `${P}lock:import`,
   siteSubscribers: (siteId: number) => `${P}site:${siteId}:subs`,
   /** Every subscriber id, whatever offices they follow (the backup reads it). */
   allSubscribers: `${P}subs`,

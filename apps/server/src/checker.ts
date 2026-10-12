@@ -247,12 +247,21 @@ function newRunId(now: number): string {
   return `${now.toString(36)}-${randomBytes(3).toString('hex')}`;
 }
 
+/**
+ * An email subscriber, or null: someone the channel release (05cee09) left with email off is never emailed here (the
+ * migration's inspection stops on them and the owner decides).
+ */
+async function loadEmail(kv: Kv, id: string): Promise<Subscriber | null> {
+  const s = await load(kv, id);
+  return s && !s.emailOff ? s : null;
+}
+
 /** Loads each subscriber at most once per run. */
 function subscriberCache(kv: Kv) {
   const cache = new Map<string, Promise<Subscriber | null>>();
   return (id: string) => {
     let hit = cache.get(id);
-    if (!hit) cache.set(id, (hit = load(kv, id)));
+    if (!hit) cache.set(id, (hit = loadEmail(kv, id)));
     return hit;
   };
 }
@@ -951,7 +960,7 @@ async function consider(
     return 'next';
   }
 
-  const sub = await load(kv, id);
+  const sub = await loadEmail(kv, id);
   if (!sub) {
     report.skipped++;
     await clearHeld(kv, id);
@@ -1056,7 +1065,7 @@ async function consider(
   const todays = await kv.incr(K.alertsToday(id, day), COUNTER_TTL_SECONDS);
   // Unsubscribed a moment ago? Then nothing goes out, and nothing is kept.
   // (Checked right before the claim; the two are not one atomic step.)
-  if (!(await load(kv, id))) {
+  if (!(await loadEmail(kv, id))) {
     await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, { op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(null)]);
     report.skipped++;
     return 'next';

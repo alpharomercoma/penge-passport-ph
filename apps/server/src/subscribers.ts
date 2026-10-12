@@ -25,7 +25,24 @@ export interface Subscriber {
   pace: Pace;
   createdAt: string;
   confirmedAt: string;
+  /** The channel release (05cee09) stored email off, or a flag that is not "1": never emailed (the owner decides). */
+  emailOff: boolean;
 }
+
+/** Fields only the channel release wrote on a subscriber; a new email confirmation removes them. */
+const CHANNEL_FIELDS = ['emailOn', 'pushOn', 'pushCredentialHash', 'device'];
+
+/** The channel release's per-subscriber device records (no longer in keys.ts): deleted with the subscriber. */
+const LEGACY_PUSH = {
+  devices: (id: string) => `pp:push:${id}`,
+  meta: (id: string) => `pp:push:meta:${id}`,
+  cred: (hash: string) => `pp:push:cred:${hash}`,
+  endpoint: (hmac: string) => `pp:push:endpoint:${hmac}`,
+  /** Set of pending-token hashes asking for notifications on a credential. */
+  pending: (credentialHash: string) => `pp:push:pending:${credentialHash}`,
+  /** Set of "<token hash>|<address index>" for pending requests that carried channels. */
+  pendingChannels: 'pp:pending:channels',
+};
 
 interface Pending {
   sealedEmail: string;
@@ -85,7 +102,7 @@ export type ConfirmResult =
  * Changes to one address happen one at a time: two confirmations clicked at
  * once must not both see "no subscriber yet" and create two.
  */
-async function withAddressLock<T>(kv: Kv, index: string, fn: () => Promise<T>): Promise<T> {
+export async function withAddressLock<T>(kv: Kv, index: string, fn: () => Promise<T>): Promise<T> {
   const key = K.addressLock(index);
   const mine = randomToken();
   for (let attempt = 0; !(await kv.set(key, mine, { nx: true, ttlSeconds: 10 })); attempt++) {
@@ -136,6 +153,8 @@ async function upsert(kv: Kv, pending: Pending, now: number): Promise<ConfirmRes
     if (!pending.siteIds.includes(siteId)) ops.push({ op: 'sRem', key: K.siteSubscribers(siteId), members: [id] });
   }
   ops.push(
+    // Confirming email is consent to email now, whatever the channel release stored before.
+    { op: 'hDel', key: K.subscriber(id), fields: CHANNEL_FIELDS },
     {
       op: 'hSet',
       key: K.subscriber(id),
@@ -181,7 +200,34 @@ export async function unsubscribe(kv: Kv, keys: Keys, token: string): Promise<bo
 async function removeAddress(kv: Kv, index: string, subscriber: Subscriber | null): Promise<void> {
   const waiting = await kv.sMembers(K.pendingFor(index));
   const deletions = await kv.sMembers(K.deletionsFor(index));
+  // The channel release's device records for this subscriber, and the pointers to them that still name it; and its index
+  // entries for this address's waiting requests.
+  const legacy: WriteOp[] = [];
+  // Every channel index entry for this address, its request still waiting or long expired.
+  const channelEntries = (await kv.sMembers(LEGACY_PUSH.pendingChannels).catch(() => [] as string[])).filter((m) => m.endsWith(`|${index}`));
+  if (channelEntries.length > 0) legacy.push({ op: 'sRem', key: LEGACY_PUSH.pendingChannels, members: channelEntries });
+  for (const hash of waiting) {
+    const raw = await kv.get(K.pending(hash)).catch(() => null);
+    let cred: unknown = null;
+    try {
+      cred = raw ? (JSON.parse(raw) as { channels?: { pushCredentialHash?: unknown } }).channels?.pushCredentialHash : null;
+    } catch {
+      cred = null;
+    }
+    if (typeof cred === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(cred)) legacy.push({ op: 'sRem', key: LEGACY_PUSH.pending(cred), members: [hash] });
+  }
+  if (subscriber) {
+    legacy.push({ op: 'del', key: LEGACY_PUSH.devices(subscriber.id) }, { op: 'del', key: LEGACY_PUSH.meta(subscriber.id) });
+    const meta = await kv.hGetAll(LEGACY_PUSH.meta(subscriber.id)).catch(() => ({}) as Record<string, string>);
+    for (const [device, value] of Object.entries(meta)) {
+      const [, , credHash, endpointHmac] = value.split('|');
+      for (const key of [credHash ? LEGACY_PUSH.cred(credHash) : null, endpointHmac ? LEGACY_PUSH.endpoint(endpointHmac) : null]) {
+        if (key && (await kv.get(key).catch(() => null)) === `${subscriber.id}/${device}`) legacy.push({ op: 'del', key });
+      }
+    }
+  }
   await kv.write([
+    ...legacy,
     ...(subscriber ? [
       ...subscriber.siteIds.map((siteId): WriteOp => ({ op: 'sRem', key: K.siteSubscribers(siteId), members: [subscriber.id] })),
       { op: 'del', key: K.subscriber(subscriber.id) } as WriteOp,
@@ -221,7 +267,10 @@ export async function deleteWithToken(kv: Kv, token: string): Promise<{ valid: b
   return withAddressLock(kv, index, async () => {
     if ((await kv.get(key)) !== index) return { valid: false, removed: false };
     const id = await kv.get(K.emailIndex(index));
-    const subscriber = id ? await load(kv, id) : null;
+    const found = id ? await load(kv, id) : null;
+    // Only the subscriber this address really belongs to: a pointer naming a record of another address (a damaged
+    // store) deletes nobody.
+    const subscriber = found && found.index === index ? found : null;
     await removeAddress(kv, index, subscriber);
     return { valid: true, removed: subscriber !== null };
   });
@@ -239,6 +288,7 @@ export async function load(kv: Kv, id: string): Promise<Subscriber | null> {
     pace: isPace(h.pace) ? h.pace : 'hourly',
     createdAt: h.createdAt ?? '',
     confirmedAt: h.confirmedAt ?? '',
+    emailOff: h.emailOn !== undefined && h.emailOn !== '1',
   };
 }
 

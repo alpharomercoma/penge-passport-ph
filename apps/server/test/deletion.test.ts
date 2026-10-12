@@ -22,6 +22,64 @@ async function setup() {
 const deletionToken = (text: string) => /\/delete-data#token=([A-Za-z0-9_-]{43})/.exec(text)![1]!;
 
 describe('deletion recovery without an alert email', () => {
+  it('deletes the device records the channel release kept for the subscriber, and only its own pointers', async () => {
+    const s = await setup();
+    const id = await s.join();
+    await s.kv.write([
+      { op: 'hSet', key: `pp:push:${id}`, fields: { d1: 'v2.sealed' } },
+      { op: 'hSet', key: `pp:push:meta:${id}`, fields: { d1: 'r|1|credhash|ephmac|subhmac' } },
+      { op: 'set', key: 'pp:push:cred:credhash', value: `${id}/d1` },
+      { op: 'set', key: 'pp:push:endpoint:ephmac', value: `${id}/d1` },
+      { op: 'set', key: 'pp:push:cred:other', value: 'someone-else/d9' },
+    ]);
+    const token = await createDeletion(s.kv, keys, 'juan@example.com');
+    expect(await deleteWithToken(s.kv, token)).toEqual({ valid: true, removed: true });
+    expect(s.kv.keys().filter((k) => k.startsWith('pp:push:'))).toEqual(['pp:push:cred:other']);
+  });
+
+  it('never deletes another subscriber when the address pointer names the wrong one', async () => {
+    const s = await setup();
+    const ana = await s.join('ana@example.com');
+    const { emailIndex } = await import('../src/crypto.ts');
+    // Juan's address points at Ana's record (a damaged store): deleting Juan's data must leave Ana alone.
+    await s.kv.set(K.emailIndex(emailIndex('juan@example.com', keys.index)), ana);
+    await s.kv.write([{ op: 'hSet', key: `pp:push:${ana}`, fields: { d1: 'v2.sealed' } }]);
+    const token = await createDeletion(s.kv, keys, 'juan@example.com');
+    expect(await deleteWithToken(s.kv, token)).toEqual({ valid: true, removed: false });
+    expect(await s.kv.hGetAll(K.subscriber(ana))).not.toEqual({});
+    expect(await s.kv.hGetAll(`pp:push:${ana}`)).toEqual({ d1: 'v2.sealed' });
+  });
+
+  it('removes channel index entries for the address even after its requests expired', async () => {
+    const s = await setup();
+    await s.join();
+    const { emailIndex } = await import('../src/crypto.ts');
+    const index = emailIndex('juan@example.com', keys.index);
+    await s.kv.write([{ op: 'sAdd', key: 'pp:pending:channels', members: [`oldhash|${index}`, 'other|idx'] }]);
+    const token = await createDeletion(s.kv, keys, 'juan@example.com');
+    await deleteWithToken(s.kv, token);
+    expect(await s.kv.sMembers('pp:pending:channels')).toEqual(['other|idx']);
+  });
+
+  it('removes the channel release\'s index entries for the address\'s waiting requests', async () => {
+    const s = await setup();
+    await s.join();
+    const pendingToken = await createPending(s.kv, keys, { email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'hourly' }, s.t.now());
+    const { hashToken, emailIndex } = await import('../src/crypto.ts');
+    const hash = hashToken(pendingToken);
+    const index = emailIndex('juan@example.com', keys.index);
+    const stored = JSON.parse((await s.kv.get(K.pending(hash)))!) as Record<string, unknown>;
+    await s.kv.write([
+      { op: 'set', key: K.pending(hash), value: JSON.stringify({ ...stored, channels: { emailOn: true, pushOn: true, pushCredentialHash: 'credhash', device: null } }) },
+      { op: 'sAdd', key: 'pp:pending:channels', members: [`${hash}|${index}`, 'other|idx'] },
+      { op: 'sAdd', key: 'pp:push:pending:credhash', members: [hash, 'otherhash'] },
+    ]);
+    const token = await createDeletion(s.kv, keys, 'juan@example.com');
+    await deleteWithToken(s.kv, token);
+    expect(await s.kv.sMembers('pp:pending:channels')).toEqual(['other|idx']);
+    expect(await s.kv.sMembers('pp:push:pending:credhash')).toEqual(['otherhash']);
+  });
+
   it('sends identical responses/content to subscribed and unknown addresses without needing a site list', async () => {
     const s = await setup();
     await s.join();

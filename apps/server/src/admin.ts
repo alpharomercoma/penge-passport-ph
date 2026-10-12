@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { isCalendarDate } from '@penge/contracts';
-import { type Backup, exportSubscribers, importSubscribers } from './backup.ts';
+import { exportSubscribers, importSubscribers } from './backup.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { K } from './keys.ts';
 import { connectRedis } from './kv.ts';
@@ -63,7 +63,7 @@ if (command === 'scans') {
   process.exitCode = gaps.length ? 1 : 0;
 }
 if (command === 'restore' && (!file || confirm !== '--yes')) {
-  process.stderr.write('restore overwrites subscribers with the same ids; add --yes to go ahead\n');
+  process.stderr.write('restore puts subscribers back without displacing anyone; add --yes to go ahead\n');
   process.exit(2);
 }
 
@@ -78,8 +78,10 @@ if (command === 'backup' || command === 'restore') {
     } else {
       let data = readFileSync(file!);
       if (data[0] === 0x1f && data[1] === 0x8b) data = gunzipSync(data);
-      const restored = await importSubscribers(kv, JSON.parse(data.toString('utf8')) as Backup);
-      process.stderr.write(`restored ${restored} subscribers\n`);
+      const result = await importSubscribers(kv, config.keys, JSON.parse(data.toString('utf8')) as unknown);
+      process.stderr.write(`restored ${result.restored} subscribers; ${result.emailOff} had email off and were left out\n`);
+      const why = { 'address-taken': 'its address belongs to another subscriber now', 'id-taken': 'its id belongs to another address now', 'email-off-now': 'it has email off now; a backup never turns it back on', 'damaged-keys': 'a key it needs has the wrong type; nothing of it was written (see the runbook)' };
+      for (const s of result.skipped) process.stderr.write(`skipped ${s.id}: ${why[s.reason]}\n`);
     }
   } finally {
     await kv.close();

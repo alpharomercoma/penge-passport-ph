@@ -387,6 +387,30 @@ describe('checker', () => {
     expect(w.upstream.calls).toEqual([]);
   });
 
+  it('never emails a subscriber the channel release left with email off (or an unclear flag)', async () => {
+    const w = await world();
+    const on = await w.subscribe('ana@example.com', [486]);
+    const off = await w.subscribe('ben@example.com', [486]);
+    const unclear = await w.subscribe('cy@example.com', [486]);
+    await w.kv.write([
+      { op: 'hSet', key: K.subscriber(off), fields: { emailOn: '0', pushOn: '1' } },
+      { op: 'hSet', key: K.subscriber(unclear), fields: { emailOn: 'yes' } },
+      { op: 'hSet', key: K.subscriber(on), fields: { emailOn: '1' } },
+    ]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-07']);
+    await w.run();
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert').map((m) => m.to)).toEqual(['ana@example.com']);
+  });
+
+  it('a new email confirmation is consent: it clears the channel release\'s flags', async () => {
+    const w = await world();
+    const id = await w.subscribe('ben@example.com', [486]);
+    await w.kv.write([{ op: 'hSet', key: K.subscriber(id), fields: { emailOn: '0', pushOn: '1', pushCredentialHash: 'h', device: 'Chrome' } }]);
+    await w.subscribe('ben@example.com', [486, 693]);
+    expect(Object.keys(await w.kv.hGetAll(K.subscriber(id))).sort()).toEqual(['applicants', 'confirmedAt', 'createdAt', 'email', 'index', 'pace', 'sites']);
+  });
+
   it('skips people who unsubscribed while their alert waited', async () => {
     const w = await world();
     const id = await w.subscribe('ana@example.com', [486]);
@@ -709,11 +733,11 @@ describe('outbox integrity and backups', () => {
     expect(JSON.stringify(backup)).not.toContain('ana@example.com');
 
     const fresh = new MemoryKv();
-    expect(await importSubscribers(fresh, backup)).toBe(1);
+    expect(await importSubscribers(fresh, keys, backup)).toMatchObject({ restored: 1 });
     const again = await exportSubscribers(fresh, [486, 693], 0);
     expect(again.subscribers).toEqual(backup.subscribers);
     expect(await fresh.sMembers(K.siteSubscribers(693))).toEqual([id]);
-    await expect(importSubscribers(fresh, { version: 1, exportedAt: '', subscribers: [{ id: '../x', fields: {} }] })).rejects.toThrow();
+    await expect(importSubscribers(fresh, keys, { version: 1, exportedAt: '', subscribers: [{ id: '../x', fields: {} }] })).rejects.toThrow();
   });
 
   it('deletes backups 14 days old even when the day\'s upload fails, and retries the upload', async () => {
@@ -743,7 +767,7 @@ describe('outbox integrity and backups', () => {
     const backup = await exportSubscribers(w.kv, remaining, 0); // the office list no longer has it
     expect(backup.subscribers.map((s) => s.id)).toEqual([id]);
     const fresh = new MemoryKv();
-    await importSubscribers(fresh, backup);
+    await importSubscribers(fresh, keys, backup);
     expect(await fresh.sMembers(K.allSubscribers)).toEqual([id]);
   });
 });
@@ -862,10 +886,10 @@ describe('pace', () => {
     expect((await w.kv.hGetAll(K.subscriber(id))).pace).toBe('asap');
     const backup = await exportSubscribers(w.kv, [693], 0);
     const fresh = new MemoryKv();
-    await importSubscribers(fresh, backup);
+    await importSubscribers(fresh, keys, backup);
     expect((await fresh.hGetAll(K.subscriber(id))).pace).toBe('asap');
     backup.subscribers[0]!.fields.pace = 'daily';
-    await expect(importSubscribers(new MemoryKv(), backup)).rejects.toThrow(/bad subscriber/);
+    await expect(importSubscribers(new MemoryKv(), keys, backup)).rejects.toThrow(/bad subscriber/);
     // A subscription from before paces existed is hourly.
     await w.kv.write([{ op: 'hSet', key: K.subscriber(id), fields: { pace: '' } }]);
     const { load } = await import('../src/subscribers.ts');
@@ -1043,7 +1067,7 @@ describe('pace', () => {
     for (const pace of [123, null, 'daily']) {
       const backup = await exportSubscribers(w.kv, [486], 0);
       (backup.subscribers[0]!.fields as Record<string, unknown>).pace = pace;
-      await expect(importSubscribers(new MemoryKv(), backup)).rejects.toThrow(/bad subscriber/);
+      await expect(importSubscribers(new MemoryKv(), keys, backup)).rejects.toThrow(/bad subscriber/);
     }
   });
 
