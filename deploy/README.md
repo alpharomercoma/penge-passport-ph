@@ -570,7 +570,9 @@ Claims left by the run that was stopped are recovered by the next run of this re
 ## Leaving the channel design (one maintenance window)
 
 Production ran `05cee09` (push as a second channel on email subscriptions, `PUSH_MODE=owner` with
-`PUSH_OWNER_EMAILS`). Moving to this release, once, in a short window. Everything runs as root on the
+`PUSH_OWNER_EMAILS`). Moving to this release, once, in a short window. `scripts/rollout-alerts.sh` runs these steps
+from the Mac, one phase at a time, checking each (`preflight`, `stage`, `stop`, `inspect`, `backup`, `clean --yes`,
+`configure`, `activate`, `owner`, `publish`; `abort` before activation); what follows is what it does. Everything runs as root on the
 server, except the upload in step 2, from your Mac:
 
 1. Stop everything that writes:
