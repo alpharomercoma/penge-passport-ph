@@ -4,6 +4,9 @@
 //   node admin.mjs restore subscribers.json[.gz] --yes
 //   node admin.mjs scans 2026-10-01 [abroad] > day.jsonl
 //   node admin.mjs device-cleanup                      notification clean-up (the rollback's pre-step)
+//   node admin.mjs channel-inspect                     what the channel release left (read only)
+//   node admin.mjs channel-dump > channel-keys.json    exactly those keys, for the backup
+//   node admin.mjs channel-clean --yes                 cleaned by the migration table (stops for the owner first)
 //
 // The daily backups the checker stores in R2 (backups/subscribers/date=…/)
 // restore the same way once downloaded. `scans` rebuilds a UTC day's scan
@@ -20,17 +23,43 @@ import { stampAt } from './clock.ts';
 import { deviceCleanup } from './devices/cleanup.ts';
 import { acquireLock, releaseLock } from './devices/lock.ts';
 import { log, silentLog } from './log.ts';
+import { cleanChannels, dumpChannels, inspectChannels } from './migrate.ts';
 import { r2Sink, readSpool } from './r2.ts';
 import { rebuild, RECORD_SCHEMA, type ScanRecord } from './record.ts';
 
-const COMMANDS = ['backup', 'restore', 'scans', 'device-cleanup'];
+const COMMANDS = ['backup', 'restore', 'scans', 'device-cleanup', 'channel-inspect', 'channel-dump', 'channel-clean'];
 const USAGE =
-  'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl | admin.mjs device-cleanup\n';
+  'usage: admin.mjs backup > file.json | admin.mjs restore <file.json[.gz]> --yes | admin.mjs scans <YYYY-MM-DD> [abroad] > day.jsonl | admin.mjs device-cleanup | admin.mjs channel-inspect | admin.mjs channel-dump > channel-keys.json | admin.mjs channel-clean --yes\n';
 const [command, file, confirm] = process.argv.slice(2);
 if (!command || !COMMANDS.includes(command)) {
   process.stderr.write(USAGE);
   process.exit(2);
 }
+// Leaving the channel design: these read only REDIS_URL (not loadConfig, which refuses the channel release's
+// PUSH_OWNER_EMAILS), so they run from the new release's unpacked bundle with production's current server.env.
+if (command === 'channel-inspect' || command === 'channel-dump' || command === 'channel-clean') {
+  const url = process.env.REDIS_URL?.trim();
+  if (!url) {
+    process.stderr.write('REDIS_URL is not set\n');
+    process.exit(2);
+  }
+  // Written in full before the process ends: a dump through a pipe (ssh, gzip) is never cut short.
+  const out = (text: string) => new Promise<void>((resolve, reject) => process.stdout.write(text, (err) => (err ? reject(err) : resolve())));
+  const kv = await connectRedis(url, (err) => process.stderr.write(`redis: ${err.message}\n`));
+  try {
+    const inspection = await inspectChannels(kv);
+    if (command === 'channel-inspect') await out(`${JSON.stringify(inspection, null, 2)}\n`);
+    else if (command === 'channel-dump') await out(`${JSON.stringify(await dumpChannels(kv, inspection))}\n`);
+    else if (file !== '--yes') {
+      await out(`${JSON.stringify(inspection, null, 2)}\nadd --yes to clean\n`);
+      process.exitCode = 2;
+    } else await out(`${JSON.stringify(await cleanChannels(kv, inspection))}\n`);
+  } finally {
+    await kv.close();
+  }
+  process.exit();
+}
+
 if (command === 'scans') {
   const day = file ?? '';
   // A real date: 2026-02-31 would list nothing and look like a quiet day.

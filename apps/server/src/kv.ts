@@ -65,6 +65,8 @@ export interface Kv {
   decr(key: string): Promise<number>;
   hGetAll(key: string): Promise<Record<string, string>>;
   sMembers(key: string): Promise<string[]>;
+  /** Every key matching a pattern of literal characters, * and ? (SCAN MATCH, COUNT 500), each once; any other glob is refused. */
+  scan(pattern: string): Promise<string[]>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
   write(ops: WriteOp[]): Promise<void>;
@@ -114,6 +116,12 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     decr: (key) => client.decr(key),
     hGetAll: async (key) => ({ ...(await client.hGetAll(key)) }),
     sMembers: (key) => client.sMembers(key),
+    async scan(pattern) {
+      plainGlob(pattern);
+      const out: string[] = [];
+      for await (const keys of client.scanIterator({ MATCH: pattern, COUNT: 500 })) out.push(...(Array.isArray(keys) ? keys : [keys]));
+      return [...new Set(out)];
+    },
     lPop: (key) => client.lPop(key),
     lLen: (key) => client.lLen(key),
     async script(def, keys, args) {
@@ -244,6 +252,11 @@ class ZSet {
 type Entry = { value: string | Map<string, string> | Set<string> | string[] | ZSet; expiresAt: number | null };
 
 /** In-memory twin of the Redis subset above, for tests and local runs. */
+/** Patterns use only * and ?: brackets and escapes, which MemoryKv does not read as Valkey does, are refused on both. */
+function plainGlob(pattern: string) {
+  if (/[[\]\\]/.test(pattern)) throw new Error(`scan patterns use only * and ?: ${pattern}`);
+}
+
 export class MemoryKv implements Kv {
   private readonly data = new Map<string, Entry>();
   /** Not readonly: a script holds it still while it runs. */
@@ -349,6 +362,14 @@ export class MemoryKv implements Kv {
     if (!entry) return {};
     if (!(entry.value instanceof Map)) throw new Error(`WRONGTYPE ${key}`);
     return Object.fromEntries(entry.value);
+  }
+
+  async scan(pattern: string) {
+    plainGlob(pattern);
+    // As Valkey matches: over the UTF-8 bytes (each one char in latin1), with * spanning anything, newlines too.
+    const bytes = (t: string) => Buffer.from(t, 'utf8').toString('latin1');
+    const re = new RegExp(`^${bytes(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[\\s\\S]*').replace(/\?/g, '[\\s\\S]')}$`);
+    return this.keys().filter((k) => re.test(bytes(k)));
   }
 
   async sMembers(key: string) {

@@ -36,4 +36,14 @@ describe('the rollout backup expiry', () => {
     execFileSync('sh', [script], { env: { ...process.env, PENGE_BACKUP_DIR: dir } });
     expect(readdirSync(dir).sort()).toEqual([files.future, files.soon, files.malformed, files.unrelated, files.oddSuffix, files.otherSuffix, folder, link].sort());
   });
+
+  it("deletes the channel design's key dump once expired, and keeps one not yet expired", () => {
+    dir = mkdtempSync(join(tmpdir(), 'penge-backups-'));
+    const now = Date.now();
+    const expired = `channel-keys-${stamp(now - 15 * 86_400_000)}-expires-${stamp(now - 3600_000)}.json`;
+    const kept = `channel-keys-${stamp(now)}-expires-${stamp(now + 14 * 86_400_000)}.json`;
+    for (const f of [expired, kept]) writeFileSync(join(dir, f), '{}');
+    execFileSync('sh', [script], { env: { ...process.env, PENGE_BACKUP_DIR: dir } });
+    expect(readdirSync(dir)).toEqual([kept]);
+  });
 });
