@@ -9,13 +9,10 @@ vi.mock('../src/notify/worker.ts', () => ({
   workerFailed: workerMock.failed,
   readyWorker: workerMock.ready,
 }));
-const sharedMock = vi.hoisted(() => ({ ensureSubscribed: vi.fn() }));
-vi.mock('../src/notify/shared.js', async (orig) => ({ ...(await orig<object>()), ensureSubscribed: sharedMock.ensureSubscribed }));
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { detectContext, deviceLabel, pushCapability } from '../src/notify/context.ts';
-import { enablePush } from '../src/notify/push.ts';
+import { detectContext, pushCapability } from '../src/notify/context.ts';
 import { builtWorkerSource } from './worker-source.ts';
 
 const LIVE = { ...STATUS, push: 'live' as const, vapidPublicKey: 'B'.repeat(87) };
@@ -44,7 +41,6 @@ function fakeWindow(over: Record<string, unknown> = {}, storage = new MemoryStor
 afterEach(() => {
   vi.unstubAllGlobals();
   workerMock.ready.mockReset();
-  sharedMock.ensureSubscribed.mockReset();
 });
 
 describe('where the app runs', () => {
@@ -78,11 +74,6 @@ describe('where the app runs', () => {
     expect(pushCapability(fakeWindow(), LIVE, { owner: false, workerOk: false })).toEqual({ ok: false, reason: 'no-worker' });
   });
 
-  it('labels a device coarsely', () => {
-    expect(deviceLabel('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) Gecko/20100101 Firefox/143.0')).toBe('Firefox on Mac');
-    expect(deviceLabel('Mozilla/5.0 (Linux; Android 16) Chrome/141.0 Mobile')).toBe('Chrome on Android');
-    expect(deviceLabel('<script>')).toBe('A browser');
-  });
 });
 
 describe('turning push on', () => {
@@ -168,42 +159,4 @@ describe('turning push on', () => {
     expect(removed).toHaveBeenCalledWith('controllerchange', expect.any(Function));
   }, 4000);
 
-  it('gives a hint without asking when permission was already denied (Review Focus 2)', async () => {
-    const request = vi.fn();
-    vi.stubGlobal('Notification', { permission: 'denied', requestPermission: request });
-    expect(await enablePush({ vapidPublicKey: LIVE.vapidPublicKey })).toEqual({ ok: false, reason: 'denied' });
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it('turns back off when subscribe() is refused (Review Focus 3)', async () => {
-    vi.stubGlobal('Notification', { permission: 'default', requestPermission: async () => 'granted' });
-    workerMock.ready.mockResolvedValue({ registration: {} });
-    sharedMock.ensureSubscribed.mockRejectedValue(new DOMException('no', 'AbortError'));
-    expect(await enablePush({ vapidPublicKey: LIVE.vapidPublicKey })).toEqual({ ok: false, reason: 'subscribe-failed' });
-  });
-
-  it('gives up after 10 s when no push-capable worker takes over', async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('Notification', { permission: 'default', requestPermission: async () => 'granted' });
-    workerMock.ready.mockReturnValue(new Promise(() => {}));
-    const result = enablePush({ vapidPublicKey: LIVE.vapidPublicKey });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(await result).toEqual({ ok: false, reason: 'no-worker' });
-    vi.useRealTimers();
-  });
-
-  it('passes a channel error from the server to the form', async () => {
-    const { api, ApiFailure } = await vi.importActual<typeof import('../src/api.ts')>('../src/api.ts');
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Please fix the highlighted fields.', fields: { channels: 'Notifications are not available yet.' } }), { status: 400 })));
-    const err = await api.subscribe({ email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: null, website: '' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ApiFailure);
-    expect((err as InstanceType<typeof ApiFailure>).fields.channels).toBe('Notifications are not available yet.');
-  });
-
-  it('returns the credential hash once subscribed', async () => {
-    vi.stubGlobal('Notification', { permission: 'granted', requestPermission: async () => 'granted' });
-    workerMock.ready.mockResolvedValue({ registration: {} });
-    sharedMock.ensureSubscribed.mockResolvedValue({ credentialHash: 'h'.repeat(43) });
-    expect(await enablePush({ vapidPublicKey: LIVE.vapidPublicKey })).toEqual({ ok: true, credentialHash: 'h'.repeat(43) });
-  });
 });

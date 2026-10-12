@@ -184,7 +184,7 @@ export function OfficeView(props: Props) {
   );
   const alert = alertsOpen && (
     <button type="button" className={noneOpen ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => onAlert(office.id)}>
-      <BellIcon /> Email me when dates open here
+      <BellIcon /> Alert me when dates open here
     </button>
   );
   const actions = (

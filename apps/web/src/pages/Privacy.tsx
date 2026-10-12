@@ -97,38 +97,9 @@ export function Privacy() {
       </ul>
 
       <h2>Notifications</h2>
-      <p>
-        If you turn notifications on for an alert, in a browser or in the Android app, your browser gives us a push
-        subscription: an address at your browser maker's push service, and two keys. We use it only to send that
-        alert's notifications to that device.
-      </p>
-      <ul>
-        <li>
-          We keep the push subscription encrypted (AES-256-GCM), with your alert, along with a short name for the device
-          (such as "Chrome on Android"), when it was added, and when a notification last went through or failed.
-        </li>
-        <li>
-          Your browser also keeps a random key for this device. We keep only a hash of it, so that the device can ask
-          whether its notifications are on, and turn them off, without an account.
-        </li>
-        <li>
-          Notifications reach your device through the push service your browser uses, such as Google's for Chrome and
-          the Android app, Mozilla's for Firefox, Apple's for Safari, or Microsoft's for Edge on Windows. They are
-          encrypted so the push service cannot read them; it sees that a message was sent to that device, when, and
-          how big it was.
-        </li>
-        <li>
-          To stop them, use Turn off on the home page, block notifications for this site in your browser or phone
-          settings, unsubscribe, or delete your data.
-        </li>
-        <li>
-          The push subscription is deleted when you turn notifications off, unsubscribe or delete your data, and when
-          the push service says it is no longer valid. A device that is never set up is deleted: for an alert you already have, at the first check after 48 hours;
-          otherwise 3 days after the last sign-up that asked for it. After you
-          turn a device off, a hash of its key is kept for 3 days, so that an older sign-up link cannot turn it back on.
-        </li>
-        <li>Push subscriptions are not kept in our backups: restoring a backup never turns notifications back on.</li>
-      </ul>
+      <p>Notifications need no email address. To send them we keep this browser's or app's push subscription, encrypted, and the alert's offices, group size and pace, next to a random number. Notifications pass through the browser maker's push service (Google, Mozilla, Microsoft or Apple), encrypted; that service keeps its own records of delivery under its own policy.</p>
+      <p>Turning notifications off stops them on this device when the browser confirms it (if it cannot, we say so and how to block them in the browser's settings), and deletes them from our server when it is reached. Notifications the push service had already accepted may still arrive. If you block notifications or remove the app, we may not learn of it; an alert ends 180 days after the site or app was last opened on that device and could reach us (to within an hour), and sooner if the push service tells us the subscription no longer exists.</p>
+      <p>Notification alerts are not in our subscriber backups. Deleted data stays in the database's own two files until both have been rewritten, normally within the hour. The same holds for email data.</p>
 
       <h2>Deleting your address</h2>
       <p>

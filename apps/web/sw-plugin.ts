@@ -29,8 +29,8 @@ export function serviceWorker(): Plugin {
       // Relative to sw.js, which sits at the root of the site's path: "./" is the page itself.
       const shell = ['./', ...built, ...PUBLIC_SHELL];
       const worker = readFileSync(join(root, 'src/sw.js'), 'utf8');
-      // The push state code the page also uses, inlined: a worker script cannot import a module.
-      const shared = readFileSync(join(root, 'src/notify/shared.js'), 'utf8').replace(/^export /gm, '');
+      // This device's state code the page also uses, inlined: a worker script cannot import a module.
+      const shared = readFileSync(join(root, 'src/devices/state.js'), 'utf8').replace(/^export /gm, '');
       const hash = createHash('sha256').update(worker).update(shared);
       for (const name of Object.keys(bundle).sort()) {
         const file = bundle[name]!;

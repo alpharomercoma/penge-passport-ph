@@ -26,49 +26,14 @@ export const PACE_LABELS: Record<Pace, string> = {
 export type PushMode = 'off' | 'owner' | 'live';
 export const isPushMode = (v: unknown): v is PushMode => v === 'off' || v === 'owner' || v === 'live';
 
-/** How a person is told: email, push on the device that asked, or both. */
-export interface Channels {
-  emailOn: boolean;
-  pushOn: boolean;
-  /** SHA-256 of the credential the asking browser made, base64url. Set when pushOn. */
-  pushCredentialHash: string | null;
-  /** A coarse label from the user agent, "Chrome on Android", shown before confirming. */
-  device: string | null;
-}
-
 export interface SubscribeRequest {
   email: string;
   siteIds: number[];
   applicants: number;
   pace: Pace;
-  /** Null from a page made before channels existed: change offices, size and pace only. */
-  channels?: Channels | null;
 }
 
-export type Field = 'email' | 'siteIds' | 'applicants' | 'pace' | 'channels' | 'form';
-
-const B64URL_43 = /^[A-Za-z0-9_-]{43}$/;
-/** A credential a browser made: 32 random bytes, base64url. */
-export const isCredential = (raw: unknown): raw is string => typeof raw === 'string' && B64URL_43.test(raw);
-/** Its SHA-256, base64url: also 43 characters. */
-export const isCredentialHash = isCredential;
-
-const DEVICE_LABEL = /^[A-Za-z0-9 .,()'-]{1,60}$/;
-
-function readChannels(raw: unknown): { ok: true; value: Channels | null } | { ok: false; error: string } {
-  if (raw === undefined || raw === null) return { ok: true, value: null };
-  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'Choose how to be told.' };
-  const c = raw as Record<string, unknown>;
-  if (typeof c.emailOn !== 'boolean' || typeof c.pushOn !== 'boolean') return { ok: false, error: 'Choose how to be told.' };
-  if (!c.emailOn && !c.pushOn) return { ok: false, error: 'Turn on at least one: email or notifications.' };
-  if (!c.pushOn) return { ok: true, value: { emailOn: c.emailOn, pushOn: false, pushCredentialHash: null, device: null } };
-  if (!isCredentialHash(c.pushCredentialHash)) return { ok: false, error: 'Turn notifications on again on this device.' };
-  const device = c.device === undefined || c.device === null ? null : c.device;
-  if (device !== null && (typeof device !== 'string' || !DEVICE_LABEL.test(device))) {
-    return { ok: false, error: 'Turn notifications on again on this device.' };
-  }
-  return { ok: true, value: { emailOn: c.emailOn, pushOn: true, pushCredentialHash: c.pushCredentialHash, device } };
-}
+export type Field = 'email' | 'siteIds' | 'applicants' | 'pace' | 'form';
 
 export type Checked<T> =
   | { ok: true; value: T }
@@ -171,9 +136,6 @@ export function validateSubscribe(
   const choices = validateChoices(body, knownSiteIds);
   if (!choices.ok) Object.assign(errors, choices.errors);
 
-  const channels = readChannels(body.channels);
-  if (!channels.ok) errors.channels = channels.error;
-
   // Both checks reported together; the explicit branch narrows `choices` for TypeScript.
   if (Object.keys(errors).length > 0 || !choices.ok) return { ok: false, errors };
   return {
@@ -183,7 +145,6 @@ export function validateSubscribe(
       siteIds: choices.value.siteIds,
       applicants: choices.value.applicants,
       pace: choices.value.pace,
-      channels: channels.ok ? channels.value : null,
     },
   };
 }
@@ -264,7 +225,7 @@ export interface ApiError {
   error: string;
   fields?: Partial<Record<Field, string>>;
   /** reload: an old page; push-unavailable: push could not be turned on and email is off; full: 5 devices already. */
-  code?: 'reload' | 'push-unavailable' | 'full' | 'limited';
+  code?: 'reload' | 'limited';
 }
 
 export interface PushSubscriptionInput {
@@ -291,23 +252,6 @@ export function parsePushSubscription(raw: unknown): PushSubscriptionInput | nul
   return { endpoint: r.endpoint, p256dh: p256dh.replace(/=+$/, ''), auth: auth.replace(/=+$/, '') };
 }
 
-export interface ConfirmPreview {
-  siteIds: number[];
-  applicants: number;
-  pace: Pace;
-  /**
-   * Null for a request made before channels existed: email, as always. `devicesKept`: how many
-   * devices of this address already get notifications and keep them whatever this request says.
-   */
-  channels: { emailOn: boolean; pushOn: boolean; device: string | null; requestedAt: string; pushCredentialHash: string | null; devicesKept: number } | null;
-}
-
-export type PushOutcome = 'bound' | 'kept' | 'skipped-owned' | 'skipped-revoked' | 'skipped-off' | 'none';
-
-export type DeviceState = 'registered' | 'awaiting' | 'pending' | 'stale' | 'missing' | 'endpoint-taken';
-const DEVICE_STATES: readonly DeviceState[] = ['registered', 'awaiting', 'pending', 'stale', 'missing', 'endpoint-taken'];
-export const isDeviceState = (v: unknown): v is DeviceState => (DEVICE_STATES as readonly unknown[]).includes(v);
-
 export interface SubscribeResponse {
   message: string;
 }
@@ -317,7 +261,8 @@ export interface ConfirmResponse {
   siteIds: number[];
   applicants: number;
   pace: Pace;
-  channels: { emailOn: boolean; pushOn: boolean; push: PushOutcome };
+  /** Only pages of the channel release read this; the server still sends it for them. */
+  channels?: { emailOn: boolean; pushOn: boolean; push: string };
 }
 
 // -- Display helpers shared by the emails and the website ---------------------

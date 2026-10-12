@@ -300,6 +300,5 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 /* The status, then its links together on their own line, so they never split across lines. */
 .device-row { display: grid; justify-items: start; margin: 0 0 12px; }
 .device-actions { display: flex; flex-wrap: wrap; column-gap: 20px; }
-.channels-preview { margin: 0 0 12px; padding-left: 20px; }
 .debug-context { font: 12px/1.4 ui-monospace, monospace; opacity: 0.7; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }

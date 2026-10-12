@@ -53,9 +53,3 @@ export function pushCapability(w: Window, status: StatusResponse, o: { owner: bo
   return { ok: true };
 }
 
-export function deviceLabel(ua: string): string {
-  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : null;
-  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone' : /Mac OS X/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : null;
-  if (!browser) return 'A browser';
-  return os ? `${browser} on ${os}` : browser;
-}

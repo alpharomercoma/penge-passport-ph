@@ -76,8 +76,8 @@ describe('service worker build', () => {
     const root = mkdtempSync(join(tmpdir(), 'penge-sw-'));
     mkdirSync(join(root, 'src'));
     writeFileSync(join(root, 'src/sw.js'), `${readFileSync(join(web, 'src/sw.js'), 'utf8')}\n// changed\n`);
-    mkdirSync(join(root, 'src/notify'), { recursive: true });
-    writeFileSync(join(root, 'src/notify/shared.js'), readFileSync(join(web, 'src/notify/shared.js'), 'utf8'));
+    mkdirSync(join(root, 'src/devices'), { recursive: true });
+    writeFileSync(join(root, 'src/devices/state.js'), readFileSync(join(web, 'src/devices/state.js'), 'utf8'));
     expect(built(BUILD, root).version).not.toBe(built(BUILD).version);
   });
 
@@ -87,17 +87,17 @@ describe('service worker build', () => {
     expect(() => new Function('self', 'caches', 'fetch', 'Response', source)).not.toThrow();
   });
 
-    it('gets a new version when only the shared push code changes', () => {
+    it('gets a new version when only the device state code changes', () => {
       const root = mkdtempSync(join(tmpdir(), 'penge-sw-'));
-      mkdirSync(join(root, 'src/notify'), { recursive: true });
+      mkdirSync(join(root, 'src/devices'), { recursive: true });
       writeFileSync(join(root, 'src/sw.js'), readFileSync(join(web, 'src/sw.js'), 'utf8'));
-      writeFileSync(join(root, 'src/notify/shared.js'), `${readFileSync(join(web, 'src/notify/shared.js'), 'utf8')}\n// changed\n`);
+      writeFileSync(join(root, 'src/devices/state.js'), `${readFileSync(join(web, 'src/devices/state.js'), 'utf8')}\n// changed\n`);
       expect(built(BUILD, root).version).not.toBe(built(BUILD).version);
     });
 
-    it('inlines the shared push code without export statements', () => {
+    it('inlines the device state code without export statements', () => {
       const { source } = built(BUILD);
-      expect(source).toMatch(/const withPushLock = /);
+      expect(source).toMatch(/const DB_NAME = 'pengepassportph-device-alerts'/);
       expect(source).not.toMatch(/^export /m);
     });
 });
@@ -267,25 +267,6 @@ describe('service worker', () => {
     const w = worker();
     await w.fire('notificationclick', { notification: { data: { office: 'javascript:alert(1)', date: 'x', people: 99 }, close: vi.fn() } });
     expect(w.self.clients.openWindow).toHaveBeenCalledWith(SCOPE);
-  });
-
-  it('re-registers with the server when the browser renews the subscription', async () => {
-    const locks = { request: (_n: string, fn: () => Promise<unknown>) => fn() };
-    const idb = new IDBFactory();
-    const posted: unknown[] = [];
-    // The worker's own fetch (the harness passes it into the worker's scope).
-    const renewFetch = vi.fn(async (_url: string, init?: { body?: string }) => {
-      posted.push(JSON.parse(init?.body ?? '{}'));
-      return new Response(JSON.stringify({ state: 'registered' }));
-    }) as unknown as typeof fetch;
-    const w = worker({ indexedDB: idb, locks, fetch: renewFetch });
-    // This browser had push on: a credential and the key, as the page stores them.
-    const { writeState } = await import('../src/notify/shared.js');
-    await writeState({ indexedDB: idb, locks: locks as unknown as LockManager, crypto: webcrypto as unknown as Crypto }, { credential: 'c'.repeat(43), confirmed: true, revision: 1, fingerprint: 'old', applicationServerKey: `B${'A'.repeat(86)}` });
-    const renewed = { toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/renewed', keys: { p256dh: `B${'A'.repeat(86)}`, auth: 'AQEBAQEBAQEBAQEBAQEBAQ' } }), unsubscribe: vi.fn() };
-    w.self.registration.pushManager.getSubscription = vi.fn(async () => renewed);
-    await w.fire('pushsubscriptionchange', {});
-    expect(posted).toEqual([expect.objectContaining({ credential: 'c'.repeat(43), revision: 2, subscription: expect.objectContaining({ endpoint: 'https://fcm.googleapis.com/renewed' }) })]);
   });
 
   it('answers the capabilities handshake', async () => {

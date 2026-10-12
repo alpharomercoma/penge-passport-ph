@@ -1,4 +1,4 @@
-import { type AbroadResponse, isCalendarDate, LIMITS, type StatusResponse } from '@penge/contracts';
+import { type AbroadResponse, type AlertChoices, isCalendarDate, LIMITS, type StatusResponse } from '@penge/contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type Api, errorText } from '../api.ts';
 import { AREAS, REGIONS } from '../areas.ts';
@@ -51,6 +51,7 @@ export function Home({ api }: { api: Api }) {
   const [route, setRoute] = useState(readUrl);
   const [chosen, setChosen] = useState<number[]>(loadSaved);
   const [sheet, setSheet] = useState(false);
+  const [changeChoices, setChangeChoices] = useState<AlertChoices | null>(null);
   const [abroad, setAbroad] = useState<AbroadResponse | null>(null);
   const [abroadError, setAbroadError] = useState<string | null>(null);
   // Kept while moving between offices: a group checks every office for the whole group.
@@ -113,7 +114,9 @@ export function Home({ api }: { api: Api }) {
   const office = home.find((o) => o.id === route.office) ?? posts.find((o) => o.id === route.office) ?? null;
   const scope: Scope = office ? (office.country ? 'abroad' : 'home') : route.scope;
   const offices = scope === 'abroad' ? posts : home;
-  const alertsOpen = status?.mailLive === true && home.length > 0;
+  // Alerts are offered when either kind can be set up: email (mail live) or notifications (push not off).
+  const alertsOpen = home.length > 0 && (status?.mailLive === true || (status?.push ?? 'off') !== 'off');
+  const byId = useMemo(() => new Map([...home, ...posts].map((o) => [o.id, o])), [home, posts]);
   const known = new Set([...home, ...posts].map((o) => o.id));
   // Until the posts abroad are loaded, a saved one is not dropped for being unknown.
   const selected = chosen.filter((id) => known.size === 0 || known.has(id) || !abroad);
@@ -144,6 +147,14 @@ export function Home({ api }: { api: Api }) {
     };
   }, [api, needAbroad, attempt]);
 
+  /** Change mode: the form edits only this device's notification alert, starting from its choices. */
+  const openChange = (choices: AlertChoices) => {
+    setChosen(choices.siteIds);
+    setApplicants(choices.applicants);
+    setChangeChoices(choices);
+    setSheet(true);
+  };
+
   const openAlert = (officeId: number | null) => {
     if (officeId && !selected.includes(officeId)) {
       setChosen([...selected, officeId].slice(-LIMITS.sitesPerSubscription));
@@ -168,7 +179,7 @@ export function Home({ api }: { api: Api }) {
             <h1>Passport appointment dates</h1>
             {alertsOpen && (
               <button type="button" className="btn btn-secondary btn-small" onClick={() => openAlert(null)}>
-                <BellIcon /> Email alerts
+                <BellIcon /> Alerts
               </button>
             )}
           </div>
@@ -213,7 +224,12 @@ export function Home({ api }: { api: Api }) {
         </div>
       )}
       {/* Mounted whatever is open, so opening the app on an office (a notification's link) still checks this device. */}
-      {status && <DeviceRow api={api} status={status} hidden={!!office} />}
+      {status && (
+        // Kept mounted while an office is open (hidden), so the row's state and any setup in progress stay.
+        <div hidden={!!office}>
+          <DeviceRow controller={deviceController(() => status)} onChange={openChange} onSetUp={() => openAlert(null)} names={(id) => byId.get(id)?.place ?? `Office ${id}`} />
+        </div>
+      )}
       {scope === 'home' && status && !status.healthy && status.checkedAt && (
         <p className="warning" role="status">
           The latest check ran into problems, so these dates may be out of date. Alerts wait until checks pass again.
@@ -267,7 +283,11 @@ export function Home({ api }: { api: Api }) {
           selected={selected}
           initialApplicants={applicants}
           onSelectedChange={setChosen}
-          onClose={() => setSheet(false)}
+          onClose={() => {
+            setSheet(false);
+            setChangeChoices(null);
+          }}
+          {...(changeChoices ? { change: changeChoices } : {})}
         />
       )}
     </>

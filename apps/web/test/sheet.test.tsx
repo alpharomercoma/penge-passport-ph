@@ -165,9 +165,7 @@ describe('alert sheet', () => {
           if (expected.ok) {
             await waitFor(() => expect(s.api.subscribe).toHaveBeenCalledTimes(1));
             const sent = s.api.subscribe.mock.calls[0]![0];
-            // The form sends no channels (email only): the validator's null for them is not part of the request.
-            const { channels: _c, ...fields } = expected.value;
-            expect(sent).toEqual({ ...fields, website });
+            expect(sent).toEqual({ ...expected.value, website });
             expect(validateSubscribe(sent, KNOWN).ok).toBe(true);
           } else {
             expect(s.api.subscribe).not.toHaveBeenCalled();

@@ -103,10 +103,6 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 self.addEventListener('pushsubscriptionchange', (event) => {
-  // A fast path only: the page also reconciles every time it opens.
-  if (!swEnv.locks || !swEnv.indexedDB) return;
-  const post = (path, body, method = 'POST') =>
-    fetch(`${self.registration.scope}${path.slice(1)}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
-  // (`fetch` here is the worker's global; the test harness passes its own into the worker's scope.)
-  event.waitUntil(reconcile(swEnv, { registration: self.registration, post, permission: 'granted' }).catch(() => undefined));
+  // Until Task 18's rotation: the page notices the new subscription at its next opening and rotates the alert.
+  event.waitUntil(Promise.resolve());
 });

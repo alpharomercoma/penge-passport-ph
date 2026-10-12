@@ -5,7 +5,6 @@ import {
   formatDate,
   isAbroadResponse,
   isCalendarDate,
-  isCredentialHash,
   isOfficeDates,
   isOfficeTimes,
   isStatusResponse,
@@ -70,7 +69,7 @@ describe('validateSubscribe', () => {
   it('accepts a normal request, de-duplicating and sorting sites', () => {
     expect(
       validateSubscribe({ email: 'A@b.co', siteIds: [693, 10, 693], applicants: 2 }, known),
-    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2, pace: 'hourly', channels: null } });
+    ).toEqual({ ok: true, value: { email: 'a@b.co', siteIds: [10, 693], applicants: 2, pace: 'hourly' } });
     expect(validateSubscribe({ email: 'a@b.co', siteIds: [10] })).toMatchObject({ ok: true, value: { applicants: 1, pace: 'hourly' } });
     expect(validateSubscribe({ email: 'a@b.co', siteIds: [10], pace: 'asap' })).toMatchObject({ ok: true, value: { pace: 'asap' } });
   });
@@ -323,45 +322,6 @@ describe('office answers', () => {
       expect(isOfficeDates({ ...dates, applicants })).toBe(false);
       expect(isOfficeTimes({ ...times, applicants })).toBe(false);
     }
-  });
-});
-
-describe('channels in a subscribe request', () => {
-  const base = { email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'hourly' };
-  const hash = 'a'.repeat(43);
-
-  it('reads a request from a page that predates channels as null', () => {
-    const r = validateSubscribe(base);
-    expect(r.ok && r.value.channels).toBeNull();
-    const n = validateSubscribe({ ...base, channels: null });
-    expect(n.ok && n.value.channels).toBeNull();
-  });
-
-  it('accepts email only, push only, and both', () => {
-    for (const channels of [
-      { emailOn: true, pushOn: false },
-      { emailOn: false, pushOn: true, pushCredentialHash: hash, device: 'Chrome on Android' },
-      { emailOn: true, pushOn: true, pushCredentialHash: hash, device: 'Firefox on Mac' },
-    ]) expect(validateSubscribe({ ...base, channels }).ok).toBe(true);
-  });
-
-  it('refuses no channel at all, and push without a credential hash', () => {
-    const none = validateSubscribe({ ...base, channels: { emailOn: false, pushOn: false } });
-    expect(!none.ok && none.errors.channels).toMatch(/at least one/i);
-    const bare = validateSubscribe({ ...base, channels: { emailOn: true, pushOn: true } });
-    expect(!bare.ok && bare.errors.channels).toBeTruthy();
-  });
-
-  it('refuses a device label that could carry markup, a line break, or is too long', () => {
-    for (const device of ['<b>x</b>', 'x'.repeat(61), 'a\nb']) {
-      expect(validateSubscribe({ ...base, channels: { emailOn: true, pushOn: true, pushCredentialHash: hash, device } }).ok).toBe(false);
-    }
-  });
-
-  it('checks a credential hash', () => {
-    expect(isCredentialHash(hash)).toBe(true);
-    expect(isCredentialHash('a'.repeat(42))).toBe(false);
-    expect(isCredentialHash(`${'a'.repeat(42)}=`)).toBe(false);
   });
 });
 

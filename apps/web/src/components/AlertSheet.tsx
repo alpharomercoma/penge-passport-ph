@@ -236,8 +236,7 @@ export function AlertSheet({ api, status, offices, selected, initialApplicants =
     }
     try {
       // Email only: the request carries no channels (the server reads none as email, as before the channel release).
-      const { channels: _channels, ...fields } = checked.value;
-      await api.subscribe({ ...fields, website });
+      await api.subscribe({ ...checked.value, website });
       if (mine === submission.current) setEmailOutcome({ kind: 'done', ok: true, text: 'Check your inbox for a link to start email alerts.', retry: false });
     } catch (err) {
       if (mine !== submission.current) return;

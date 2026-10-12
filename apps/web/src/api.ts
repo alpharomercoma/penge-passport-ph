@@ -2,12 +2,9 @@
 // before the UI uses it; anything unexpected becomes a readable error.
 import {
   type AbroadResponse,
-  type ConfirmPreview,
   type ConfirmResponse,
-  type DeviceState,
   type Field,
   isAbroadResponse,
-  isDeviceState,
   isOfficeDates,
   isOfficeTimes,
   isPace,
@@ -23,7 +20,7 @@ export class ApiFailure extends Error {
   override name = 'ApiFailure';
   readonly status: number;
   readonly fields: Partial<Record<Field, string>>;
-  /** What kind of refusal, when the server says: reload, push-unavailable or full. */
+  /** What kind of refusal, when the server says: reload (an out-of-date page) or limited. */
   readonly code: string | null;
   constructor(message: string, status: number, fields: Partial<Record<Field, string>> = {}, code: string | null = null) {
     super(message);
@@ -35,8 +32,8 @@ export class ApiFailure extends Error {
 
 const OFFLINE = 'We could not reach the server. Check your connection and try again.';
 const UNEXPECTED = 'The server sent an answer we did not expect. Try again in a few minutes.';
-const FIELDS: readonly Field[] = ['email', 'siteIds', 'applicants', 'pace', 'channels', 'form'];
-const CODES = ['reload', 'push-unavailable', 'full'];
+const FIELDS: readonly Field[] = ['email', 'siteIds', 'applicants', 'pace', 'form'];
+const CODES = ['reload', 'limited'];
 
 const isShortText = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 300;
 
@@ -89,37 +86,17 @@ const isConfirm = (v: unknown): v is ConfirmResponse => {
     Array.isArray(r.siteIds) &&
     r.siteIds.every((id) => Number.isSafeInteger(id)) &&
     Number.isSafeInteger(r.applicants) &&
-    isPace(r.pace) &&
-    typeof r.channels === 'object' &&
-    r.channels !== null &&
-    typeof (r.channels as Record<string, unknown>).emailOn === 'boolean' &&
-    typeof (r.channels as Record<string, unknown>).pushOn === 'boolean' &&
-    typeof (r.channels as Record<string, unknown>).push === 'string'
+    // (The server may still add the channel release's `channels`; this page neither needs nor checks it.)
+    isPace(r.pace)
   );
 };
-const isPreview = (v: unknown): v is ConfirmPreview => {
-  if (typeof v !== 'object' || v === null) return false;
-  const r = v as Record<string, unknown>;
-  const c = r.channels as Record<string, unknown> | null | undefined;
-  return Array.isArray(r.siteIds) && Number.isSafeInteger(r.applicants) && isPace(r.pace) &&
-    (c === null || (typeof c === 'object' && typeof c.emailOn === 'boolean' && typeof c.pushOn === 'boolean' && typeof c.requestedAt === 'string'));
-};
-const isDeviceAnswer = (v: unknown): v is { state: DeviceState } => typeof v === 'object' && v !== null && isDeviceState((v as { state?: unknown }).state);
-const isOffAnswer = (v: unknown): v is { ok: true; noChannel: boolean } =>
-  typeof v === 'object' && v !== null && (v as { ok?: unknown }).ok === true && typeof (v as { noChannel?: unknown }).noChannel === 'boolean';
 
 export interface Api {
   status(): Promise<StatusResponse>;
   /** Posts abroad, checked about hourly. */
   abroad(): Promise<AbroadResponse>;
   subscribe(request: SubscribeRequest & { website: string }): Promise<string>;
-  /** What a confirmation link will change, without changing anything. */
-  previewConfirm(token: string): Promise<ConfirmPreview>;
-  /** `acknowledge`: the channels the page showed, which a request that changes them needs. */
-  confirm(token: string, acknowledge?: { emailOn: boolean; pushOn: boolean }): Promise<ConfirmResponse>;
-  pushDevice(body: { credential: string; subscription?: unknown; revision?: number }): Promise<{ state: DeviceState }>;
-  pushOff(credential: string): Promise<{ ok: true; noChannel: boolean }>;
-  pushTest(credential: string): Promise<void>;
+  confirm(token: string): Promise<ConfirmResponse>;
   unsubscribe(token: string): Promise<void>;
   requestDeletion(email: string, website: string): Promise<string>;
   deleteData(token: string): Promise<void>;
@@ -131,13 +108,7 @@ export const api: Api = {
   status: async () => expect(await call(`${BASE}api/status`), isStatusResponse),
   abroad: async () => expect(await call(`${BASE}api/abroad`), isAbroadResponse),
   subscribe: async (request) => expect(await call(`${BASE}api/subscribe`, request), hasMessage).message,
-  previewConfirm: async (token) => expect(await call(`${BASE}api/confirm/preview`, { token }), isPreview),
-  confirm: async (token, acknowledge) => expect(await call(`${BASE}api/confirm`, acknowledge ? { token, acknowledge } : { token }), isConfirm),
-  pushDevice: async (body) => expect(await call(`${BASE}api/push/device`, body), isDeviceAnswer),
-  pushOff: async (credential) => expect(await call(`${BASE}api/push/device`, { credential }, 'DELETE'), isOffAnswer),
-  pushTest: async (credential) => {
-    await call(`${BASE}api/push/test`, { credential });
-  },
+  confirm: async (token) => expect(await call(`${BASE}api/confirm`, { token }), isConfirm),
   unsubscribe: async (token) => {
     await call(`${BASE}api/unsubscribe`, { token });
   },

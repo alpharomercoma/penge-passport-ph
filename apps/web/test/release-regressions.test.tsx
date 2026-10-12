@@ -140,12 +140,10 @@ describe('release readiness regressions', () => {
   it('makes background inert, contains focus and restores it after closing', async () => {
     const api = fakeApi();
     render(<App path="/" api={api} />);
-    const opener = await screen.findByRole('button', { name: 'Email alerts' });
+    const opener = await screen.findByRole('button', { name: 'Alerts' });
     opener.focus();
     fireEvent.click(opener);
     const dialog = screen.getByRole('dialog');
-    // Email starts off in the one alerts form: switched on, the send button is the last control.
-    fireEvent.click(within(dialog).getByRole('switch', { name: 'Email' }));
     const ancestors: HTMLElement[] = [];
     for (let element: HTMLElement | null = opener; element; element = element.parentElement) ancestors.push(element);
     expect(ancestors.some((element) => element.inert)).toBe(true);
@@ -154,7 +152,9 @@ describe('release readiness regressions', () => {
     const close = within(dialog).getByRole('button', { name: 'Close' });
     close.focus();
     fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
-    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Send confirmation email' }));
+    // The last enabled control the sheet cycles through: "How often" (the email field is hidden, the submit button
+    // disabled, and the honeypot is out of the tab order).
+    expect(document.activeElement).toBe(within(dialog).getByLabelText('How often'));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(opener);

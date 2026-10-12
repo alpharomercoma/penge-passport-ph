@@ -17,3 +17,7 @@ export function tokenFromHash(hash: string): string | null {
   const match = /^#token=([A-Za-z0-9._-]{1,200})$/.exec(hash);
   return match?.[1] ?? null;
 }
+
+/** A day in Manila, short: "4 Apr 2027". */
+export const formatShortDate = (ms: number): string =>
+  new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Manila' }).format(ms);
