@@ -89,6 +89,8 @@ export const K = {
   pushAddress: (subscriberId: string) => `${P}push:address:${subscriberId}`,
   /** Present only in a throwaway local Valkey: tests that wipe data refuse any other. */
   pushTestMark: `${P}test:disposable`,
+  /** Present only in a throwaway local Valkey: tests that wipe data refuse any other. */
+  testMark: `${P}test:disposable`,
 };
 
 /** `YYYY-MM-DD` in Manila, where the day boundaries of the daily caps fall. */

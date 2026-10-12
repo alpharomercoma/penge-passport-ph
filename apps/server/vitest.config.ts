@@ -6,4 +6,5 @@ export default defineConfig({
     // The library from source, as tsconfig.json's `paths` does for types and esbuild for the bundle.
     alias: { 'penge-passport-ph': fileURLToPath(new URL('../../packages/penge-passport-ph/src/index.ts', import.meta.url)) },
   },
+  test: { setupFiles: ['./test/setup.ts'] },
 });

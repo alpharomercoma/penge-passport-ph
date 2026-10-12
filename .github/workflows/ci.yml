@@ -31,6 +31,32 @@ jobs:
       - name: Package contents
         run: npm pack --dry-run -w penge-passport-ph
 
+  valkey:
+    name: Device scripts on Valkey
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      valkey:
+        image: valkey/valkey:8.1
+        ports: ['127.0.0.1:6379:6379']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Mark the throwaway Valkey and give it production's memory policy
+        run: |
+          docker exec ${{ job.services.valkey.id }} valkey-cli CONFIG SET maxmemory 64mb
+          docker exec ${{ job.services.valkey.id }} valkey-cli CONFIG SET maxmemory-policy noeviction
+          docker exec ${{ job.services.valkey.id }} valkey-cli SET pp:test:disposable 1
+      # One test file at a time: each wipes the one throwaway database when it starts.
+      - run: npm test -w @penge/server -- --no-file-parallelism
+        env:
+          DEVICE_TEST_VALKEY: redis://127.0.0.1:6379
+          DEVICE_TEST_VALKEY_REQUIRED: '1'
+
   deploy-scripts:
     name: Deploy scripts
     runs-on: ubuntu-latest

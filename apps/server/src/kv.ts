@@ -18,7 +18,7 @@ export type WriteOp =
 
 /** What a script sees: the store, with nothing else running until it returns (a Lua script on Valkey). */
 export interface ScriptTx {
-  type(key: string): 'none' | 'string' | 'hash' | 'set' | 'list' | 'other';
+  type(key: string): 'none' | 'string' | 'hash' | 'set' | 'list' | 'zset' | 'other';
   get(key: string): string | null;
   set(key: string, value: string): void;
   del(key: string): void;
@@ -36,12 +36,18 @@ export interface ScriptTx {
   hGetAll(key: string): Record<string, string>;
 }
 
-/** One atomic operation: Lua for Valkey, and the same steps for MemoryKv. */
+/** One atomic operation: Lua for Valkey. Device scripts have no twin: MemoryKv runs their Lua (tests install an engine). */
 export interface ScriptDef {
   name: string;
   lua: string;
-  memory(tx: ScriptTx, keys: string[], args: string[]): string;
+  memory?(tx: ScriptTx, keys: string[], args: string[]): string;
 }
+
+/** A Valkey reply as a script sees it: bulk string, integer, nil, status, or a flat array of those. */
+export type Reply = string | number | null | { ok: string } | (string | number | null)[];
+
+/** Prepares a script (async), then runs it synchronously: nothing else may touch the store in between. */
+export type LuaRunner = (source: string, keys: string[], args: string[], call: (argv: string[]) => Reply) => Promise<() => string>;
 
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -64,6 +70,8 @@ export interface Kv {
   write(ops: WriteOp[]): Promise<void>;
   /** Runs a script atomically and returns its answer. */
   script(def: ScriptDef, keys: string[], args: string[]): Promise<string>;
+  /** `used_memory` and `maxmemory` (0 when unlimited), read now, for the device admission guard. */
+  memory(): Promise<{ used: number; max: number }>;
   close(): Promise<void>;
 }
 
@@ -108,6 +116,11 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     lLen: (key) => client.lLen(key),
     async script(def, keys, args) {
       return String(await client.eval(def.lua, { keys, arguments: args }));
+    },
+    async memory() {
+      const info = await client.info('memory');
+      const read = (name: string) => Number(new RegExp(`^${name}:(\\d+)`, 'm').exec(info)?.[1] ?? 0);
+      return { used: read('used_memory'), max: read('maxmemory') };
     },
     async write(ops) {
       if (ops.length === 0) return;
@@ -155,13 +168,74 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
 /** A HyperLogLog in MemoryKv: kept exactly, as a set, but not readable as one. */
 class Hll extends Set<string> {}
 
-type Entry = { value: string | Map<string, string> | Set<string> | string[]; expiresAt: number | null };
+const MANY = Number.POSITIVE_INFINITY;
+/** The arities MemoryKv accepts ([least, most] arguments, the command included): Valkey's, or narrower where device
+ * scripts use one form only (ZRANGE without options), so a script outside that subset fails here loudly. */
+const ARITY: Record<string, [number, number]> = {
+  GET: [2, 2], SET: [3, 5], DEL: [2, MANY], UNLINK: [2, MANY], EXISTS: [2, MANY], TYPE: [2, 2], PTTL: [2, 2], TTL: [2, 2],
+  EXPIRE: [3, 3], PEXPIRE: [3, 3], PERSIST: [2, 2], INCR: [2, 2], DECR: [2, 2], INCRBY: [3, 3], DECRBY: [3, 3],
+  HGET: [3, 3], HEXISTS: [3, 3], HMGET: [3, MANY], HSET: [4, MANY], HDEL: [3, MANY], HKEYS: [2, 2], HLEN: [2, 2],
+  HGETALL: [2, 2], HINCRBY: [4, 4], SADD: [3, MANY], SREM: [3, MANY], SMEMBERS: [2, 2], SCARD: [2, 2], SISMEMBER: [3, 3],
+  ZADD: [4, MANY], ZREM: [3, MANY], ZSCORE: [3, 3], ZCARD: [2, 2], ZRANGE: [4, 4], ZRANGEBYSCORE: [4, 7], ZCOUNT: [4, 4],
+  RPUSH: [3, MANY], LPOP: [2, 3], LLEN: [2, 2], LINDEX: [3, 3], LREM: [4, 4], LRANGE: [4, 4], FLUSHDB: [1, 2],
+};
+/** A float as Valkey's parser reads it (strtod's decimal grammar, or inf/infinity with a sign); null when it is not one. */
+function parseFloatValkey(s: string): number | null {
+  if (/^[+-]?(inf|infinity)$/i.test(s)) return s.startsWith('-') ? -Infinity : Infinity;
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  // Out of range, as strtod reports it: overflow to infinity, or a non-zero value that underflows to zero.
+  if (!Number.isFinite(n) || (n === 0 && /[1-9]/.test(s.replace(/[eE].*$/, '')))) return null;
+  return n;
+}
+
+/** The flags of a script's shebang: "#!lua" then only flags= options (every one combined), else the script is refused. */
+function shebangFlags(lua: string): string[] {
+  if (!lua.startsWith('#!')) return [];
+  const line = lua.slice(0, lua.indexOf('\n') < 0 ? undefined : lua.indexOf('\n'));
+  const [engine, ...options] = line.split(/[ \t]+/).filter(Boolean);
+  if (engine !== '#!lua') throw new Error(`ERR Unexpected engine in script shebang: ${engine}`);
+  const flags: string[] = [];
+  for (const o of options) {
+    if (!o.startsWith('flags=')) throw new Error(`ERR Unknown lua shebang option: ${o}`);
+    const list = o.slice('flags='.length);
+    for (const f of list === '' ? [] : list.split(',')) {
+      if (!['allow-oom', 'no-writes', 'allow-stale', 'no-cluster', 'allow-cross-slot-keys'].includes(f)) throw new Error(`ERR Unexpected flag in script shebang: ${f}`);
+      flags.push(f);
+    }
+  }
+  return flags;
+}
+
+/** Commands a `no-writes` script may not run. */
+const WRITES = new Set(['SET', 'DEL', 'UNLINK', 'EXPIRE', 'PEXPIRE', 'PERSIST', 'INCR', 'DECR', 'INCRBY', 'DECRBY', 'HSET', 'HDEL',
+  'HINCRBY', 'SADD', 'SREM', 'ZADD', 'ZREM', 'RPUSH', 'LPOP', 'LREM', 'FLUSHDB']);
+
+/** A sorted set in MemoryKv: member → score, read in Valkey's order (score, then member). */
+class ZSet {
+  readonly scores = new Map<string, number>();
+  get size() {
+    return this.scores.size;
+  }
+  ordered(): [string, number][] {
+    // Equal scores by the members' bytes (UTF-8), as Valkey compares them.
+    return [...this.scores].sort((a, b) => a[1] - b[1] || Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0])));
+  }
+}
+
+type Entry = { value: string | Map<string, string> | Set<string> | string[] | ZSet; expiresAt: number | null };
 
 /** In-memory twin of the Redis subset above, for tests and local runs. */
 export class MemoryKv implements Kv {
   private readonly data = new Map<string, Entry>();
   /** Not readonly: a script holds it still while it runs. */
   private now: () => number;
+  /** Set by tests and the local stack: how scripts without a memory twin run. */
+  static lua: LuaRunner | null = null;
+  /** Emulates Valkey over `maxmemory`: scripts not flagged `allow-oom` are refused before they start. */
+  oom = false;
+  /** What `memory()` reports. */
+  memoryUse = { used: 0, max: 64 * 1024 * 1024 };
 
   constructor(now: () => number = Date.now) {
     this.now = now;
@@ -337,6 +411,303 @@ export class MemoryKv implements Kv {
   }
 
   async script(def: ScriptDef, keys: string[], args: string[]): Promise<string> {
+    if (def.memory) return this.frozen(() => def.memory!(this.tx(), keys, args));
+    const flags = shebangFlags(def.lua);
+    if (this.oom && !flags.includes('allow-oom') && !flags.includes('no-writes')) {
+      throw new Error("OOM command not allowed when used memory > 'maxmemory'.");
+    }
+    if (!MemoryKv.lua) throw new Error(`script ${def.name}: MemoryKv has no Lua engine (tests and the local stack install one)`);
+    const noWrites = flags.includes('no-writes');
+    const run = await MemoryKv.lua(def.lua, keys, args, (argv) => this.command(argv, { noWrites }));
+    return this.frozen(run);
+  }
+
+  /** Time stands still while a script runs, as on Valkey: nothing expires halfway through it. */
+  private frozen<T>(fn: () => T): T {
+    const clock = this.now;
+    const at = clock();
+    this.now = () => at;
+    try {
+      return fn();
+    } finally {
+      this.now = clock;
+    }
+  }
+
+  /** The Valkey commands device scripts use, with Valkey's replies and errors. */
+  command(argv: string[], opts: { noWrites?: boolean } = {}): Reply {
+    const [name = '', key = '', ...rest] = argv;
+    const cmd = name.toUpperCase();
+    // Arity first, as Valkey checks it before running anything: [least, most] arguments, the command included.
+    const arity = ARITY[cmd];
+    if (arity && (argv.length < arity[0] || argv.length > arity[1])) throw new Error('ERR Wrong number of args calling command from script');
+    if (opts.noWrites && WRITES.has(cmd)) throw new Error('ERR Write commands are not allowed from read-only scripts.');
+    const wrong = () => new Error('WRONGTYPE Operation against a key holding the wrong kind of value');
+    // Valkey's integers are signed 64-bit; past 2^53 JavaScript would round, so those are refused here too
+    // (no device counter comes near either bound).
+    // Canonical decimal only, as Valkey's string2ll: no sign but "-", no leading zeros, no "-0".
+    const int = (s: string | undefined) => {
+      if (s === undefined || !/^-?(0|[1-9]\d*)$/.test(s) || s === '-0' || !Number.isSafeInteger(Number(s))) throw new Error('ERR value is not an integer or out of range');
+      return Number(s);
+    };
+    const checked = (n: number) => {
+      if (!Number.isSafeInteger(n)) throw new Error('ERR increment or decrement would overflow');
+      return n;
+    };
+    const hash = (create: boolean) => {
+      const e = this.entry(key);
+      if (e && !(e.value instanceof Map)) throw wrong();
+      if (!e && create) return this.typed(key, () => new Map<string, string>(), (v) => v instanceof Map);
+      return (e?.value as Map<string, string> | undefined) ?? null;
+    };
+    const set = (create: boolean) => {
+      const e = this.entry(key);
+      if (e && !(e.value instanceof Set && !(e.value instanceof Hll))) throw wrong();
+      if (!e && create) return this.typed(key, () => new Set<string>(), (v) => v instanceof Set && !(v instanceof Hll));
+      return (e?.value as Set<string> | undefined) ?? null;
+    };
+    const zset = (create: boolean) => {
+      const e = this.entry(key);
+      if (e && !(e.value instanceof ZSet)) throw wrong();
+      if (!e && create) return this.typed(key, () => new ZSet(), (v) => v instanceof ZSet);
+      return (e?.value as ZSet | undefined) ?? null;
+    };
+    const list = (create: boolean) => {
+      const e = this.entry(key);
+      if (e && !Array.isArray(e.value)) throw wrong();
+      if (!e && create) return this.typed(key, () => [] as string[], Array.isArray);
+      return (e?.value as string[] | undefined) ?? null;
+    };
+    // A score-range bound: "(" for an open end; an empty bound reads as 0, as on Valkey (verified in kv-lua.test.ts).
+    const bound = (s: string, low: boolean) => {
+      const open = s.startsWith('(');
+      const text = open ? s.slice(1) : s;
+      const v = text === '' ? 0 : parseFloatValkey(text);
+      if (v === null) throw new Error(`ERR min or max is not a float (${low ? 'min' : 'max'})`);
+      return { v, open };
+    };
+    // A score as Valkey reads it: a float, or "inf" with an optional sign; an empty or otherwise bad string is refused.
+    const score = (v: string) => {
+      const n = parseFloatValkey(v);
+      if (n === null) throw new Error('ERR value is not a valid float');
+      return n;
+    };
+    // The indexes a start and stop pick out of n entries, as ZRANGE and LRANGE count them (negatives from the end).
+    const span = (n: number, start: number, stop: number): number[] => {
+      const a = start < 0 ? Math.max(n + start, 0) : start;
+      const b = stop < 0 ? n + stop : Math.min(stop, n - 1);
+      if (a > b || a >= n) return [];
+      const out: number[] = [];
+      for (let i = a; i <= b; i++) out.push(i);
+      return out;
+    };
+    const after = <T>(value: T) => {
+      this.tidy(key);
+      return value;
+    };
+    switch (cmd) {
+      case 'GET':
+        return this.string(key);
+      case 'SET': {
+        // SET key value [EX seconds | PX ms]: the queueing write sets announcement marks with an expiry.
+        const opt = rest[1]?.toUpperCase();
+        if (opt !== undefined && rest.length !== 3) throw new Error('ERR syntax error');
+        const ms = opt === 'EX' ? int(rest[2]) * 1000 : opt === 'PX' ? int(rest[2]) : null;
+        if (opt !== undefined && ms === null) throw new Error('ERR syntax error');
+        if (ms !== null && ms <= 0) throw new Error("ERR invalid expire time in 'set' command");
+        this.data.set(key, { value: rest[0] ?? '', expiresAt: ms === null ? null : this.now() + ms });
+        return { ok: 'OK' };
+      }
+      case 'DEL':
+      case 'UNLINK': {
+        let n = 0;
+        for (const k of [key, ...rest]) if (this.entry(k) && this.data.delete(k)) n += 1;
+        return n;
+      }
+      case 'EXISTS':
+        return [key, ...rest].filter((k) => this.entry(k)).length;
+      case 'TYPE':
+        return { ok: this.tx().type(key) === 'other' ? 'none' : this.tx().type(key) };
+      case 'PTTL':
+        return this.tx().pttl(key);
+      case 'TTL':
+        return this.tx().ttl(key);
+      case 'EXPIRE':
+      case 'PEXPIRE': {
+        const by = int(rest[0]) * (cmd === 'EXPIRE' ? 1000 : 1);
+        const e = this.entry(key);
+        if (!e) return 0;
+        e.expiresAt = this.now() + by;
+        return 1;
+      }
+      case 'PERSIST': {
+        const e = this.entry(key);
+        if (!e || e.expiresAt === null) return 0;
+        e.expiresAt = null;
+        return 1;
+      }
+      case 'INCR':
+      case 'INCRBY':
+      case 'DECR':
+      case 'DECRBY': {
+        const by = cmd === 'INCR' ? 1 : cmd === 'DECR' ? -1 : cmd === 'INCRBY' ? int(rest[0]) : -int(rest[0]);
+        const current = this.string(key);
+        const next = checked((current === null ? 0 : int(current)) + by);
+        const expiresAt = this.entry(key)?.expiresAt ?? null;
+        this.data.set(key, { value: String(next), expiresAt });
+        return next;
+      }
+      case 'HGET':
+        return hash(false)?.get(rest[0] ?? '') ?? null;
+      case 'HEXISTS':
+        return hash(false)?.has(rest[0] ?? '') ? 1 : 0;
+      case 'HMGET': {
+        const h = hash(false);
+        return rest.map((f) => h?.get(f) ?? null);
+      }
+      case 'HSET': {
+        if (rest.length === 0 || rest.length % 2) throw new Error("ERR wrong number of arguments for 'hset' command");
+        const h = hash(true)!;
+        let added = 0;
+        for (let i = 0; i < rest.length; i += 2) {
+          if (!h.has(rest[i]!)) added += 1;
+          h.set(rest[i]!, rest[i + 1]!);
+        }
+        return added;
+      }
+      case 'HDEL': {
+        const h = hash(false);
+        let n = 0;
+        for (const f of rest) if (h?.delete(f)) n += 1;
+        return after(n);
+      }
+      case 'HKEYS':
+        return [...(hash(false)?.keys() ?? [])];
+      case 'HLEN':
+        return hash(false)?.size ?? 0;
+      case 'HGETALL':
+        return [...(hash(false) ?? [])].flat();
+      case 'HINCRBY': {
+        // Everything is read and checked before the hash is created or changed.
+        const by = int(rest[1]);
+        const next = checked(int(hash(false)?.get(rest[0] ?? '') ?? '0') + by);
+        hash(true)!.set(rest[0] ?? '', String(next));
+        return next;
+      }
+      case 'SADD': {
+        const s = set(true)!;
+        let n = 0;
+        for (const m of rest) if (!s.has(m)) (s.add(m), (n += 1));
+        return n;
+      }
+      case 'SREM': {
+        const s = set(false);
+        let n = 0;
+        for (const m of rest) if (s?.delete(m)) n += 1;
+        return after(n);
+      }
+      case 'SMEMBERS':
+        return [...(set(false) ?? [])];
+      case 'SCARD':
+        return set(false)?.size ?? 0;
+      case 'SISMEMBER':
+        return set(false)?.has(rest[0] ?? '') ? 1 : 0;
+      case 'ZADD': {
+        if (rest.length === 0 || rest.length % 2) throw new Error('ERR syntax error');
+        // Every score is checked before anything is added, as Valkey does.
+        const pairs: [number, string][] = [];
+        for (let i = 0; i < rest.length; i += 2) pairs.push([score(rest[i]!), rest[i + 1]!]);
+        const z = zset(true)!;
+        let added = 0;
+        for (const [sc, m] of pairs) {
+          if (!z.scores.has(m)) added += 1;
+          z.scores.set(m, sc);
+        }
+        return added;
+      }
+      case 'ZREM': {
+        const z = zset(false);
+        let n = 0;
+        for (const m of rest) if (z?.scores.delete(m)) n += 1;
+        return after(n);
+      }
+      case 'ZSCORE': {
+        const v = zset(false)?.scores.get(rest[0] ?? '');
+        return v === undefined ? null : String(v);
+      }
+      case 'ZCARD':
+        return zset(false)?.size ?? 0;
+      case 'ZRANGE': {
+        const all = zset(false)?.ordered() ?? [];
+        return span(all.length, int(rest[0]), int(rest[1])).map((i) => all[i]![0]);
+      }
+      case 'ZRANGEBYSCORE': {
+        // The subset device scripts use: min max [LIMIT offset count] (no WITHSCORES), every option checked first.
+        const opts = rest.slice(2);
+        if (opts.length !== 0 && !(opts.length === 3 && opts[0]!.toUpperCase() === 'LIMIT')) throw new Error('ERR syntax error');
+        const offset = opts.length ? int(opts[1]) : 0;
+        const count = opts.length ? int(opts[2]) : -1;
+        const min = bound(rest[0] ?? '', true);
+        const max = bound(rest[1] ?? '', false);
+        const z = zset(false); // the key's type is checked whatever the offset
+        // A negative offset finds nothing, as on Valkey; a negative count means all the rest.
+        if (offset < 0) return [];
+        const found = (z?.ordered() ?? []).filter(
+          ([, s]) => (min.open ? s > min.v : s >= min.v) && (max.open ? s < max.v : s <= max.v),
+        );
+        return found.slice(offset, count < 0 ? undefined : offset + count).map(([m]) => m);
+      }
+      case 'RPUSH': {
+        const l = list(true)!;
+        l.push(...rest);
+        return l.length;
+      }
+      case 'LPOP': {
+        const l = list(false);
+        if (rest[0] === undefined) return after(l?.shift() ?? null);
+        // LPOP key count: an array, or nil for a missing key, as Valkey answers.
+        const n = int(rest[0]);
+        return l ? after(l.splice(0, n)) : null;
+      }
+      case 'LLEN':
+        return list(false)?.length ?? 0;
+      case 'LINDEX': {
+        const l = list(false) ?? [];
+        const i = int(rest[0]);
+        return l[i < 0 ? l.length + i : i] ?? null;
+      }
+      case 'LREM': {
+        // LREM key count value: count > 0 from the head, < 0 from the tail, 0 every occurrence.
+        const count = int(rest[0]);
+        const l = list(false);
+        if (!l) return 0;
+        const limit = count === 0 ? Infinity : Math.abs(count);
+        let removed = 0;
+        const order = count < 0 ? [...l.keys()].reverse() : [...l.keys()];
+        const drop = new Set<number>();
+        for (const i of order) {
+          if (removed >= limit) break;
+          if (l[i] === rest[1]) (drop.add(i), (removed += 1));
+        }
+        const kept = l.filter((_, i) => !drop.has(i));
+        l.splice(0, l.length, ...kept);
+        return after(removed);
+      }
+      case 'LRANGE': {
+        const l = list(false) ?? [];
+        return span(l.length, int(rest[0]), int(rest[1])).map((i) => l[i]!);
+      }
+      case 'FLUSHDB':
+        if (argv.length > 1 && !['SYNC', 'ASYNC'].includes(key.toUpperCase())) throw new Error('ERR syntax error');
+        this.data.clear();
+        return { ok: 'OK' };
+      default:
+        throw new Error(`ERR unknown command '${name}' (MemoryKv runs only the commands device scripts use)`);
+    }
+  }
+
+  /** The store as a twin script sees it. */
+  private tx(): ScriptTx {
     const hashOf = (key: string, create: boolean) => {
       const e = this.entry(key);
       if (e && !(e.value instanceof Map)) throw new Error(`WRONGTYPE ${key}`);
@@ -348,6 +719,7 @@ export class MemoryKv implements Kv {
         const e = this.entry(key);
         if (!e) return 'none';
         if (typeof e.value === 'string') return 'string';
+        if (e.value instanceof ZSet) return 'zset';
         if (e.value instanceof Map) return 'hash';
         if (e.value instanceof Hll) return 'string';
         if (e.value instanceof Set) return 'set';
@@ -380,25 +752,21 @@ export class MemoryKv implements Kv {
       hLen: (key) => hashOf(key, false)?.size ?? 0,
       hGetAll: (key) => Object.fromEntries(hashOf(key, false) ?? []),
     };
-    // Time stands still while a script runs, as on Valkey: nothing expires halfway through it.
-    const clock = this.now;
-    const frozen = clock();
-    this.now = () => frozen;
-    try {
-      return def.memory(tx, keys, args);
-    } finally {
-      this.now = clock;
-    }
+    return tx;
   }
 
   async close() {}
+
+  async memory() {
+    return { ...this.memoryUse };
+  }
 
   /** Test helper: everything stored, as text. */
   dump(): string {
     return JSON.stringify(
       this.keys().map((k) => {
         const v = this.data.get(k)!.value;
-        return [k, typeof v === 'string' ? v : v instanceof Map ? Object.fromEntries(v) : [...v]];
+        return [k, typeof v === 'string' ? v : v instanceof Map ? Object.fromEntries(v) : v instanceof ZSet ? Object.fromEntries(v.scores) : [...v]];
       }),
     );
   }
