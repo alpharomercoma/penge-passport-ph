@@ -103,6 +103,49 @@ export function normalizeEmail(raw: unknown): string | null {
   return email;
 }
 
+export interface AlertChoices {
+  siteIds: number[];
+  applicants: number;
+  pace: Pace;
+}
+
+/**
+ * Offices, group size and pace, as both kinds of alert take them. `knownSiteIds` is the server's current site
+ * list; without it (in the browser) only the shape of the ids is checked.
+ */
+export function validateChoices(input: unknown, knownSiteIds?: ReadonlySet<number>): Checked<AlertChoices> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return { ok: false, errors: { form: 'Send the form as a JSON object.' } };
+  const body = input as Record<string, unknown>;
+  const errors: Partial<Record<Field, string>> = {};
+  const siteIds: number[] = [];
+  if (!Array.isArray(body.siteIds) || body.siteIds.length === 0) {
+    errors.siteIds = 'Choose at least one site.';
+  } else if (body.siteIds.length > LIMITS.sitesPerSubscription * 4) {
+    errors.siteIds = `Choose at most ${LIMITS.sitesPerSubscription} sites.`;
+  } else {
+    for (const id of body.siteIds) {
+      if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) {
+        errors.siteIds = 'That site list is not valid.';
+        break;
+      }
+      if (knownSiteIds && !knownSiteIds.has(id)) {
+        errors.siteIds = 'One of those sites is not on the list.';
+        break;
+      }
+      if (!siteIds.includes(id)) siteIds.push(id);
+    }
+    if (!errors.siteIds && siteIds.length > LIMITS.sitesPerSubscription) errors.siteIds = `Choose at most ${LIMITS.sitesPerSubscription} sites.`;
+  }
+  const applicants = body.applicants === undefined ? 1 : body.applicants;
+  if (typeof applicants !== 'number' || !Number.isInteger(applicants) || applicants < 1 || applicants > LIMITS.maxApplicants) {
+    errors.applicants = `Choose from 1 to ${LIMITS.maxApplicants} people.`;
+  }
+  const pace = body.pace === undefined ? 'hourly' : body.pace;
+  if (!isPace(pace)) errors.pace = 'Choose how often to get alerts.';
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  return { ok: true, value: { siteIds: siteIds.sort((a, b) => a - b), applicants: applicants as number, pace: pace as Pace } };
+}
+
 /**
  * Check a subscription request. `knownSiteIds` is the server's current site
  * list; without it (in the browser) only the shape of the ids is checked.
@@ -125,52 +168,21 @@ export function validateSubscribe(
   const email = normalizeEmail(body.email);
   if (!email) errors.email = 'Enter a valid email address, like juan@example.com.';
 
-  const siteIds: number[] = [];
-  if (!Array.isArray(body.siteIds) || body.siteIds.length === 0) {
-    errors.siteIds = 'Choose at least one site.';
-  } else if (body.siteIds.length > LIMITS.sitesPerSubscription * 4) {
-    errors.siteIds = `Choose at most ${LIMITS.sitesPerSubscription} sites.`;
-  } else {
-    for (const id of body.siteIds) {
-      if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) {
-        errors.siteIds = 'That site list is not valid.';
-        break;
-      }
-      if (knownSiteIds && !knownSiteIds.has(id)) {
-        errors.siteIds = 'One of those sites is not on the list.';
-        break;
-      }
-      if (!siteIds.includes(id)) siteIds.push(id);
-    }
-    if (!errors.siteIds && siteIds.length > LIMITS.sitesPerSubscription) {
-      errors.siteIds = `Choose at most ${LIMITS.sitesPerSubscription} sites.`;
-    }
-  }
-
-  const applicants = body.applicants === undefined ? 1 : body.applicants;
-  if (
-    typeof applicants !== 'number' ||
-    !Number.isInteger(applicants) ||
-    applicants < 1 ||
-    applicants > LIMITS.maxApplicants
-  ) {
-    errors.applicants = `Choose from 1 to ${LIMITS.maxApplicants} people.`;
-  }
-
-  const pace = body.pace === undefined ? 'hourly' : body.pace;
-  if (!isPace(pace)) errors.pace = 'Choose how often to get emails.';
+  const choices = validateChoices(body, knownSiteIds);
+  if (!choices.ok) Object.assign(errors, choices.errors);
 
   const channels = readChannels(body.channels);
   if (!channels.ok) errors.channels = channels.error;
 
-  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  // Both checks reported together; the explicit branch narrows `choices` for TypeScript.
+  if (Object.keys(errors).length > 0 || !choices.ok) return { ok: false, errors };
   return {
     ok: true,
     value: {
       email: email!,
-      siteIds: siteIds.sort((a, b) => a - b),
-      applicants: applicants as number,
-      pace: pace as Pace,
+      siteIds: choices.value.siteIds,
+      applicants: choices.value.applicants,
+      pace: choices.value.pace,
       channels: channels.ok ? channels.value : null,
     },
   };
@@ -252,7 +264,7 @@ export interface ApiError {
   error: string;
   fields?: Partial<Record<Field, string>>;
   /** reload: an old page; push-unavailable: push could not be turned on and email is off; full: 5 devices already. */
-  code?: 'reload' | 'push-unavailable' | 'full';
+  code?: 'reload' | 'push-unavailable' | 'full' | 'limited';
 }
 
 export interface PushSubscriptionInput {
@@ -541,4 +553,199 @@ export function isOfficeTimes(v: unknown): v is OfficeTimes {
         (s.remaining === null || isCount(s.remaining)),
     )
   );
+}
+
+// -- Notification alerts on a device (deviceAlerts: 1) -------------------------
+
+export const DEVICE_ALERTS_VERSION = 1;
+/** An alert lasts this long after setup or the last opening that reached the server. */
+export const DEVICE_ALERT_DAYS = 180;
+/** A setup or rotation must be acknowledged within this. */
+export const SETUP_SECONDS = 300;
+
+const B64URL_22 = /^[A-Za-z0-9_-]{22}$/;
+const isOpId = (v: unknown): v is string => typeof v === 'string' && B64URL_22.test(v);
+const isSeq = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
+// Not `isCount` (index.ts already has one, bounded at 10,000 slots): any non-negative safe integer.
+const isNonNegative = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
+
+/** The subscription as both sides hash it for its fingerprint: endpoint and unpadded keys, in this order. */
+export function canonicalSubscription(s: PushSubscriptionInput): string {
+  return JSON.stringify({ endpoint: s.endpoint, keys: { p256dh: s.p256dh.replace(/=+$/, ''), auth: s.auth.replace(/=+$/, '') } });
+}
+
+export interface CapturedAlert {
+  incarnation: string;
+  generation: number;
+  revision: number;
+}
+
+export interface Activation {
+  alertId: string;
+  incarnation: string;
+  generation: number;
+  revision: number;
+}
+
+export type OperationKind = 'setup' | 'change' | 'rotate';
+export type DispatchState = 'unsent' | 'sending' | 'accepted' | 'uncertain' | 'retryable' | 'failed';
+export type TerminalResult = 'active' | 'expired' | 'changed' | 'full' | 'owner-only' | 'gone' | 'failed';
+export const TERMINAL_RESULTS: readonly TerminalResult[] = ['active', 'expired', 'changed', 'full', 'owner-only', 'gone', 'failed'];
+
+export interface OperationView {
+  op: string;
+  seq: number;
+  kind: OperationKind;
+  /** ISO; null for a change, which never waits. */
+  expiresAt: string | null;
+  dispatch: DispatchState | null;
+  /** ISO: the earliest time the driving page may repeat the request, while unsent or retryable. */
+  retryAt: string | null;
+  /** expiresAt and retryAt as milliseconds from the server's now: the device turns them into its own times on arrival,
+   * so a device clock that is wrong neither expires an admitted setup nor repeats it early. */
+  remainingMs: number | null;
+  retryInMs: number | null;
+  /** Why the push was not sent yet: paused, backoff, limited, mode. */
+  reason: 'paused' | 'backoff' | 'limited' | 'mode' | null;
+  result: TerminalResult | null;
+  activation: Activation | null;
+}
+
+export interface DeviceAlertView {
+  alertId: string;
+  incarnation: string;
+  generation: number;
+  revision: number;
+  choices: AlertChoices;
+  fingerprint: string;
+  endsAt: string;
+  /** The old subscription was reported gone while a rotation is pending. */
+  updating: boolean;
+}
+
+export type MineState =
+  | { state: 'active'; alert: DeviceAlertView }
+  | { state: 'ended'; endedAt: string }
+  | { state: 'gone'; endedAt: string; fingerprint: string }
+  | { state: 'none' };
+export type MineAnswer = MineState & { operation: OperationView | null };
+
+export type SetupOutcome = 'pending' | 'done' | 'busy' | 'limited' | 'full' | 'invalid' | 'owner-only' | 'off' | 'unavailable' | 'changed';
+export interface SetupAnswer {
+  outcome: SetupOutcome;
+  operation: OperationView | null;
+}
+export type ReadyResult = TerminalResult | 'invalid' | 'unknown';
+export interface ReadyAnswer {
+  result: ReadyResult;
+  activation: Activation | null;
+}
+export type ChangeAnswer = { result: 'active'; revision: number } | { result: 'changed' | 'busy' | 'invalid' | 'full' };
+export type SeenAnswer = { state: 'active'; endsAt: string } | { state: 'ended' | 'none' };
+export type TestOutcome = 'accepted' | 'uncertain' | 'refused' | 'gone' | 'unavailable' | 'limited' | 'none';
+export interface TestAnswer {
+  test: TestOutcome;
+  /** For gone: the alert was kept while its rotation finishes ("Updating this device's notifications…"). */
+  updating?: boolean;
+}
+
+export interface SetupRequest {
+  op: string;
+  seq: number;
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+  choices: AlertChoices;
+  captured: CapturedAlert | null;
+}
+export interface RotateRequest {
+  op: string;
+  seq: number;
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+  captured: { incarnation: string; generation: number };
+}
+export interface ChangeRequest {
+  op: string;
+  seq: number;
+  incarnation: string;
+  baseRevision: number;
+  choices: AlertChoices;
+}
+export interface ReadyRequest {
+  op: string;
+  nonce: string;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+// All three named: validateChoices' defaults are the email form's, never a device's.
+const isChoices = (v: unknown) => isObj(v) && only(v, ['siteIds', 'applicants', 'pace']) && 'siteIds' in v && 'applicants' in v && 'pace' in v && validateChoices(v).ok;
+// PushSubscription.toJSON() exactly: nothing else rides along, and no control character the server's checks would read differently.
+const isDeviceSubscription = (v: unknown) =>
+  isObj(v) &&
+  only(v, ['endpoint', 'keys', 'expirationTime']) &&
+  (v.expirationTime === undefined || v.expirationTime === null || isNonNegative(v.expirationTime)) &&
+  isObj(v.keys) &&
+  only(v.keys, ['p256dh', 'auth']) &&
+  typeof v.endpoint === 'string' &&
+  !/[\u0000-\u001f\u007f]/.test(v.endpoint) &&
+  parsePushSubscription(v) !== null;
+
+export function isSetupRequest(v: unknown): v is SetupRequest {
+  if (!isObj(v) || !only(v, ['op', 'seq', 'subscription', 'choices', 'captured'])) return false;
+  const c = v.captured;
+  const captured = c === null || (isObj(c) && only(c, ['incarnation', 'generation', 'revision']) && isOpId(c.incarnation) && isSeq(c.generation) && isSeq(c.revision));
+  return isOpId(v.op) && isSeq(v.seq) && isDeviceSubscription(v.subscription) && isChoices(v.choices) && captured;
+}
+
+export function isRotateRequest(v: unknown): v is RotateRequest {
+  if (!isObj(v) || !only(v, ['op', 'seq', 'subscription', 'captured'])) return false;
+  const c = v.captured;
+  return isOpId(v.op) && isSeq(v.seq) && isDeviceSubscription(v.subscription) && isObj(c) && only(c, ['incarnation', 'generation']) && isOpId(c.incarnation) && isSeq(c.generation);
+}
+
+export function isChangeRequest(v: unknown): v is ChangeRequest {
+  return isObj(v) && only(v, ['op', 'seq', 'incarnation', 'baseRevision', 'choices']) && isOpId(v.op) && isSeq(v.seq) && isOpId(v.incarnation) && isSeq(v.baseRevision) && isChoices(v.choices);
+}
+
+export function isReadyRequest(v: unknown): v is ReadyRequest {
+  return isObj(v) && only(v, ['op', 'nonce']) && isOpId(v.op) && typeof v.nonce === 'string' && /^[A-Za-z0-9_-]{43}$/.test(v.nonce);
+}
+
+// What toISOString() writes, and only that: a February 30th or a 24:00 reads back as another day.
+const isServerTime = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v) && !Number.isNaN(Date.parse(v)) && new Date(v).toISOString() === v;
+const isIsoOrNull = (v: unknown) => v === null || isServerTime(v);
+const isFingerprint = (v: unknown) => typeof v === 'string' && /^[A-Za-z0-9_-]{43}$/.test(v);
+
+function isActivation(v: unknown): v is Activation {
+  return isObj(v) && isOpId(v.alertId) && isOpId(v.incarnation) && isSeq(v.generation) && isSeq(v.revision);
+}
+
+export function isOperationView(v: unknown): v is OperationView {
+  return (
+    isObj(v) &&
+    isOpId(v.op) &&
+    isSeq(v.seq) &&
+    (v.kind === 'setup' || v.kind === 'change' || v.kind === 'rotate') &&
+    isIsoOrNull(v.expiresAt) &&
+    (v.dispatch === null || ['unsent', 'sending', 'accepted', 'uncertain', 'retryable', 'failed'].includes(v.dispatch as string)) &&
+    isIsoOrNull(v.retryAt) &&
+    (v.remainingMs === null || (typeof v.remainingMs === 'number' && Number.isSafeInteger(v.remainingMs) && v.remainingMs >= 0)) &&
+    (v.retryInMs === null || (typeof v.retryInMs === 'number' && Number.isSafeInteger(v.retryInMs) && v.retryInMs >= 0)) &&
+    (v.reason === null || ['paused', 'backoff', 'limited', 'mode'].includes(v.reason as string)) &&
+    (v.result === null || (TERMINAL_RESULTS as readonly unknown[]).includes(v.result)) &&
+    (v.activation === null || isActivation(v.activation)) &&
+    // Each time and its relative twin come and go together; a change never waits, a setup or rotation always expires.
+    (v.expiresAt === null) === (v.remainingMs === null) &&
+    (v.retryAt === null) === (v.retryInMs === null) &&
+    (v.kind === 'change' ? v.expiresAt === null : v.expiresAt !== null)
+  );
+}
+
+export function isMineAnswer(v: unknown): v is MineAnswer {
+  if (!isObj(v) || !(v.operation === null || isOperationView(v.operation))) return false;
+  if (v.state === 'none') return true;
+  if (v.state === 'ended') return isServerTime(v.endedAt);
+  if (v.state === 'gone') return isServerTime(v.endedAt) && isFingerprint(v.fingerprint);
+  if (v.state !== 'active' || !isObj(v.alert)) return false;
+  const a = v.alert;
+  return isActivation(a) && isChoices(a.choices) && isFingerprint(a.fingerprint) && isServerTime(a.endsAt) && typeof a.updating === 'boolean' && isNonNegative(a.generation);
 }
