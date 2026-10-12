@@ -34,8 +34,9 @@ export function readState(env: Env): Promise<DeviceState>;
 export function update<T>(env: Env, fn: (s: DeviceState) => { state?: DeviceState; result: T }): Promise<T>;
 export function opDone(op: Operation, now: number): boolean;
 /** Blocked while an unsubscribe claim or a retired credential's server deletion is unresolved (checked under the lock). */
-export function begin(env: Env, a: { kind: Operation['kind']; choices: AlertChoices | null; captured: Operation['captured']; now: number }):
-  Promise<{ started: Operation; credential: string } | { joined: Operation } | { waiting: Operation } | { blocked: 'claim' | 'retired' }>;
+/** `expect`: an automatic start, only for the credential and epoch that decided it ('moved' otherwise). */
+export function begin(env: Env, a: { kind: Operation['kind']; choices: AlertChoices | null; captured: Operation['captured']; now: number; expect?: { credential: string; epoch: number } }):
+  Promise<{ started: Operation; credential: string } | { joined: Operation } | { waiting: Operation } | { blocked: 'claim' | 'retired' | 'moved' }>;
 export function attach(env: Env, a: { op: string; epoch: number; subscription: SubscriptionJson; fingerprint: string; by: string }): Promise<'ok' | 'already' | 'abandoned'>;
 /** The attaching caller's handshake is done: attached → ready (only `by`, only while attached). Only a ready operation is sent. */
 export function confirmReady(env: Env, a: { op: string; by: string }): Promise<boolean>;

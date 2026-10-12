@@ -120,8 +120,10 @@ export function canonical(json) {
 }
 export const fingerprint = (env, json) => sha256(env, canonical(json));
 
-export function begin(env, { kind, choices, captured, now }) {
+export function begin(env, { kind, choices, captured, now, expect }) {
   return update(env, (s) => {
+    // An automatic start (not the person's) only for the credential and epoch that decided it: never after a turn-off.
+    if (expect && (s.credential !== expect.credential || s.epoch !== expect.epoch)) return { result: { blocked: 'moved' } };
     if (s.claim) return { result: { blocked: 'claim' } };
     // A turned-off credential's alert must be confirmed deleted on the server before anything new starts.
     if (s.retired.some((r) => !r.deleted)) return { result: { blocked: 'retired' } };
