@@ -4,6 +4,7 @@ import { createApi } from '../src/api.ts';
 import { type CheckDeps, runCheck } from '../src/checker.ts';
 import { K, manilaDay } from '../src/keys.ts';
 import type { Logger } from '../src/log.ts';
+import { deviceGauges, notePersistence } from '../src/devices/counters.ts';
 import { COUNTS, type Count, createStats, dailyStats, isPerson, reportOncePerDay, SALT_SECONDS, statsKey } from '../src/stats.ts';
 import { dailyStatsEmail } from '../src/templates.ts';
 import { confirm, createPending } from '../src/subscribers.ts';
@@ -583,6 +584,7 @@ const base0 = {
   topOffices: [],
   subscribers: 0,
   generatedAt: '2026-10-03T23:30:00.000Z',
+  devices: null,
   counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
 };describe("the operator's daily email", () => {
   const base = {
@@ -594,6 +596,7 @@ const base0 = {
     topOffices: [],
     subscribers: 43,
     generatedAt: '2026-10-03T23:30:00.000Z',
+    devices: null,
     counts: Object.fromEntries(COUNTS.map((n) => [n, 0])) as Record<Count, number>,
   };
 
@@ -609,5 +612,123 @@ const base0 = {
   it('shows the plain count when the limit is not known', () => {
     const mail = dailyStatsEmail({ ...base, counts: { ...base.counts, alertsSent: 7 }, mailLimit: null });
     expect(mail.text).toContain('Alerts sent: 7\n');
+  });
+});
+
+describe('notification numbers', () => {
+  it('reports the day\'s v2 counters and gauges, saying when counting began that day', async () => {
+    const t = clock(Date.parse('2026-10-07T00:00:00Z'));
+    const kv = new MemoryKv(t.now);
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { ops_started: '4', ops_active: '3', since: String(Date.parse('2026-10-06T05:00:00Z')) } }]);
+    await kv.write([{ op: 'hSet', key: K.devRecords, fields: { units: '2900', alerts: '450' } }]);
+    const s = await dailyStats(kv, '2026-10-06', t.now(), { alertLimit: 500, recordLimit: 3500 });
+    expect(s.devices).toMatchObject({ schema: 2, since: '2026-10-06T05:00:00.000Z', counts: { ops_started: 4, ops_active: 3 } });
+    expect(s.devices!.gauges).toMatchObject({ alerts: 450, alertLimit: 500, units: 2900, recordLimit: 3500, flags: ['alerts at 90% of DEVICE_ALERT_LIMIT', 'records at 83% of DEVICE_RECORD_LIMIT'] });
+    const mail = dailyStatsEmail(s);
+    expect(mail.text).toContain('Notification alerts');
+    expect(mail.text).toContain('Operations started (setups, rotations, changes): 4');
+    expect(mail.text).toContain('Counting began at: 1:00 PM');
+  });
+
+  it('brackets an append-only rewrite between two idle readings, and never counts one still running', async () => {
+    const kv = new MemoryKv();
+    let p = { rdbLastSave: null, rdbStatus: null, aofRewrites: 3, aofInProgress: 0, aofFailures: 0, aofRewriteStatus: 'ok' };
+    kv.persistence = async () => p;
+    await notePersistence(kv, 1000); // baseline: 3, idle
+    p = { ...p, aofRewrites: 4, aofInProgress: 1 };
+    await notePersistence(kv, 2000); // running: not counted, baseline kept
+    expect(await kv.hGetAll(K.persist)).toEqual({ aofRewrites: '3', aofIdleAt: '1000' });
+    p = { ...p, aofInProgress: 0 };
+    await notePersistence(kv, 3000);
+    expect(await kv.hGetAll(K.persist)).toMatchObject({ aofOkAfter: '1000', aofOkBy: '3000' });
+    p = { ...p, aofRewrites: 0 }; // Valkey restarted: a new baseline, nothing claimed
+    await notePersistence(kv, 4000);
+    expect(await kv.hGetAll(K.persist)).toMatchObject({ aofRewrites: '0', aofIdleAt: '4000', aofOkBy: '3000' });
+    p = { ...p, aofRewrites: 1, aofFailures: 1, aofRewriteStatus: 'err' }; // a failed rewrite: never claimed as done
+    await notePersistence(kv, 5000);
+    expect(await kv.hGetAll(K.persist)).toMatchObject({ aofOkBy: '3000' });
+  });
+
+  it('keeps the last successful snapshot time when the latest attempt failed, and flags the failure', async () => {
+    const now = Date.parse('2026-10-07T00:00:00Z');
+    const kv = new MemoryKv(() => now);
+    kv.persistence = async () => ({ rdbLastSave: now / 1000 - 600, rdbStatus: 'err', aofRewrites: null, aofInProgress: null, aofFailures: null, aofRewriteStatus: null });
+    const g = await deviceGauges(kv, now, { alertLimit: 300, recordLimit: 1750 });
+    expect(g.persistence.rdbLastOk).toBe(new Date(now - 600_000).toISOString());
+    expect(g.flags).toContain('the latest snapshot attempt failed (err)');
+  });
+
+  it('keeps the v1 report when the notification numbers cannot be read, and leaves the email to retry', async () => {
+    const t = clock(Date.parse('2026-10-07T00:00:00Z'));
+    const kv = new MemoryKv(t.now);
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { ops_started: '4' } }]);
+    kv.persistence = async () => {
+      throw new Error('INFO failed');
+    };
+    const s = await dailyStats(kv, '2026-10-06', t.now(), { alertLimit: 500, recordLimit: 3500 });
+    expect(s.schema).toBe(1);
+    expect(s.devices).toMatchObject({ counts: { ops_started: 4 }, gauges: null });
+  });
+
+  it('brackets a rewrite by the time before the reading and the time after it', async () => {
+    const kv = new MemoryKv();
+    let t = 1000;
+    let p = { rdbLastSave: null, rdbStatus: null, aofRewrites: 3, aofInProgress: 0, aofFailures: 0, aofRewriteStatus: 'ok' };
+    kv.persistence = async () => ((t += 500), p);
+    await notePersistence(kv, () => t); // read between 1000 and 1500
+    expect(await kv.hGetAll(K.persist)).toEqual({ aofRewrites: '3', aofIdleAt: '1000' });
+    t = 3000;
+    p = { ...p, aofRewrites: 4 };
+    await notePersistence(kv, () => t); // read between 3000 and 3500
+    expect(await kv.hGetAll(K.persist)).toMatchObject({ aofOkAfter: '1000', aofOkBy: '3500', aofIdleAt: '3000' });
+  });
+
+  it('dates the persistence lines, so yesterday\'s rewrite does not read as today\'s', async () => {
+    const t = clock(Date.parse('2026-10-07T00:00:00Z'));
+    const kv = new MemoryKv(t.now);
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { ops_started: '1' } }]);
+    await kv.write([{ op: 'hSet', key: K.persist, fields: { aofOkAfter: String(Date.parse('2026-10-05T01:00:00Z')), aofOkBy: String(Date.parse('2026-10-05T01:05:00Z')) } }]);
+    kv.persistence = async () => ({ rdbLastSave: Date.parse('2026-10-06T23:00:00Z') / 1000, rdbStatus: 'ok', aofRewrites: 1, aofInProgress: 0, aofFailures: 0, aofRewriteStatus: 'ok' });
+    const text = dailyStatsEmail(await dailyStats(kv, '2026-10-06', t.now(), { alertLimit: 500, recordLimit: 3500 })).text;
+    expect(text).toContain('started after Mon 5 Oct, 9:00 AM, finished by Mon 5 Oct, 9:05 AM');
+    expect(text).toContain('Last successful database snapshot: Wed 7 Oct, 7:00 AM');
+  });
+
+  it('gives the notification numbers a deadline: a hung INFO leaves only their gauges out', async () => {
+    const t = clock(Date.parse('2026-10-07T00:00:00Z'));
+    const kv = new MemoryKv(t.now);
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { ops_started: '4' } }]);
+    kv.persistence = () => new Promise(() => {});
+    const started = Date.now();
+    const s = await dailyStats(kv, '2026-10-06', t.now(), { alertLimit: 500, recordLimit: 3500 });
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(s.devices).toMatchObject({ counts: { ops_started: 4 }, gauges: null });
+  });
+
+  it('keeps the v1 report when the notification hash holds a broken time', async () => {
+    const kv = new MemoryKv(() => Date.parse('2026-10-07T00:00:00Z'));
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { since: 'broken', ops_started: '1' } }]);
+    const s = await dailyStats(kv, '2026-10-06', Date.parse('2026-10-07T00:00:00Z'));
+    expect(s.schema).toBe(1);
+    expect(s.devices).toMatchObject({ since: null, counts: { ops_started: 1 } });
+  });
+
+  it('ignores a persistence reading older than the one stored (a run that outlived its own)', async () => {
+    const kv = new MemoryKv();
+    let release!: () => void;
+    const p = { rdbLastSave: null, rdbStatus: null, aofRewrites: 3, aofInProgress: 0, aofFailures: 0, aofRewriteStatus: 'ok' };
+    kv.persistence = () => new Promise((r) => (release = () => r(p)));
+    const old = notePersistence(kv, 1000);
+    kv.persistence = async () => ({ ...p, aofRewrites: 4 });
+    await notePersistence(kv, 2000);
+    const stored = await kv.hGetAll(K.persist);
+    release();
+    await old;
+    expect(await kv.hGetAll(K.persist)).toEqual(stored);
+  });
+
+  it('has no device section for a day before the redesign', async () => {
+    const kv = new MemoryKv();
+    expect((await dailyStats(kv, '2026-10-01', Date.parse('2026-10-02T00:00:00Z'))).devices).toBeNull();
   });
 });

@@ -43,6 +43,7 @@ import {
 import { unsubscribeLinks } from './api.ts';
 import { type DevicePassReport, notificationPass } from './devices/delivery.ts';
 import { deviceCleanup } from './devices/cleanup.ts';
+import { countDevice, flushCounts, later, notePersistence } from './devices/counters.ts';
 import { acquireLock, heartbeat, releaseLock, renewLock } from './devices/lock.ts';
 import { writeQueue } from './devices/queue.ts';
 import type { Transport } from './devices/transport.ts';
@@ -99,6 +100,8 @@ export interface CheckDeps {
   /** Reads now as a stamp (clock.ts); runCheck sets it. */
   stampNow?: () => Stamp;
   runId?: string;
+  /** Notification alerts' ceilings, for the daily report's gauges. */
+  deviceLimits?: { alertLimit: number; recordLimit: number };
   /** Notification alerts: the mode this run started with, and the push transport. Without it, none are sent. */
   devices?: { mode: PushMode; transport: Transport | null };
 }
@@ -306,8 +309,11 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
         devicesClean = true;
       } catch (err) {
         log.error('notification clean-up failed; no notifications this run', { runId, err: err as Error });
+        later(() => countDevice(kv, now(), 'cleanup_failures'));
       }
     }
+    // Append-only rewrites are bracketed by runs (counters.ts): a reading each run, cooldown or not.
+    later(() => notePersistence(kv, now));
     if (await kv.get(K.scanCooldown)) {
       log.info('the site had trouble on a recent scan; resting before the next', { runId });
       return { runId, skipped: 'cooling down', healthy: false, problems: [], recorded: null, queued: 0, delivery: null, abroad: null, devices: null };
@@ -407,6 +413,8 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     await reportOncePerDay(deps, now());
     return { runId, skipped: null, healthy: scan.healthy, problems: scan.problems, recorded, queued, delivery, abroad, devices };
   } finally {
+    // Counts and the persistence reading left running get at most 2 s more, then the run ends whatever they do.
+    await flushCounts(2_000);
     beat.stop();
     await releaseLock(kv, runId);
   }

@@ -44,23 +44,29 @@ export async function writeQueue(
     log.warn('notification fan-out not computed; email goes on', { run: a.run, err: err as Error });
   }
   let batch = entries.length > 0 ? { id: a.batchId, entries, stamps: [a.stamp] } : null;
+  // Why the notification work was left out, counted once the email work it rode with is written.
+  let skipped: 'size' | 'memory' | 'failed' | null = null;
   if (batch && entries.length > FANOUT_MAX_ENTRIES) {
     log.warn('notification fan-out too large; dropped', { run: a.run, entries: entries.length });
     batch = null;
+    skipped = 'size';
   }
   if (batch) {
     const mem = await kv.memory().catch(() => ({ used: 0, max: 0 }));
     if (mem.max > 0 && mem.used / mem.max > MEMORY_SKIP) {
       log.warn('memory above 85%: notification fan-out dropped', { run: a.run, entries: entries.length });
       batch = null;
+      skipped = 'memory';
     }
   }
+  // What was left out is counted by the queueing script itself, under its mark: a retry of the same write counts nothing again.
+  const left = (reason: 'size' | 'memory' | 'failed' | null) => (reason ? { reason, entries: entries.length } : null);
   try {
-    await queueWrite(kv, { now: deps.now(), run: a.run, mark: a.batchId, ops: a.ops, batch });
+    await queueWrite(kv, { now: deps.now(), run: a.run, mark: a.batchId, ops: a.ops, batch, skipped: left(skipped) });
   } catch (err) {
     if (err instanceof LostLock || !batch) throw err;
     log.error('queueing with the notification fan-out failed; retrying without it', { run: a.run, entries: entries.length, err: err as Error });
-    await queueWrite(kv, { now: deps.now(), run: a.run, mark: a.batchId, ops: a.ops, batch: null });
+    await queueWrite(kv, { now: deps.now(), run: a.run, mark: a.batchId, ops: a.ops, batch: null, skipped: left('failed') });
   }
 }
 

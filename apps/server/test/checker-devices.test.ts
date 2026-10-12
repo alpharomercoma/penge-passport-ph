@@ -309,3 +309,83 @@ describe('clean-up in a run', () => {
     expect(w.lines.some((l) => l.includes('notification clean-up failed'))).toBe(true);
   });
 });
+
+describe('counting notification work left out', () => {
+  it('counts notification work left out of the first write, and a failed second write, without stopping email', async () => {
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
+    await w.run();
+    for (let i = 0; i < 3; i++) await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    // Memory above 85%: the batch is left out and counted; the email work is written as usual.
+    w.kv.memory = async () => ({ used: 90, max: 100 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    await w.run();
+    const day = (await import('../src/keys.ts')).manilaDay(w.t.now());
+    expect(await w.kv.hGetAll(K.statsV2(day))).toMatchObject({ fanout_skipped_memory: '1', fanout_skipped_entries: '1' });
+  });
+
+  it('counts a first write that failed with its batch and went again without it, and one too large', async () => {
+    const { writeQueue } = await import('../src/devices/queue.ts');
+    const w = await deviceWorld();
+    await w.kv.set(K.checkLock, 'r1');
+    for (let i = 0; i < 2; i++) await seedAlert(w.kv, { now: w.t.now(), order: 0, choices: choices({ siteIds: [486] }) });
+    const day = (await import('../src/keys.ts')).manilaDay(w.t.now());
+    const deps = { kv: w.kv, log: (await import('../src/log.ts')).silentLog, now: w.t.now };
+    // Failed with its batch once (a damaged order counter), written again without it.
+    await w.kv.set(K.devOrder, 'not a number');
+    await writeQueue(deps, { run: 'r1', ops: [{ op: 'set', key: 'pp:test:email', value: 'job' }], batchId: 'r1:domestic', stamp: { wall: w.t.now() }, openings: [{ siteId: 486, applicants: 1, dates: ['2026-10-09'] }] });
+    expect(await w.kv.get('pp:test:email')).toBe('job');
+    // Too large: more than 2,000 entries.
+    const dates = Array.from({ length: 2001 }, (_, i) => new Date(Date.UTC(2027, 0, 1) + i * 86_400_000).toISOString().slice(0, 10));
+    await writeQueue(deps, { run: 'r1', ops: [], batchId: 'r1:abroad', stamp: { wall: w.t.now() }, openings: [{ siteId: 486, applicants: 1, dates }] });
+    expect(await w.kv.hGetAll(K.statsV2(day))).toMatchObject({ fanout_skipped_failed: '1', fanout_skipped_size: '1', fanout_skipped_entries: String(1 + 2001) });
+  });
+
+  it('counts a failed second write, and still delivers email in that run', async () => {
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
+    const { createPending, confirm } = await import('../src/subscribers.ts');
+    await confirm(w.kv, await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' } as never, w.t.now()), w.t.now());
+    await w.run();
+    await seedAlert(w.kv, { now: w.t.now(), order: 0 });
+    w.upstream.open.set('486', ['2026-10-09']);
+    // The second write's script fails, and nothing else does.
+    const script = w.kv.script.bind(w.kv);
+    w.kv.script = (async (def: { name: string }, ...rest: unknown[]) => {
+      if (def.name === 'dev-fanout-chunk') throw new Error('chunk failed');
+      return (script as (...a: unknown[]) => unknown)(def, ...rest);
+    }) as typeof w.kv.script;
+    await w.run();
+    const day = (await import('../src/keys.ts')).manilaDay(w.t.now());
+    expect((await w.kv.hGetAll(K.statsV2(day))).fanout_second_failures).toBe('1'); // a run, whichever of its attempts failed
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+  });
+});
+
+describe('counting off the critical path', () => {
+  it('counts skipped work once when the queueing write is retried with the same mark', async () => {
+    const { writeQueue } = await import('../src/devices/queue.ts');
+    const w = await deviceWorld();
+    await w.kv.set(K.checkLock, 'r1');
+    await seedAlert(w.kv, { now: w.t.now(), order: 0, choices: choices({ siteIds: [486] }) });
+    w.kv.memory = async () => ({ used: 90, max: 100 });
+    const deps = { kv: w.kv, log: (await import('../src/log.ts')).silentLog, now: w.t.now };
+    const a = { run: 'r1', ops: [], batchId: 'r1:domestic', stamp: { wall: w.t.now() }, openings: [{ siteId: 486, applicants: 1, dates: ['2026-10-09'] }] };
+    await writeQueue(deps, a);
+    await writeQueue(deps, a); // its answer was lost: written again, applied once
+    const day = (await import('../src/keys.ts')).manilaDay(w.t.now());
+    expect(await w.kv.hGetAll(K.statsV2(day))).toMatchObject({ fanout_skipped_memory: '1', fanout_skipped_entries: '1' });
+  });
+
+  it('never waits on a count or the persistence reading to finish email work', async () => {
+    const w = await deviceWorld({ devices: { mode: 'live', transport: null } });
+    const { createPending, confirm } = await import('../src/subscribers.ts');
+    await confirm(w.kv, await createPending(w.kv, keys, { email: 'ana@example.com', siteIds: [486], applicants: 1, pace: 'asap' } as never, w.t.now()), w.t.now());
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-09']);
+    // INFO never answers.
+    w.kv.persistence = () => new Promise(() => {});
+    const started = Date.now();
+    await w.run();
+    expect(w.mailer.sent.filter((m) => m.kind === 'alert')).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+});

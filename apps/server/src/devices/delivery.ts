@@ -11,6 +11,7 @@ import type { Kv } from '../kv.ts';
 import type { Logger } from '../log.ts';
 import { buildPayload } from '../push/payload.ts';
 import type { Keys } from '../subscribers.ts';
+import { countDevice, later } from './counters.ts';
 import { writeFanout, FANOUT_BUDGET_MS } from './queue.ts';
 import { claim, LostLock, sendGate, setCursor, settle, workList } from './scripts-delivery.ts';
 import { checkPushSubscription } from '../push/endpoint.ts';
@@ -61,6 +62,7 @@ export async function notificationPass(deps: PassDeps, ctx: { run: string; scan:
   const { kv, log } = deps;
   const report: DevicePassReport = { fanout: { chunks: 0, merged: 0 }, domestic: emptyBatch(), abroad: emptyBatch() };
   let fanoutLeft = FANOUT_BUDGET_MS;
+  let secondFailed = false;
   const fanout = async () => {
     const started = deps.now();
     try {
@@ -70,6 +72,9 @@ export async function notificationPass(deps: PassDeps, ctx: { run: string; scan:
     } catch (err) {
       if (err instanceof LostLock) throw err;
       log.error('notification fan-out failed; the batch stays for the next run', { run: ctx.run, err: err as Error });
+      // Counted once a run, whichever of its attempts failed (DEVICE_COUNTERS: a run).
+      if (!secondFailed) later(() => countDevice(kv, deps.now(), 'fanout_second_failures'));
+      secondFailed = true;
     }
     fanoutLeft = Math.max(0, fanoutLeft - (deps.now() - started));
   };

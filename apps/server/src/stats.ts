@@ -8,6 +8,7 @@
 //
 // Once a day, after REPORT_HOUR in Manila, the checker writes yesterday's
 // numbers to R2 and emails them to the operator (STATS_EMAIL).
+import { type DeviceGauges, deviceGauges, withDeadline } from './devices/counters.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { describePost, type SiteSummary } from '@penge/contracts';
 import { catalogPosts } from './abroad.ts';
@@ -148,6 +149,8 @@ export interface DailyStats {
   /** When the report was made, not at the end of the day. */
   subscribers: number;
   generatedAt: string;
+  /** Notification alerts' numbers (pp:stats:v2:), from the redesign's deploy on; null for days before it. */
+  devices: { schema: 2; since: string | null; counts: Record<string, number>; gauges: DeviceGauges | null } | null;
 }
 
 async function siteNames(kv: Kv): Promise<Map<number, string>> {
@@ -161,7 +164,7 @@ async function siteNames(kv: Kv): Promise<Map<number, string>> {
   return names;
 }
 
-export async function dailyStats(kv: Kv, day: string, now: number): Promise<DailyStats> {
+export async function dailyStats(kv: Kv, day: string, now: number, limits?: { alertLimit: number; recordLimit: number }): Promise<DailyStats> {
   const counts = {} as Record<Count, number>;
   for (const name of COUNTS) counts[name] = Number((await kv.get(K.stat(day, name))) ?? 0);
   const names = await siteNames(kv);
@@ -171,6 +174,21 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     .slice(0, 5);
   const since = await kv.get(K.statsSince);
   const limit = await kv.get(K.mailLimit(day));
+  // The notification section never costs the report: anything failing or hanging in it leaves it null (its gauges,
+  // which read INFO, have their own shorter deadline and leave only themselves out).
+  const section = async (): Promise<DailyStats['devices']> => {
+    const v2 = await kv.hGetAll(K.statsV2(day));
+    if (Object.keys(v2).length === 0) return null;
+    const { since: sinceRaw, recounted: _r, ...rest } = v2;
+    const sinceMs = Number(sinceRaw);
+    return {
+      schema: 2 as const,
+      since: sinceRaw && Number.isFinite(sinceMs) && manilaDay(sinceMs) === day ? new Date(sinceMs).toISOString() : null,
+      counts: Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, Number(v)])),
+      gauges: limits ? await withDeadline(deviceGauges(kv, now, limits), 2_000, null) : null,
+    };
+  };
+  const devices = await withDeadline(section(), 3_000, null);
   return {
     schema: 1,
     day,
@@ -182,6 +200,7 @@ export async function dailyStats(kv: Kv, day: string, now: number): Promise<Dail
     mailLimit: limit !== null && Number.isFinite(Number(limit)) ? Number(limit) : null,
     subscribers: (await kv.sMembers(K.allSubscribers)).length,
     generatedAt: new Date(now).toISOString(),
+    devices,
   };
 }
 
@@ -195,6 +214,8 @@ export interface ReportDeps {
   log: Logger;
   /** Who gets the daily email; without it the numbers only go to R2. */
   statsEmail?: string | null;
+  /** Notification alerts' ceilings, for the report's gauges. */
+  deviceLimits?: { alertLimit: number; recordLimit: number };
 }
 
 /**
@@ -209,7 +230,7 @@ export async function reportOncePerDay(deps: ReportDeps, now: number): Promise<v
   const since = await kv.get(K.statsSince);
   if (!since || manilaDay(Date.parse(since)) > day) return; // nothing was counted that day
   let numbers: DailyStats | null = null;
-  const stats = async () => (numbers ??= await dailyStats(kv, day, now));
+  const stats = async () => (numbers ??= await dailyStats(kv, day, now, deps.deviceLimits));
 
   if (sink.putObject && !(await kv.get(K.statsStored(day)))) {
     try {
@@ -221,9 +242,18 @@ export async function reportOncePerDay(deps: ReportDeps, now: number): Promise<v
     }
   }
 
-  if (deps.statsEmail && (await kv.set(K.statsEmailed(day), '1', { nx: true, ttlSeconds: STATS_KEEP_SECONDS }))) {
+  // The email is built before its marker is claimed: a failure to build it leaves the next run to try again.
+  let mail: ReturnType<typeof dailyStatsEmail> | null = null;
+  if (deps.statsEmail && !(await kv.get(K.statsEmailed(day)))) {
     try {
-      await mailer.send({ ...dailyStatsEmail(await stats()), to: deps.statsEmail, kind: 'report' });
+      mail = dailyStatsEmail(await stats());
+    } catch (err) {
+      log.error('daily numbers not built; the next run retries', { day, err: err as Error });
+    }
+  }
+  if (deps.statsEmail && mail && (await kv.set(K.statsEmailed(day), '1', { nx: true, ttlSeconds: STATS_KEEP_SECONDS }))) {
+    try {
+      await mailer.send({ ...mail, to: deps.statsEmail, kind: 'report' });
       log.info('daily numbers emailed', { day });
     } catch (err) {
       if (wasRefused(err)) await kv.write([{ op: 'del', key: K.statsEmailed(day) }]);

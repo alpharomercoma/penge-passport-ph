@@ -72,6 +72,8 @@ export interface Kv {
   script(def: ScriptDef, keys: string[], args: string[]): Promise<string>;
   /** `used_memory` and `maxmemory` (0 when unlimited), read now, for the device admission guard. */
   memory(): Promise<{ used: number; max: number }>;
+  /** INFO persistence: the last successful snapshot (seconds) and its latest status, and the append-only rewrites' count, progress, failures and status. */
+  persistence(): Promise<{ rdbLastSave: number | null; rdbStatus: string | null; aofRewrites: number | null; aofInProgress: number | null; aofFailures: number | null; aofRewriteStatus: string | null }>;
   close(): Promise<void>;
 }
 
@@ -116,6 +118,22 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     lLen: (key) => client.lLen(key),
     async script(def, keys, args) {
       return String(await client.eval(def.lua, { keys, arguments: args }));
+    },
+    async persistence() {
+      const info = await client.info('persistence');
+      const field = (name: string) => new RegExp(`^${name}:(\\S+)`, 'm').exec(info)?.[1] ?? null;
+      const num = (name: string) => {
+        const v = field(name);
+        return v === null ? null : Number(v);
+      };
+      return {
+        rdbLastSave: num('rdb_last_save_time'),
+        rdbStatus: field('rdb_last_bgsave_status'),
+        aofRewrites: num('aof_rewrites'),
+        aofInProgress: num('aof_rewrite_in_progress'),
+        aofFailures: num('aof_rewrites_consecutive_failures'),
+        aofRewriteStatus: field('aof_last_bgrewrite_status'),
+      };
     },
     async memory() {
       const info = await client.info('memory');
@@ -637,6 +655,11 @@ export class MemoryKv implements Kv {
       }
       case 'ZCARD':
         return zset(false)?.size ?? 0;
+      case 'ZCOUNT': {
+        const min = bound(rest[0] ?? '', true);
+        const max = bound(rest[1] ?? '', false);
+        return (zset(false)?.ordered() ?? []).filter(([, s]) => (min.open ? s > min.v : s >= min.v) && (max.open ? s < max.v : s <= max.v)).length;
+      }
       case 'ZRANGE': {
         const all = zset(false)?.ordered() ?? [];
         return span(all.length, int(rest[0]), int(rest[1])).map((i) => all[i]![0]);
@@ -759,6 +782,10 @@ export class MemoryKv implements Kv {
 
   async memory() {
     return { ...this.memoryUse };
+  }
+
+  async persistence(): ReturnType<Kv['persistence']> {
+    return { rdbLastSave: null, rdbStatus: null, aofRewrites: null, aofInProgress: null, aofFailures: null, aofRewriteStatus: null };
   }
 
   /** Test helper: everything stored, as text. */

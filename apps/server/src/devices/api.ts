@@ -32,6 +32,7 @@ import { checkPushSubscription } from '../push/endpoint.ts';
 import { endpointHmac } from '../push/endpoint.ts';
 import { setupPayload } from '../push/payload.ts';
 import type { Keys } from '../subscribers.ts';
+import { countDevice, later } from './counters.ts';
 import { charge, DEVICE_LIMITS, ingressBucket, rateKeys } from './limits.ts';
 import { admit, change, dispatchBegin, dispatchEnd, markGone, type Prepared, readMine, ready, reclaim, renew, setBackoff, testCapture, turnOff } from './scripts-api.ts';
 import { credentialHash, digest, fingerprint, type OpRecord, openSetup, openSubscription, opView, pushService, sealSetup, sealSubscription, SETUP_MS } from './store.ts';
@@ -178,7 +179,10 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
     if (!valid) return bad(c);
     const captured = (body.captured ?? null) as { incarnation: string; generation: number; revision?: number } | null;
     const sub = checkPushSubscription(body.subscription);
-    if (!sub) return bad(c);
+    if (!sub) {
+      later(() => countDevice(kv, d.now(), 'requests_refused_endpoint'));
+      return bad(c);
+    }
     // Choices normalised by shape only here (the digest must not depend on today's office list).
     let choices: AlertChoices | null = null;
     if (kind === 'setup') {
@@ -204,23 +208,38 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
       if (!validateChoices(choices, new Set(sites.map((x) => x.id))).ok) return bad(c);
     }
     // Mode (spec: "What each mode allows").
-    if (d.push.mode === 'off' || !d.transport || !d.push.vapid) return answer(c, first ? 'off' : 'unavailable');
+    if (d.push.mode === 'off' || !d.transport || !d.push.vapid) {
+      later(() => countDevice(kv, d.now(), 'requests_refused_mode'));
+      return answer(c, first ? 'off' : 'unavailable');
+    }
     let tok = '';
     if (first && d.push.mode === 'owner') {
       const given = c.req.header('x-owner-token') ?? '';
       const want = d.push.ownerToken ?? '';
       const same = want !== '' && timingSafeEqual(Buffer.from(sha(given)), Buffer.from(sha(want)));
-      if (!same) return answer(c, 'owner-only');
+      if (!same) {
+        later(() => countDevice(kv, d.now(), 'requests_refused_owner'));
+        return answer(c, 'owner-only');
+      }
       tok = sha(want);
     }
     const svc = pushService(sub.endpoint);
-    if (await kv.get(K.pushPaused)) return answer(c, 'unavailable');
-    if (Number((await kv.get(K.pushBackoff(svc))) ?? 0) > d.now()) return answer(c, 'unavailable');
+    if (await kv.get(K.pushPaused)) {
+      later(() => countDevice(kv, d.now(), 'requests_refused_mode'));
+      return answer(c, 'unavailable');
+    }
+    if (Number((await kv.get(K.pushBackoff(svc))) ?? 0) > d.now()) {
+      later(() => countDevice(kv, d.now(), 'requests_refused_mode'));
+      return answer(c, 'unavailable');
+    }
     // Memory is read live, just before the admission step (the step itself cannot read it: INFO is not a script
     // command we use). Over maxmemory, Valkey refuses the admission script anyway; between 70% and 100% this guard
     // can admit one request that started a moment before the line was crossed, which the 25% budget absorbs.
     const mem = await kv.memory();
-    if (mem.max > 0 && mem.used / mem.max > 0.7) return answer(c, 'full');
+    if (mem.max > 0 && mem.used / mem.max > 0.7) {
+      later(() => countDevice(kv, d.now(), 'requests_refused_memory'));
+      return answer(c, 'full');
+    }
     const now = d.now();
     // Clean-up is all or nothing, so one damaged record would fail it every time: logged, and admission (which checks
     // what it touches itself) goes ahead. The message is generic: the script's names a deadline's credential hash.
@@ -361,6 +380,7 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
       release();
     }
     const r2 = { id };
+    later(() => countDevice(kv, d.now(), `tests_${result.kind}`));
     if (result.kind !== 'accepted') log.warn('test push not accepted', { route: 'test', alert: r2.id, push: loggable(result) });
     if (result.kind === 'accepted' || result.kind === 'uncertain') return c.json<TestAnswer>({ test: result.kind });
     if (result.kind === 'throttled') await setBackoff(kv, a.svc!, d.now() + result.retryAfterMs);

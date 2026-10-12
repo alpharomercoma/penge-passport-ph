@@ -157,6 +157,12 @@ export function dailyStatsEmail(stats: DailyStats): Rendered {
   const c = stats.counts;
   const manilaTime = (iso: string) =>
     new Date(iso).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' });
+  // Persistence times can be days old: with the day, so yesterday's does not read as today's.
+  const manilaDateTime = (iso: string) => {
+    const d = new Date(iso);
+    const date = d.toLocaleDateString('en-GB', { timeZone: 'Asia/Manila', weekday: 'short', day: 'numeric', month: 'short' }).replace(',', '');
+    return `${date}, ${manilaTime(iso)}`;
+  };
   const partial = stats.partialFrom
     ? `Counting started at ${manilaTime(stats.partialFrom)}, so this is part of the day.`
     : '';
@@ -189,6 +195,51 @@ export function dailyStatsEmail(stats: DailyStats): Rendered {
         ["Alerts held back by a person's own daily cap", String(c.alertsCapped)],
       ],
     ],
+    ...(stats.devices
+      ? ([
+          [
+            'Notification alerts',
+            [
+              ...(stats.devices.since ? ([['Counting began at', manilaTime(stats.devices.since)]] as [string, string][]) : []),
+              // ops_* count every operation kind: setups and rotations (proved by the ready check), and changes (Task 7).
+              ['Operations started (setups, rotations, changes)', String(stats.devices.counts.ops_started ?? 0)],
+              ['Operations completed (setups, rotations, changes)', String(stats.devices.counts.ops_active ?? 0)],
+              ['Setups and rotations expired before the ready check', String(stats.devices.counts.ops_expired ?? 0)],
+              ['Changes applied', String(stats.devices.counts.changes_applied ?? 0)],
+              ['Turned off', String(stats.devices.counts.alerts_off ?? 0)],
+              ['Ended after 180 days', String(stats.devices.counts.alerts_ended ?? 0)],
+              ['Gone (the push service dropped them)', String(stats.devices.counts.alerts_gone ?? 0)],
+              ['Notifications accepted by push services', String(stats.devices.counts.claims_accepted ?? 0)],
+              ['Not confirmed by the push service', String(stats.devices.counts.claims_uncertain ?? 0)],
+              ['Refused, to try again', String(stats.devices.counts.claims_refused ?? 0)],
+              ['Dates dropped past their window', String(stats.devices.counts.dates_dropped_window ?? 0)],
+              ['Requests refused by limits', String(Object.entries(stats.devices.counts).filter(([k]) => k.startsWith('requests_refused_dev-')).reduce((n, [, v]) => n + v, 0))],
+              ['Setups refused: push off or paused', String(stats.devices.counts.requests_refused_mode ?? 0)],
+              ['Setups refused: owner link missing', String(stats.devices.counts.requests_refused_owner ?? 0)],
+              ['Setups refused: not a browser push service', String(stats.devices.counts.requests_refused_endpoint ?? 0)],
+              ['Setups refused: memory', String(stats.devices.counts.requests_refused_memory ?? 0)],
+              ['Test notifications sent', String(Object.entries(stats.devices.counts).filter(([k]) => k.startsWith('tests_')).reduce((n, [, v]) => n + v, 0))],
+              ...(stats.devices.counts.cleanup_failures ? ([['Clean-up failures (retention may slip)', String(stats.devices.counts.cleanup_failures)]] as [string, string][]) : []),
+              ...(stats.devices.gauges
+                ? ([
+                    ['Active now', String(stats.devices.gauges.alertsActive)],
+                    ['Alerts and reservations', `${stats.devices.gauges.alerts} of ${stats.devices.gauges.alertLimit}`],
+                    ['Storage units', `${stats.devices.gauges.units} of ${stats.devices.gauges.recordLimit}`],
+                    ['Last successful database snapshot', stats.devices.gauges.persistence.rdbLastOk ? manilaDateTime(stats.devices.gauges.persistence.rdbLastOk) : `none known (${stats.devices.gauges.persistence.rdbStatus ?? 'unknown'})`],
+                    // Valkey gives no time for it: bracketed by two checker runs (notePersistence).
+                    [
+                      'Last append-only rewrite known finished',
+                      stats.devices.gauges.persistence.aofOkBy && stats.devices.gauges.persistence.aofOkAfter
+                        ? `started after ${manilaDateTime(stats.devices.gauges.persistence.aofOkAfter)}, finished by ${manilaDateTime(stats.devices.gauges.persistence.aofOkBy)}`
+                        : `none known (${stats.devices.gauges.persistence.aofRewriteStatus ?? 'unknown'})`,
+                    ],
+                    ...stats.devices.gauges.flags.map((f): [string, string] => ['Flag', f]),
+                  ] as [string, string][])
+                : []),
+            ],
+          ],
+        ] as [string, [string, string][]][])
+      : []),
     [
       'Checker',
       [

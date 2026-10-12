@@ -93,6 +93,11 @@ if b then
     count('fanout_batches')
   end
 end
+-- Notification work left out of this write (too large, memory, a failed first try), counted under the same mark.
+if A.skipped then
+  count('fanout_skipped_' .. A.skipped.reason)
+  count('fanout_skipped_entries', A.skipped.entries)
+end
 redis.call('SET', K.mark, '1', 'EX', 86400)
 return '{"ok":true}'
 `,
@@ -102,10 +107,13 @@ return '{"ok":true}'
  * The first queueing write: the email write as at 157bad9, plus the fan-out batch, while the run holds the lock.
  * `mark` names this write (run and domestic/abroad): a retry after a lost answer applies nothing twice.
  */
-export async function queueWrite(kv: Kv, a: { now: number; run: string; mark: string; ops: WriteOp[]; batch: FanoutBatch | null }): Promise<void> {
+export async function queueWrite(
+  kv: Kv,
+  a: { now: number; run: string; mark: string; ops: WriteOp[]; batch: FanoutBatch | null; skipped?: { reason: 'size' | 'memory' | 'failed'; entries: number } | null },
+): Promise<void> {
   const ops = a.ops.filter((op) => op.op === 'set' || op.op === 'del' || op.op === 'hSet' || op.op === 'rPush');
   if (ops.length !== a.ops.length) throw new Error('the queueing write has an operation the script does not apply');
-  const r = await queueWriteScript.run<{ ok?: true; lost?: true }>(kv, { stats: statsKey(a.now), mark: K.queueMark(a.mark) }, { now: a.now, run: a.run, ops, batch: a.batch ?? false });
+  const r = await queueWriteScript.run<{ ok?: true; lost?: true }>(kv, { stats: statsKey(a.now), mark: K.queueMark(a.mark) }, { now: a.now, run: a.run, ops, batch: a.batch ?? false, skipped: a.skipped ?? false });
   if (r.lost) throw new LostLock();
 }
 
