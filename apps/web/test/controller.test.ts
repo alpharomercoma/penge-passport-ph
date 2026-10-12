@@ -80,6 +80,73 @@ function world(o: { deliverAfterMs?: number | null; permission?: NotificationPer
   return { c, server, env, browser, advance: (ms: number) => (now += ms), now: () => now, current: () => current, setOwner: (t: string) => (owner = t), jump: (ms: number) => (skew += ms) };
 }
 
+describe('a device clock corrected backward', () => {
+  it('recovers a setup left preparing by a page whose clock ran a day ahead, within seconds, not a day', async () => {
+    const w = world();
+    // A page whose clock was a day ahead began a setup, then went away before preparing it.
+    const r = (await S.begin(w.env, { kind: 'setup', choices, captured: null, now: w.now() + 86_400_000 })) as { started: S.Operation };
+    expect(r.started.phase).toBe('preparing');
+    const t0 = w.now();
+    await w.c.reconcile(); // the row's reconcile: it carries the operation on in the background
+    const stuck = async () => {
+      const s = await S.readState(w.env);
+      return s.op?.op === r.started.op && (s.op.phase === 'preparing' || s.op.phase === 'attached') && !s.op.result;
+    };
+    // Recovered once this page has watched it for a few seconds of its own (monotonic) time.
+    for (let i = 0; i < 300 && (await stuck()) && w.now() - t0 < 60_000; i++) await new Promise((res) => setTimeout(res, 5));
+    expect(await stuck()).toBe(false);
+    expect(w.now() - t0).toBeLessThan(60_000);
+  }, 15_000);
+});
+
+describe('a device clock corrected backward, with the server unreachable', () => {
+  it('gives up on a sent setup whose stored deadline is a day away within the longest an operation lives, not a day', async () => {
+    const w = world();
+    const day = 86_400_000;
+    const r = (await S.begin(w.env, { kind: 'setup', choices, captured: null, now: w.now() + day })) as { started: S.Operation };
+    const sub = await w.browser.subscribe('B'.repeat(87));
+    await S.attach(w.env, { op: r.started.op, epoch: r.started.epoch, subscription: sub.json, fingerprint: await S.fingerprint(w.env, sub.json), by: 'gone-page' });
+    await S.confirmReady(w.env, { op: r.started.op, by: 'gone-page' });
+    await S.markSent(w.env, { op: r.started.op, expiresAt: w.now() + day + 300_000 });
+    // Offline: every request fails.
+    for (const k of Object.keys(w.server.api) as (keyof typeof w.server.api)[]) (w.server.api as unknown as Record<string, unknown>)[k] = async () => Promise.reject(new TypeError('Failed to fetch'));
+    const t0 = w.now();
+    await w.c.reconcile();
+    const open = async () => !(await S.readState(w.env)).op?.result;
+    for (let i = 0; i < 600 && (await open()) && w.now() - t0 < 3_600_000; i++) await new Promise((res) => setTimeout(res, 5));
+    expect(await open()).toBe(false);
+    expect(w.now() - t0).toBeLessThan(10 * 60_000);
+  }, 20_000);
+});
+
+describe('when this browser\'s storage fails', () => {
+  it("an alert that is on never vanishes from the row when storage fails: it says it can't check", async () => {
+    const w = world();
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    w.env.indexedDB!.open = () => {
+      throw new DOMException('refused', 'UnknownError');
+    };
+    expect((await w.c.reconcile()).kind).toBe('cant-check');
+  });
+
+  it('a browser without IndexedDB at all shows no row (nothing could ever be set up there)', async () => {
+    const w = world();
+    delete (w.env as { indexedDB?: unknown }).indexedDB;
+    expect((await w.c.reconcile()).kind).toBe('none');
+  });
+
+  it('a change answers a failure with a retry, never throws', async () => {
+    const w = world();
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    // From now on, opening the database fails (storage refused, a quota, a private window turning strict).
+    w.env.indexedDB!.open = () => {
+      throw new DOMException('refused', 'UnknownError');
+    };
+    const r = await w.c.change({ siteIds: [486], applicants: 2, pace: 'asap' });
+    expect(r).toMatchObject({ ok: false, retry: true });
+  });
+});
+
 describe('setting up on this device', () => {
   it('turns notifications on once this browser has shown the setup notification and proved it', async () => {
     const w = world();
@@ -345,15 +412,20 @@ describe('setting up on this device', () => {
     const w = world();
     const subscribe = w.browser.subscribe;
     let first = true;
+    // Known to be waiting in subscribe (its lookup done), not assumed after some milliseconds: under a loaded run it
+    // could still be before its lookup, and meet the failing one installed below.
+    let reachedSubscribe = () => {};
+    const reached = new Promise<void>((r) => (reachedSubscribe = r));
     w.browser.subscribe = async (vapid) => {
       if (first) {
         first = false;
+        reachedSubscribe();
         await held; // the browser's permission prompt, say
       }
       return subscribe(vapid);
     };
     const setup = w.c.setup(choices);
-    await new Promise((r) => setTimeout(r, 20));
+    await reached;
     w.advance(11_000);
     // Another opening recovers what looks orphaned; its own subscription lookup fails.
     const sub = w.browser.subscription;

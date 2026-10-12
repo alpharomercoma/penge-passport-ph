@@ -17,6 +17,8 @@ export const RENEW_RETRY_MS = [60_000, 300_000, 900_000];
 /** An operation whose server never answered is given up 2 minutes after it was made; one with an expiry, 30 s after it. */
 export const UNANSWERED_MS = 120_000;
 export const AFTER_EXPIRY_MS = 30_000;
+/** The longest a server operation lives (setups and rotations: 5 minutes): no local deadline waits longer. */
+export const OPERATION_MAX_MS = 300_000;
 /** A `preparing` operation no page carries on is taken over after this. */
 export const PREPARING_STALE_MS = 10_000;
 
@@ -45,6 +47,7 @@ export const TEXT = {
   ownerOnly: 'Notifications are still being tested and are not open to everyone yet.',
   offline: 'We could not reach the server. Check your connection and try again.',
   changedMeanwhile: 'This alert changed meanwhile. Check it and try again.',
+  storage: "This browser couldn't read or save its notification settings. Try again.",
 } as const;
 
 export interface BrowserSub {
@@ -264,7 +267,9 @@ export class DeviceController {
       }
       return await this.afterRead(s.credential, await this.d.api.mine(s.credential), s);
     } catch (err) {
-      if (err instanceof S.Unsupported) return this.show({ kind: 'none' });
+      // No row only where nothing could ever be set up (no IndexedDB or no Web Locks at all). Storage that fails or
+      // refuses now may hold an alert that is on: the row says it cannot check, and keeps Turn off.
+      if (err instanceof S.Unsupported && (!this.d.env.indexedDB || !this.d.env.locks?.request)) return this.show({ kind: 'none' });
       return this.failedSince(seen);
     }
   }
@@ -657,7 +662,9 @@ export class DeviceController {
       if (driven && driven.result !== 'not-ready') return driven;
       // Not ready, and no page has made it so in time (the one that started it went away): recovered here, under the
       // driver lock, rather than waited on for ever.
-      if ((s.op.phase === 'preparing' || s.op.phase === 'attached') && this.d.now() - s.op.createdAt >= PREPARING_STALE_MS) {
+      // Stale by its age, or by this page's own time watching it: a creation time stamped by a clock later corrected
+      // backward would otherwise read as fresh for as long as the correction.
+      if ((s.op.phase === 'preparing' || s.op.phase === 'attached') && (this.d.now() - s.op.createdAt >= PREPARING_STALE_MS || this.d.mono() - driveStart >= PREPARING_STALE_MS)) {
         await this.recoverPreparing(s.op, credential);
         // Another page may hold the driver lock (recovery then did nothing): never a loop without a wait.
         await this.d.sleep(POLL_FAST_MS);
@@ -829,7 +836,7 @@ export class DeviceController {
         view?.remainingMs != null
           ? viewAt + view.remainingMs + AFTER_EXPIRY_MS
           : s.op.expiresAt !== null
-            ? startMono + Math.max(0, s.op.expiresAt + AFTER_EXPIRY_MS - startWall)
+            ? startMono + Math.min(OPERATION_MAX_MS + AFTER_EXPIRY_MS, Math.max(0, s.op.expiresAt + AFTER_EXPIRY_MS - startWall))
             : startMono + Math.max(0, UNANSWERED_MS - Math.min(UNANSWERED_MS, Math.max(0, startWall - op.createdAt)));
       // Nothing the server said yet: 2 minutes after creation (spec), its age carried over by the wall clock at takeover.
       // A wall clock that jumped could make that early, so the server is asked before the operation is called expired.
@@ -960,7 +967,16 @@ export class DeviceController {
 
   // ---- Change, test, turn off. ----
 
+  /** A change, answered: a failure of this browser's storage is a failure with a retry, never an exception. */
   async change(choices: AlertChoices): Promise<SetupResult> {
+    try {
+      return await this.changeOnce(choices);
+    } catch {
+      return { ok: false, text: TEXT.storage, retry: true };
+    }
+  }
+
+  private async changeOnce(choices: AlertChoices): Promise<SetupResult> {
     if ((await this.settleStale().catch(() => 'ok' as const)) === 'unverified') return { ok: false, text: TEXT.offline, retry: true };
     const s = await S.readState(this.d.env);
     if (!s.credential || !s.known) return { ok: false, text: TEXT.again, retry: false };

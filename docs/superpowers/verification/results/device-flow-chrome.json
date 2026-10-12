@@ -24,7 +24,7 @@
     {
       "item": "An opening arrives as a notification, with when it was checked",
       "pass": true,
-      "note": "{\"title\":\"Dates open at Antipolo\",\"body\":\"Fri 16 Oct · for 1 person · Checked 02:35\",\"tag\":\"alert-local67-1791830135008-QB2o1rEjrNrwPsLmUws7BQ\",\"data\":{\"office\":486,\"date\":\"2026-10-16\",\"people\":1}}"
+      "note": "{\"title\":\"Dates open at Antipolo\",\"body\":\"Fri 16 Oct · for 1 person · Checked 03:34\",\"tag\":\"alert-local83-1791833660502-g7a4QUdo8aH8GP7XON-xIQ\",\"data\":{\"office\":486,\"date\":\"2026-10-16\",\"people\":1}}"
     },
     {
       "item": "Change has no switches and no email field",
@@ -39,7 +39,7 @@
     {
       "item": "Changed: the next opening's notification is for 2 people, and opens that office, date and group",
       "pass": true,
-      "note": "[{\"body\":\"Mon 19 Oct · for 2 people · Checked 02:37\",\"data\":{\"office\":486,\"date\":\"2026-10-19\",\"people\":2}}]"
+      "note": "[{\"body\":\"Mon 19 Oct · for 2 people · Checked 03:36\",\"data\":{\"office\":486,\"date\":\"2026-10-19\",\"people\":2}}]"
     },
     {
       "item": "The test notification arrived",
@@ -49,7 +49,7 @@
     {
       "item": "Turned off: nothing left on the server",
       "pass": true,
-      "note": "QB2o1rEjrNrwPsLmUws7BQ"
+      "note": "g7a4QUdo8aH8GP7XON-xIQ"
     },
     {
       "item": "Turned off: the browser has no subscription",
@@ -89,7 +89,7 @@
     {
       "item": "The email alert is confirmed",
       "pass": true,
-      "note": "both-1791830282965@example.com"
+      "note": "both-1791833806749@example.com"
     },
     {
       "item": "Both on: one opening gives one alert email and one notification",

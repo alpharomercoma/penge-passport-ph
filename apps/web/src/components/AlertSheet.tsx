@@ -3,7 +3,7 @@ import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from 'rea
 import { createPortal } from 'react-dom';
 import { type Api, ApiFailure, errorText } from '../api.ts';
 import { AREAS } from '../areas.ts';
-import type { DeviceController, SetupResult } from '../devices/controller.ts';
+import { type DeviceController, type SetupResult, TEXT } from '../devices/controller.ts';
 import { ownerToken } from '../devices/owner.ts';
 import { type Context, detectContext, pushCapability } from '../notify/context.ts';
 import { registration } from '../notify/worker.ts';
@@ -251,7 +251,8 @@ export function AlertSheet({ api, status, offices, selected, initialApplicants =
     if (!controller) return;
     const mine = submission.current;
     setNotifyOutcome({ kind: 'busy' });
-    const r: SetupResult = change ? await controller.change(s.choices) : await controller.setup(s.choices);
+    // Whatever happens, the form settles: an unexpected failure is shown with a retry, never left working.
+    const r: SetupResult = await (change ? controller.change(s.choices) : controller.setup(s.choices)).catch(() => ({ ok: false, text: TEXT.storage, retry: true }));
     if (mine === submission.current) setNotifyOutcome({ kind: 'done', ...r, retry: !r.ok && r.retry });
   }
 

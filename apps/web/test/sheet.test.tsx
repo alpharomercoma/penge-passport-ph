@@ -283,6 +283,18 @@ describe('one alerts form, two kinds of alert', () => {
     await waitFor(() => expect(controller.change).toHaveBeenCalledWith({ siteIds: [486], applicants: 2, pace: 'asap' }));
   });
 
+  it('settles the form when Change fails unexpectedly (storage refused): a failure and a retry, never stuck working', async () => {
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    const controller = { change: vi.fn(async () => Promise.reject(new Error('IndexedDB refused'))) } as unknown as DeviceController;
+    render(<AlertSheet api={fakeApi()} status={LIVE} offices={OFFICES} selected={[486]} onSelectedChange={() => {}} onClose={() => {}} controller={controller} change={{ siteIds: [486], applicants: 2, pace: 'asap' }} />);
+    const sheet = screen.getByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Save' }));
+    expect(await within(sheet).findByRole('button', { name: 'Try notifications again' })).toBeTruthy();
+    const save = within(sheet).getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save.getAttribute('aria-busy')).not.toBe('true');
+    expect(save.disabled).toBe(false);
+  });
+
   it('shows the Home Screen hint in an iPhone tab, and no switch', async () => {
     vi.stubGlobal('navigator', { ...navigator, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605' });
     await withNotifications({ noSwitch: true });

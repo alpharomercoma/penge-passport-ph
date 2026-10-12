@@ -99,7 +99,7 @@
     {
       "item": "Today's worker reloads an open 05cee09 tab on its first activation",
       "pass": true,
-      "note": "http://localhost:4173/pengepassportph/assets/index-CsIc4SHG.js"
+      "note": "http://localhost:4173/pengepassportph/assets/index-DbRuch_K.js"
     },
     {
       "item": "A 05cee09 credential is retired before setup: its database deleted, its subscription replaced, and setup succeeds",
