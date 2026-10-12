@@ -26,7 +26,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { type Availability, CircuitOpenError, type Site } from 'penge-passport-ph';
-import { describePost, officeMapUrl, officePhone, type Pace, type SiteStatus, type StatusResponse } from '@penge/contracts';
+import { describePost, LIMITS, officeMapUrl, officePhone, type Pace, type SiteStatus, type StatusResponse } from '@penge/contracts';
 import {
   ABROAD_DEADLINE_MS,
   ABROAD_GROUP_CAP,
@@ -41,6 +41,8 @@ import {
   writeAbroadStatus,
 } from './abroad.ts';
 import { unsubscribeLinks } from './api.ts';
+import { writeQueue } from './devices/queue.ts';
+import { heldPairs } from './devices/scripts-delivery.ts';
 import { exportSubscribers } from './backup.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
@@ -141,6 +143,10 @@ async function restartGapsOnNewBoot(deps: CheckDeps, stamp: () => Stamp) {
 }
 /** Extra lookups per run for group sizes; each is one more request to the site (budget.ts has the sum). */
 export const GROUP_QUERY_CAP = 10;
+/** Of a run's group lookups, at most this many go to pairs with held work waiting for verification; the rest in turn. */
+export const GROUP_HELD_SHARE = 6;
+/** The same for the posts abroad: at most half of ABROAD_GROUP_CAP. */
+export const ABROAD_HELD_SHARE = 2;
 /** Offices that answered with an error are tried once more, this many at most per run. */
 export const RETRY_CAP = 3;
 /**
@@ -307,7 +313,7 @@ export async function runCheck(given: CheckDeps): Promise<RunReport> {
     let queued = 0;
     if (scan.healthy) {
       await holdLock();
-      queued = await queueAlerts(deps, scan, now, loadSubscriber);
+      queued = await queueAlerts(deps, scan, now, loadSubscriber, 'domestic');
     } else {
       log.warn('unhealthy run: no alerts, baselines unchanged', { runId, problems: scan.problems });
     }
@@ -501,7 +507,7 @@ async function scanAll(
 
   const health = assessHealth(loaded, sites);
   const healthy = health.healthy && problems.length === 0;
-  const groups = healthy && !circuitOpen ? await scanGroups(deps.kv, deps.upstream, sites, loadSubscriber, GROUP_QUERY_CAP) : [];
+  const groups = healthy && !circuitOpen ? await scanGroups(deps, deps.upstream, sites, loadSubscriber, GROUP_QUERY_CAP, GROUP_HELD_SHARE, K.scanGroupCursor) : [];
   const scan: Scan = {
     schema: SCAN_SCHEMA,
     runId,
@@ -517,22 +523,24 @@ async function scanAll(
 }
 
 /**
- * A date with room for 3 people has room for 1, so group sizes need their own
- * lookup only at sites that have room for 1 and have subscribers who asked
- * for more. Lookups past the cap are recorded as skipped.
+ * A date with room for 3 people has room for 1, so group sizes need their own lookup only at offices that have
+ * room for 1 and are followed for more, by email subscribers or notification alerts. When there are more pairs than
+ * lookups, at most `heldShare` go to pairs with held work waiting for verification (oldest first), and the rest to the
+ * others in turn from `cursorKey`; a share one side cannot use passes to the other. Lookups not made are recorded as
+ * skipped.
  */
 async function scanGroups(
-  kv: Kv,
+  deps: CheckDeps,
   upstream: Pick<Upstream, 'availability'>,
   sites: SiteObservation[],
   loadSubscriber: LoadSubscriber,
   cap: number,
-  /** False once the run is out of time: the lookups left are recorded as skipped. */
+  heldShare: number,
+  cursorKey: string,
   more: () => boolean = () => true,
 ) {
-  const groups: GroupObservation[] = [];
-  let budget = cap;
-  let stop: string | null = null;
+  const { kv } = deps;
+  const pairs: { site: SiteObservation; applicants: number; key: string }[] = [];
   for (const site of sites) {
     if (!site.ok || site.openDates.length === 0) continue;
     const sizes = new Set<number>();
@@ -540,29 +548,66 @@ async function scanGroups(
       const sub = await loadSubscriber(id);
       if (sub && sub.applicants > 1) sizes.add(sub.applicants);
     }
-    for (const applicants of [...sizes].sort((a, b) => a - b)) {
-      const skip = (error: string) => groups.push({ siteId: site.id, applicants, ok: false, error, openDates: [] });
-      if (stop) {
-        skip(stop);
-        continue;
-      }
-      if (budget-- <= 0) {
-        skip(`skipped: more than ${cap} group lookups this run`);
-        continue;
-      }
-      if (!more()) {
-        skip('skipped: the run ran out of time');
-        continue;
-      }
-      try {
-        const a = await upstream.availability({ siteId: site.id, applicants });
-        groups.push({ siteId: site.id, applicants, ok: true, error: null, openDates: [...a.availableDates].sort() });
-      } catch (err) {
-        skip(message(err));
-        if (err instanceof CircuitOpenError) stop = 'skipped: the rate limiter paused requests';
-      }
+    // Notification demand never stops a scan: a failure here leaves email's sizes, and is logged.
+    for (const m of await kv.sMembers(K.devSite(site.id)).catch((err: unknown) => {
+      deps.log.warn('notification demand could not be read; group lookups go on for email', { site: site.id, err: err as Error });
+      return [] as string[];
+    })) {
+      // "<alert id>:<group>", a group of 2 to 5: anything else (a damaged index) is no demand, never a lookup.
+      const size = Number(/^[A-Za-z0-9_-]{1,64}:([2-9])$/.exec(m)?.[1] ?? NaN);
+      if (size >= 2 && size <= LIMITS.maxApplicants) sizes.add(size);
+    }
+    for (const applicants of [...sizes].sort((a, b) => a - b)) pairs.push({ site, applicants, key: `${site.id}:${applicants}` });
+  }
+  // Pairs with held work, oldest first: email's held alerts and notification alerts' held jobs.
+  const heldAt = new Map<string, number>();
+  const note = (key: string, wall: number) => heldAt.set(key, Math.min(heldAt.get(key) ?? Infinity, wall));
+  for (const id of await kv.sMembers(K.heldSubscribers)) {
+    const raw = await kv.get(K.held(id));
+    const job = raw === null ? null : openJob(raw, deps.keys.token);
+    if (!job) continue;
+    for (const o of job.openings) note(`${o.id}:${job.applicants}`, job.createdAt);
+  }
+  for (const [office, group, wall] of await heldPairs(kv).catch(() => [] as [number, number, number][])) note(`${office}:${group}`, wall);
+  const held = pairs.filter((p) => heldAt.has(p.key)).sort((a, b) => heldAt.get(a.key)! - heldAt.get(b.key)!);
+  const others = pairs.filter((p) => !heldAt.has(p.key)).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const cursor = await kv.get(cursorKey);
+  const from = cursor === null ? 0 : Math.max(0, others.findIndex((p) => p.key > cursor));
+  const rotated = [...others.slice(from), ...others.slice(0, from)];
+  const otherTake = Math.min(rotated.length, cap - Math.min(held.length, heldShare));
+  const heldTake = Math.min(held.length, cap - otherTake);
+  // The order lookups are made in: held work oldest first, then the others in turn from the cursor.
+  const schedule = [...held.slice(0, heldTake), ...rotated.slice(0, otherTake)];
+  const othersKeys = new Set(others.map((p) => p.key));
+
+  const results = new Map<string, GroupObservation>();
+  let stop: string | null = null;
+  // The cursor moves past the last of the others actually asked, so one cut short by the deadline is first next run.
+  let lastOtherAsked: string | null = null;
+  for (const { site, applicants, key } of schedule) {
+    const skip = (error: string) => results.set(key, { siteId: site.id, applicants, ok: false, error, openDates: [], fetchedAt: null });
+    if (stop) {
+      skip(stop);
+      continue;
+    }
+    if (!more()) {
+      skip('skipped: the run ran out of time');
+      continue;
+    }
+    if (othersKeys.has(key)) lastOtherAsked = key;
+    try {
+      const a = await upstream.availability({ siteId: site.id, applicants });
+      results.set(key, { siteId: site.id, applicants, ok: true, error: null, openDates: [...a.availableDates].sort(), fetchedAt: a.fetchedAt });
+    } catch (err) {
+      skip(message(err));
+      if (err instanceof CircuitOpenError) stop = 'skipped: the rate limiter paused requests';
     }
   }
+  if (lastOtherAsked !== null) await kv.set(cursorKey, lastOtherAsked);
+  // Every pair is reported, in the catalogue's order; one not scheduled was over the cap.
+  const groups: GroupObservation[] = pairs.map(
+    ({ site, applicants, key }) => results.get(key) ?? { siteId: site.id, applicants, ok: false, error: `skipped: more than ${cap} group lookups this run`, openDates: [], fetchedAt: null },
+  );
   return groups;
 }
 
@@ -594,7 +639,11 @@ async function abroadPass(
   const maxPosts = Math.min(ABROAD_POSTS_PER_RUN, ABROAD_REQUESTS_PER_RUN - catalog.steps);
   const { observations, circuitOpen } = await scanAbroad({ kv, upstream, now, more, holdLock, maxPosts, all: deps.abroadSweep === true });
   const followed = new Set<number>();
-  for (const o of observations) if ((await kv.sMembers(K.siteSubscribers(o.id))).length > 0) followed.add(o.id);
+  for (const o of observations) {
+    const byEmail = (await kv.sMembers(K.siteSubscribers(o.id))).length > 0;
+    const byDevice = !byEmail && (await kv.sMembers(K.devSite(o.id)).catch(() => [] as string[])).length > 0;
+    if (byEmail || byDevice) followed.add(o.id);
+  }
   await writeAbroadStatus(kv, observations, now(), (id) => followed.has(id));
 
   const failed = observations.filter((o) => !o.ok).length;
@@ -605,7 +654,7 @@ async function abroadPass(
     const d = describePost(post.name, post.country);
     return { ...o, name: `${d.place} (${d.detail})` };
   });
-  const groups = trusted ? await scanGroups(kv, upstream, sites, loadSubscriber, ABROAD_GROUP_CAP, more) : [];
+  const groups = trusted ? await scanGroups(deps, upstream, sites, loadSubscriber, ABROAD_GROUP_CAP, ABROAD_HELD_SHARE, K.scanAbroadCursor, more) : [];
   const scan: Scan = {
     schema: SCAN_SCHEMA,
     runId,
@@ -620,7 +669,7 @@ async function abroadPass(
   let queued = 0;
   if (trusted) {
     await holdLock();
-    queued = await queueAlerts(deps, scan, now, loadSubscriber);
+    queued = await queueAlerts(deps, scan, now, loadSubscriber, 'abroad');
   } else if (observations.length > 0) {
     log.warn('posts abroad: too many failed this run; no alerts from them', { runId, failed, circuitOpen });
   }
@@ -711,7 +760,7 @@ async function writeStatus(kv: Kv, scan: Scan) {
  * Update baselines, find dates that just opened, and queue one email per
  * subscriber. Everything is read first and written in one transaction.
  */
-async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadSubscriber: LoadSubscriber) {
+async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadSubscriber: LoadSubscriber, kind: 'domestic' | 'abroad') {
   const { kv, log } = deps;
   const ops: WriteOp[] = [];
   const openings: { site: SiteObservation; applicants: number; dates: string[] }[] = [];
@@ -788,7 +837,10 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
   }
   for (const job of jobs.values()) job.openings.sort((a, b) => a.name.localeCompare(b.name));
   ops.push({ op: 'rPush', key: K.outbox, values: [...jobs.values()].map((j) => sealJob(j, deps.keys.token)) });
-  await kv.write(ops);
+  await writeQueue(
+    { kv, log, now },
+    { run: scan.runId, ops, batchId: `${scan.runId}:${kind}`, stamp: queued, openings: openings.map((o) => ({ siteId: o.site.id, applicants: o.applicants, dates: o.dates })) },
+  );
   log.info('alerts queued', {
     runId: scan.runId,
     openings: openings.map((o) => `${o.site.id}x${o.applicants}:${o.dates.length}`),
@@ -798,19 +850,23 @@ async function queueAlerts(deps: CheckDeps, scan: Scan, now: () => number, loadS
 }
 
 type DeliveryScan = Pick<Scan, 'healthy' | 'sites' | 'groups'>;
-type DeliveryCheck = { checkedAt: string; dates: Map<number, Set<string>> };
+export type DeliveryCheck = { checkedAt: string; dates: Map<number, Set<string>>; times: Map<number, string> };
 
 /** Proof comes only from successful observations in this run, never a Redis baseline. */
-function deliveryChecks(scans: readonly DeliveryScan[]): Map<number, DeliveryCheck> {
+export function deliveryChecks(scans: readonly DeliveryScan[]): Map<number, DeliveryCheck> {
   const checks = new Map<number, DeliveryCheck>();
   for (const scan of scans) {
     if (!scan.healthy) continue;
     for (const site of scan.sites) {
       if (!site.ok || !site.fetchedAt || !Number.isFinite(Date.parse(site.fetchedAt))) continue;
-      checks.set(site.id, { checkedAt: site.fetchedAt, dates: new Map([[1, new Set(site.openDates)]]) });
+      checks.set(site.id, { checkedAt: site.fetchedAt, dates: new Map([[1, new Set(site.openDates)]]), times: new Map([[1, site.fetchedAt]]) });
     }
     for (const group of scan.groups) {
-      if (group.ok) checks.get(group.siteId)?.dates.set(group.applicants, new Set(group.openDates));
+      const check = checks.get(group.siteId);
+      if (!group.ok || !check) continue;
+      check.dates.set(group.applicants, new Set(group.openDates));
+      // Older group records have no time of their own: the office's stands in.
+      check.times.set(group.applicants, group.fetchedAt && Number.isFinite(Date.parse(group.fetchedAt)) ? group.fetchedAt : check.checkedAt);
     }
   }
   return checks;
@@ -1142,3 +1198,5 @@ function splitByOpen(checks: ReadonlyMap<number, DeliveryCheck>, applicants: num
   }
   return { open, closed };
 }
+
+export const scanGroupsForTest = scanGroups;

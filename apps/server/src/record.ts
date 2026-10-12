@@ -117,9 +117,12 @@ const content = (site: Observed) => JSON.stringify({ ...site, fetchedAt: null })
 
 /** The run's own fields as compared (not its times or id). */
 function runContent(run: Pick<ScanRecord, 'source' | 'healthy' | 'problems' | 'groups'>) {
-  const groups = [...run.groups].sort((a, b) => a.siteId - b.siteId || a.applicants - b.applicants);
+  // Lookup times are not content: a group's fetchedAt is left out of the comparison (the record still stores it).
+  const groups = [...run.groups].map(({ fetchedAt: _t, ...g }) => g).sort((a, b) => a.siteId - b.siteId || a.applicants - b.applicants);
   return JSON.stringify({ source: run.source, healthy: run.healthy, problems: run.problems, groups });
 }
+
+export const runContentForTest = runContent;
 
 function parseHead(raw: string | null): Head | null {
   if (!raw) return null;

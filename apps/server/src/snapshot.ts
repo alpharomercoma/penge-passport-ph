@@ -31,6 +31,8 @@ export interface GroupObservation {
   ok: boolean;
   error: string | null;
   openDates: string[];
+  /** When the lookup answered (Availability.fetchedAt): a notification says when its dates were checked. */
+  fetchedAt?: string | null;
 }
 
 export interface Scan {

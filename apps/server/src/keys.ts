@@ -30,6 +30,8 @@ export const K = {
   recordLost: (stream: string) => `${P}record:${stream}:lost`,
   status: `${P}status`,
   outbox: `${P}outbox`,
+  /** Set as a queueing write's last write (one per run and domestic/abroad): a retry of it applies nothing twice. */
+  queueMark: (name: string) => `${P}queued:${name}`,
   /** One person's alerts waiting for their next email (signed, like the outbox), and who has any. */
   held: (subscriberId: string) => `${P}held:${subscriberId}`,
   heldSubscribers: `${P}held-subs`,

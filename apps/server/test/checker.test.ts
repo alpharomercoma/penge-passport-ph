@@ -446,16 +446,16 @@ describe('checker, found by adversarial review', () => {
     await w.subscribe('ana@example.com', [486]);
     await w.run();
     w.upstream.open.set('486', ['2026-10-05']);
-    // The commit (the write that queues alerts) fails once, as if the process died there.
-    const write = w.kv.write.bind(w.kv);
+    // The commit (the queueing script, which writes the outbox) fails once, as if the process died there.
+    const script = w.kv.script.bind(w.kv);
     let failed = false;
-    w.kv.write = async (ops) => {
-      if (!failed && ops.some((o) => o.op === 'rPush' && o.key === K.outbox)) {
+    w.kv.script = (async (def: { name: string }, ...rest: unknown[]) => {
+      if (!failed && def.name === 'dev-queue-write') {
         failed = true;
         throw new Error('killed');
       }
-      return write(ops);
-    };
+      return (script as (...a: unknown[]) => unknown)(def, ...rest);
+    }) as typeof w.kv.script;
     await expect(w.run()).rejects.toThrow('killed');
     expect(w.mailer.sent).toHaveLength(0);
     await w.run();
@@ -1552,7 +1552,18 @@ describe('verification boundaries', () => {
       }
     }
     await w.run();
-    // The first ten group queries consume the cap before Davao's groups.
+    // Held work goes first, at most GROUP_HELD_SHARE (6) lookups of the 10: six pairs with older held work take them,
+    // so Davao's, the seventh, is skipped by the cap.
+    const older: [number, number][] = [[10, 2], [10, 3], [10, 4], [10, 5], [486, 2], [486, 3]];
+    for (const [k, [site, applicants]] of older.entries()) {
+      const other = await w.subscribe(`held${k}@example.com`, [site], applicants);
+      const name = SITES.find((x) => x.id === site)!.name;
+      const held = { id: `older-${k}`, createdAt: w.t.now() - (10 - k) * 60_000, subscriberId: other, applicants, openings: [{ id: site, name, dates: ['2026-10-05'] }] };
+      await w.kv.write([
+        { op: 'set', key: K.held(other), value: sealJob(held, keys.token) },
+        { op: 'sAdd', key: K.heldSubscribers, members: [other] },
+      ]);
+    }
     const id = await w.subscribe('juan@example.com', [30], 5);
     const job = { id: 'group-held', createdAt: w.t.now(), subscriberId: id, applicants: 5, openings: [{ id: 30, name: 'Davao', dates: ['2026-10-05'] }] };
     await w.kv.write([
@@ -1562,8 +1573,7 @@ describe('verification boundaries', () => {
     ]);
     const report = await w.run();
     expect(report.healthy).toBe(true);
-    expect(report.delivery?.sent).toBe(0);
-    expect(w.mailer.sent).toHaveLength(0);
+    expect(w.mailer.sent.some((m) => JSON.stringify(m).includes('juan@example.com'))).toBe(false);
     expect(await w.kv.get(K.held(id))).not.toBeNull();
     expect(w.sink.scans.at(-1)!.groups.find((g) => g.siteId === 30 && g.applicants === 5)).toMatchObject({ ok: false, error: expect.stringContaining('skipped:') });
   });
