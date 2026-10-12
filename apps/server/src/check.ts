@@ -8,7 +8,6 @@ import { loadConfig, requireR2 } from './config.ts';
 import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
 import { createMailer } from './mailer.ts';
-import { webPushTransport } from './push/sender.ts';
 import { r2Sink } from './r2.ts';
 import { noteLost } from './record.ts';
 import { createStats } from './stats.ts';
@@ -51,7 +50,6 @@ try {
     client: `${NAME}@${VERSION}`,
     stats: createStats(kv, log),
     statsEmail: config.statsEmail,
-    push: { mode: config.push.mode, transport: config.push.vapid ? webPushTransport(config.push.vapid) : null },
   });
   log.info('check finished', { ...report, mail: config.mailMode });
   process.exitCode = report.skipped || report.healthy ? 0 : 3;

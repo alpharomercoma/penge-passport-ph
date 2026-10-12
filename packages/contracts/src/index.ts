@@ -42,7 +42,7 @@ export interface SubscribeRequest {
   applicants: number;
   pace: Pace;
   /** Null from a page made before channels existed: change offices, size and pace only. */
-  channels: Channels | null;
+  channels?: Channels | null;
 }
 
 export type Field = 'email' | 'siteIds' | 'applicants' | 'pace' | 'channels' | 'form';

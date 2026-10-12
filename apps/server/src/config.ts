@@ -14,8 +14,8 @@ export interface R2Config {
 export interface PushConfig {
   mode: PushMode;
   vapid: { publicKey: string; privateKey: string; subject: string } | null;
-  /** PUSH_MODE=owner: the addresses that may turn push on while it is being tested. */
-  ownerEmails: string[];
+  /** PUSH_MODE=owner: the token the owner's link carries; new notification setups need it. */
+  ownerToken: string | null;
 }
 
 export interface Config {
@@ -100,9 +100,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('MAIL_MODE=live needs MAIL_FROM and PUBLIC_BASE_URL');
   }
 
+  if (env.PUSH_OWNER_EMAILS?.trim()) {
+    throw new ConfigError('PUSH_OWNER_EMAILS is no longer used; remove it (owner mode now uses PUSH_OWNER_TOKEN)');
+  }
   const pushModeRaw = env.PUSH_MODE?.trim() || 'off';
   if (!isPushMode(pushModeRaw)) throw new ConfigError('PUSH_MODE must be off, owner or live');
-  let push: PushConfig = { mode: 'off', vapid: null, ownerEmails: [] };
+  let push: PushConfig = { mode: 'off', vapid: null, ownerToken: null };
   if (pushModeRaw !== 'off') {
     const publicKey = need('VAPID_PUBLIC_KEY');
     const privateKey = need('VAPID_PRIVATE_KEY');
@@ -114,11 +117,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     if (!/^[A-Za-z0-9_-]{43}$/.test(privateKey)) throw new ConfigError('VAPID_PRIVATE_KEY is not a VAPID private key');
     if (!subject.startsWith('mailto:') || !normalizeEmail(subject.slice(7))) throw new ConfigError('VAPID_SUBJECT must be mailto: and an address');
-    const listed = (env.PUSH_OWNER_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-    const ownerEmails = listed.map((s) => normalizeEmail(s));
-    if (ownerEmails.some((e) => e === null)) throw new ConfigError('PUSH_OWNER_EMAILS has an address that is not valid');
-    if (pushModeRaw === 'owner' && ownerEmails.length === 0) throw new ConfigError('PUSH_MODE=owner needs PUSH_OWNER_EMAILS');
-    push = { mode: pushModeRaw, vapid: { publicKey, privateKey, subject }, ownerEmails: ownerEmails as string[] };
+    const ownerToken = env.PUSH_OWNER_TOKEN?.trim() || null;
+    if (ownerToken !== null && !/^[A-Za-z0-9_-]{32,256}$/.test(ownerToken)) {
+      throw new ConfigError('PUSH_OWNER_TOKEN must be 32 to 256 characters of A-Z, a-z, 0-9, _ and -');
+    }
+    if (pushModeRaw === 'owner' && !ownerToken) throw new ConfigError('PUSH_MODE=owner needs PUSH_OWNER_TOKEN');
+    push = { mode: pushModeRaw, vapid: { publicKey, privateKey, subject }, ownerToken };
   }
 
   const redisUrl = need('REDIS_URL');

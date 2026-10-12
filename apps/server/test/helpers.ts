@@ -153,3 +153,6 @@ export function recordingLog() {
   };
   return { log, lines };
 }
+
+/** The confirmation token in a confirmation email's link. */
+export const confirmToken = (text: string) => /\/confirm#token=([A-Za-z0-9_-]{43})/.exec(text)?.[1];

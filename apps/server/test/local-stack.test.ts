@@ -53,7 +53,7 @@ describe('the local stack', () => {
     expect((await open()).status).toBe(200);
     expect(((await (await stack.app.request('/api/offices/486/dates?applicants=1', ua)).json()) as { openDates: string[] }).openDates).toEqual([day]);
     // A second trigger for the same date is a fresh opening again.
-    const second = (await (await open()).json()) as { delivery: { push: unknown } | null };
+    const second = (await (await open()).json()) as { delivery: unknown };
     expect(second.delivery).not.toBeNull();
     await stack.close();
   });
@@ -64,7 +64,7 @@ describe('the local stack', () => {
     const res = await stack.app.request('/api/subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 Chrome/141' },
-      body: JSON.stringify({ email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: { emailOn: true, pushOn: false } }),
+      body: JSON.stringify({ email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'asap' }),
     });
     expect(res.status).toBe(202);
     expect(stack.mailer.captured.at(-1)!.text).toMatch(/\/confirm#token=/);
@@ -76,11 +76,11 @@ describe('the local stack', () => {
     const stack = await buildLocal({ kvUrl: null, dir: mkdtempSync(join(tmpdir(), 'penge-local-')) });
     const sub = await stack.app.request('/api/subscribe', {
       method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 Chrome/141' },
-      body: JSON.stringify({ email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'asap', channels: { emailOn: true, pushOn: false } }),
+      body: JSON.stringify({ email: 'juan@example.com', siteIds: [486], applicants: 1, pace: 'asap' }),
     });
     expect(sub.status).toBe(202);
     const token = /#token=([A-Za-z0-9_-]{43})/.exec(stack.mailer.captured.at(-1)!.text)![1];
-    await stack.app.request('/api/confirm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, acknowledge: { emailOn: true, pushOn: false } }) });
+    await stack.app.request('/api/confirm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
     stack.upstream.open.set(486, ['2026-10-09']);
     await stack.runOnce();
     expect(stack.mailer.captured.at(-1)!.kind).toBe('alert');

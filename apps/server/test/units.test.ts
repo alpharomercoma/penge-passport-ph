@@ -207,18 +207,23 @@ describe('config', () => {
   });
 
   it('keeps push off unless every push setting is there', () => {
-    expect(loadConfig(env).push).toEqual({ mode: 'off', vapid: null, ownerEmails: [] });
+    expect(loadConfig(env).push).toEqual({ mode: 'off', vapid: null, ownerToken: null });
     expect(() => loadConfig({ ...env, PUSH_MODE: 'live' })).toThrow(/VAPID_PUBLIC_KEY/);
     expect(() => loadConfig({ ...env, PUSH_MODE: 'sometimes' })).toThrow(/PUSH_MODE/);
   });
 
-  it('reads push settings, and owner mode needs owner addresses', () => {
+  it('reads push settings; owner mode needs an owner token of at least 32 characters', () => {
     const vapid = { VAPID_PUBLIC_KEY: 'B'.repeat(87), VAPID_PRIVATE_KEY: 'p'.repeat(43), VAPID_SUBJECT: 'mailto:alerts@example.com' };
-    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner' })).toThrow(/PUSH_OWNER_EMAILS/);
-    const c = loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner', PUSH_OWNER_EMAILS: 'Juan@Example.com, ana@example.com' });
-    expect(c.push.mode).toBe('owner');
-    expect(c.push.ownerEmails).toEqual(['juan@example.com', 'ana@example.com']);
+    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner' })).toThrow(/PUSH_OWNER_TOKEN/);
+    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner', PUSH_OWNER_TOKEN: 'x'.repeat(31) })).toThrow(/PUSH_OWNER_TOKEN/);
+    expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner', PUSH_OWNER_TOKEN: `${'x'.repeat(31)} ` + 'y' })).toThrow(/PUSH_OWNER_TOKEN/);
+    const c = loadConfig({ ...env, ...vapid, PUSH_MODE: 'owner', PUSH_OWNER_TOKEN: 'a'.repeat(40) });
+    expect(c.push).toMatchObject({ mode: 'owner', ownerToken: 'a'.repeat(40) });
     expect(() => loadConfig({ ...env, ...vapid, PUSH_MODE: 'live', VAPID_SUBJECT: 'https://x' })).toThrow(/VAPID_SUBJECT/);
+  });
+
+  it('refuses the removed PUSH_OWNER_EMAILS, so a stale server.env is caught at start', () => {
+    expect(() => loadConfig({ ...env, PUSH_OWNER_EMAILS: 'juan@example.com' })).toThrow(/PUSH_OWNER_EMAILS is no longer used/);
   });
 
   it('reads the device limits, with defaults', () => {

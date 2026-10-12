@@ -1,4 +1,4 @@
-// The local push test stack's server: the real API and the real checker, with a
+// The local test stack's server: the real API and the real checker, with a
 // throwaway Valkey (or MemoryKv), a capturing mailer, a fake DFA and no R2.
 // It never reads .secrets/: its keys live in the directory it is given.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,6 @@ import { K } from '../src/keys.ts';
 import { connectRedis, type Kv, MemoryKv, type WriteOp } from '../src/kv.ts';
 import { log } from '../src/log.ts';
 import { createLookups } from '../src/lookups.ts';
-import { webPushTransport } from '../src/push/sender.ts';
 import type { SnapshotSink } from '../src/r2.ts';
 import { CaptureMailer } from './capture-mailer.ts';
 import { FakeDfa } from './fake-upstream.ts';
@@ -47,7 +46,7 @@ async function localKv(url: string): Promise<Kv> {
     throw new Error('the local stack only uses the throwaway Valkey on 127.0.0.1:6391');
   }
   const kv = await connectRedis(url, (err) => log.error('redis', { err }));
-  if ((await kv.get(K.pushTestMark)) !== '1') {
+  if ((await kv.get(K.testMark)) !== '1') {
     await kv.close();
     throw new Error('that Valkey is not marked disposable (scripts/local-stack.sh marks it); refusing to use it');
   }
@@ -59,18 +58,17 @@ export async function buildLocal(o: { kvUrl: string | null; dir: string }) {
   const { keys, vapid } = secrets(o.dir);
   const mailer = new CaptureMailer(o.dir);
   const upstream = new FakeDfa();
-  const push: PushConfig = { mode: 'live', vapid, ownerEmails: [] };
-  const transport = webPushTransport(vapid);
+  const push: PushConfig = { mode: 'live', vapid, ownerToken: null };
   // Lookups (group dates, hours) answered by the fake DFA: no network here either.
   const lookups = createLookups({ kv, upstream, log });
   const app = createApi({
-    kv, keys, mailer, log, publicBaseUrl: BASE, push, pushTransport: transport, lookups,
+    kv, keys, mailer, log, publicBaseUrl: BASE, push, lookups,
     // With MemoryKv the API is called in-process (tests): there is no socket to read an address from.
     ...(o.kvUrl ? {} : { clientIp: () => '127.0.0.1' }),
   });
   const deps: CheckDeps = {
     kv, upstream, sink: noSink, mailer, keys, log, publicBaseUrl: BASE,
-    mailDailyLimit: 2500, alertsPerSubscriberPerDay: 288, client: 'penge-local', push: { mode: 'live', transport },
+    mailDailyLimit: 2500, alertsPerSubscriberPerDay: 288, client: 'penge-local',
   };
   let n = 0;
   const runOnce = () => runCheck({ ...deps, runId: `local${++n}-${Date.now()}` });

@@ -3,11 +3,8 @@
 import {
   type AbroadResponse,
   type ApiError,
-  type ConfirmPreview,
   type ConfirmResponse,
-  type DeviceState,
   describePost,
-  isCredential,
   isCalendarDate,
   isToken,
   isUnsubscribeToken,
@@ -25,7 +22,6 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { abroadResponse, catalogPosts } from './abroad.ts';
-import type { StoredStatus } from './checker.ts';
 import type { PushConfig } from './config.ts';
 import { emailIndex, signUnsubscribe } from './crypto.ts';
 import { K, manilaDay } from './keys.ts';
@@ -34,13 +30,8 @@ import { API_LIMITS, hit, ipBucket, type Limit } from './limits.ts';
 import type { Logger } from './log.ts';
 import { LookupUnavailable, type Lookups, SCAN_RECENT_SECONDS } from './lookups.ts';
 import type { Mailer } from './mailer.ts';
-import { listDevices } from './push/devices.ts';
-import { checkPushSubscription } from './push/endpoint.ts';
-import { parseMeta } from './push/atomic.ts';
-import { credentialHash, deviceCall, findDevice, turnOffDevice } from './push/register.ts';
-import { PUSH_TIMEOUT_MS, PushPool, type PushTransport, pushDecision } from './push/sender.ts';
 import { type Count, isPerson, type Stats } from './stats.ts';
-import { confirm, createDeletion, createPending, deleteWithToken, type Keys, load, previewPending, unsubscribe } from './subscribers.ts';
+import { confirm, createDeletion, createPending, deleteWithToken, type Keys, previewPending, unsubscribe } from './subscribers.ts';
 import { confirmationEmail, deletionEmail } from './templates.ts';
 
 export interface ApiDeps {
@@ -56,15 +47,16 @@ export interface ApiDeps {
   lookups?: Lookups;
   /** The day's numbers; without it nothing is counted. */
   stats?: Stats;
-  /** Whether push can be turned on, and the VAPID key browsers subscribe with. */
+  /** Whether notifications can be set up, and the key browsers subscribe with (the status reports both). */
   push: PushConfig;
-  /** Sends pushes; without it test notifications answer 404. */
-  pushTransport?: PushTransport;
 }
 
 export const SUBSCRIBE_MESSAGE =
   'Check your inbox for a confirmation link. It can take a few minutes; look in spam too. The alerts start once you confirm.';
 export const DELETION_MESSAGE = 'Check your inbox for a link to stop alerts and delete your address. It can take a few minutes; look in spam too. Nothing changes until you press the button in the link.';
+
+/** What a page of the channel release (05cee09) is told when it asks for anything but email. */
+export const LEGACY_RELOAD = 'This page is out of date. Reload it.';
 
 const LOOPBACK = /^(?:127\.|::1$|::ffff:127\.)/;
 const SITES_CACHE_MS = 60_000;
@@ -93,8 +85,6 @@ export function createApi(deps: ApiDeps) {
   const { kv, keys, mailer, log } = deps;
   const now = deps.now ?? Date.now;
   const app = new Hono();
-  /** Push for everyone (live), or only the owner's test addresses (owner). */
-  const pushAllowed = (email: string) => deps.push.mode === 'live' || (deps.push.mode === 'owner' && deps.push.ownerEmails.includes(email));
 
   let sitesCache: { at: number; sites: SiteSummary[] } | null = null;
   async function sites(): Promise<SiteSummary[] | null> {
@@ -115,7 +105,7 @@ export function createApi(deps: ApiDeps) {
       ? deps.clientIp(c)
       : clientAddress(getConnInfo(c).remote.address ?? 'unknown', c.req.header('x-forwarded-for'));
 
-  const fail = (c: Context, status: 400 | 403 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: string, fields?: ApiError['fields']) =>
+  const fail = (c: Context, status: 400 | 403 | 404 | 409 | 410 | 413 | 415 | 429 | 500 | 503, error: string, fields?: ApiError['fields']) =>
     c.json<ApiError>(fields ? { error, fields } : { error }, status);
 
   // Counters are kept per network address, under a keyed hash of it: Redis
@@ -162,7 +152,7 @@ export function createApi(deps: ApiDeps) {
     seen(c);
     warm(c);
     const raw = await kv.get(K.status);
-    const stored = raw ? (JSON.parse(raw) as StoredStatus) : null;
+    const stored = raw ? (JSON.parse(raw) as Omit<StatusResponse, 'mailLive' | 'push' | 'vapidPublicKey'>) : null;
     return c.json<StatusResponse>({
       checkedAt: stored?.checkedAt ?? null,
       lastHealthyAt: stored?.lastHealthyAt ?? null,
@@ -185,7 +175,7 @@ export function createApi(deps: ApiDeps) {
   async function officeFrom(raw: string | undefined) {
     if (!raw || !/^\d{1,7}$/.test(raw)) return null;
     const stored = await kv.get(K.status);
-    const status = stored ? (JSON.parse(stored) as StoredStatus) : null;
+    const status = stored ? (JSON.parse(stored) as Omit<StatusResponse, 'mailLive' | 'push' | 'vapidPublicKey'>) : null;
     const site = status?.sites.find((s) => s.id === Number(raw));
     if (!site) {
       // A post abroad, checked about hourly: one never checked yet has nothing
@@ -294,16 +284,20 @@ export function createApi(deps: ApiDeps) {
     if (await limited(c, API_LIMITS.subscribePerIp)) return fail(c, 429, TOO_MANY);
     const parsed = await jsonBody(c);
     if (!parsed.ok) return parsed.res;
+    // A page of the channel release sends `channels`; only "email, no notifications" is still something we do.
+    const legacy = (parsed.body as { channels?: unknown } | null)?.channels;
+    if (legacy !== undefined && legacy !== null) {
+      const ch = legacy as { emailOn?: unknown; pushOn?: unknown };
+      if (typeof legacy !== 'object' || ch.emailOn !== true || ch.pushOn !== false) {
+        return c.json<ApiError>({ error: LEGACY_RELOAD, code: 'reload' }, 409);
+      }
+    }
     const list = await sites();
     if (!list) return fail(c, 503, 'The site list is not ready yet. Try again in a few minutes.');
     const checked = validateSubscribe(parsed.body, new Set(list.map((s) => s.id)));
     if (!checked.ok) return fail(c, 400, 'Please fix the highlighted fields.', checked.errors);
 
     const request = checked.value;
-    const ch = request.channels;
-    if (ch?.pushOn && !pushAllowed(request.email)) {
-      return fail(c, 400, 'Please fix the highlighted fields.', { channels: 'Notifications are not available yet.' });
-    }
     const accepted = () => c.json<SubscribeResponse>({ message: SUBSCRIBE_MESSAGE }, 202);
     // Limits on what reaches an inbox are silent: the answer is the same either
     // way, so the form cannot be used to learn anything about an address.
@@ -318,21 +312,12 @@ export function createApi(deps: ApiDeps) {
 
     const token = await createPending(kv, keys, request, now());
     const chosen = list.filter((s) => request.siteIds.includes(s.id));
-    // The devices this address already has with notifications keep them whatever this request says.
-    const existing = await kv.get(K.emailIndex(emailIndex(request.email, keys.index)));
-    const devicesKept = existing && request.channels ? (await listDevices(kv, existing)).filter((d) => d.meta.state === 'r').length : 0;
-    // A page from before channels keeps the address's email setting: word the email for it.
-    const emailOnNow = existing && !request.channels ? (await load(kv, existing))?.emailOn : undefined;
     const content = confirmationEmail({
       confirmUrl: `${deps.publicBaseUrl}/confirm#token=${token}`,
       deletionUrl: `${deps.publicBaseUrl}/delete-data`,
       sites: chosen,
       applicants: request.applicants,
       pace: request.pace,
-      ...(emailOnNow === false ? { emailOn: false } : {}),
-      ...(request.channels
-        ? { channels: { emailOn: request.channels.emailOn, pushOn: request.channels.pushOn, device: request.channels.device, requestedAt: new Date(now()).toISOString(), devicesKept } }
-        : {}),
     });
     try {
       await mailer.send({ ...content, to: request.email, kind: 'confirm' });
@@ -348,29 +333,15 @@ export function createApi(deps: ApiDeps) {
     if (await limited(c, API_LIMITS.tokenPerIp)) return fail(c, 429, TOO_MANY);
     const parsed = await jsonBody(c);
     if (!parsed.ok) return parsed.res;
-    const body = parsed.body as { token?: unknown; acknowledge?: { emailOn?: unknown; pushOn?: unknown } } | null;
-    const token = body?.token;
+    const token = (parsed.body as { token?: unknown } | null)?.token;
     if (!isToken(token)) return fail(c, 400, 'That link is not valid. Copy the whole link from the email.');
-    const a = body?.acknowledge;
-    const acknowledge = a && typeof a.emailOn === 'boolean' && typeof a.pushOn === 'boolean' ? { emailOn: a.emailOn, pushOn: a.pushOn } : undefined;
-    const result = await confirm(kv, keys, token, now(), acknowledge, { pushAllowed });
-    if (result.status === 'invalid') return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
-    if (result.status === 'reload') {
-      return c.json<ApiError>({ error: 'This page is out of date. Reload it, then open the confirmation link from your email again.', code: 'reload' }, 409);
-    }
-    if (result.status === 'full') {
-      return c.json<ApiError>({ error: 'This alert already has notifications on 5 devices. Turn them off on one of them first.', code: 'full' }, 409);
-    }
-    if (result.status === 'push-unavailable') {
-      const why = {
-        owned: 'This device already gets alerts for another email address. Turn notifications off for that address on this device, then fill in the form again.',
-        revoked: 'Notifications were turned off on this device. Fill in the form again to turn them back on, or choose email.',
-        off: 'Notifications are not available right now. Fill in the form again with email on.',
-      }[result.reason];
-      return c.json<ApiError>({ error: why, code: 'push-unavailable' }, 409);
+    const result = await confirm(kv, token, now());
+    if (result.status === 'invalid') {
+      return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
     }
     deps.stats?.count(result.status === 'confirmed' ? 'confirmed' : 'updated');
-    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: result.channels });
+    // Pages of the channel release read `channels`; pages before it ignore it.
+    return c.json<ConfirmResponse>({ status: result.status, siteIds: result.siteIds, applicants: result.applicants, pace: result.pace, channels: { emailOn: true, pushOn: false, push: 'none' } });
   });
 
   app.post('/api/confirm/preview', async (c) => {
@@ -381,62 +352,14 @@ export function createApi(deps: ApiDeps) {
     if (!isToken(token)) return fail(c, 400, 'That link is not valid. Copy the whole link from the email.');
     const preview = await previewPending(kv, token);
     if (!preview) return fail(c, 404, 'That link has expired or was already used. Subscribe again to get a new one.');
-    return c.json<ConfirmPreview>(preview);
+    return c.json(preview);
   });
 
-  /**
-   * A device call: counted per network, and per credential unless it turns the device off
-   * (turning off must always work for the device's holder; it only removes).
-   */
-  async function deviceRequest(c: Context, opts: { perCredential: boolean } = { perCredential: true }): Promise<{ ok: true; credential: string; body: Record<string, unknown> } | { ok: false; res: Response }> {
-    if (await limited(c, API_LIMITS.devicePerIp)) return { ok: false, res: fail(c, 429, TOO_MANY) };
-    const parsed = await jsonBody(c);
-    if (!parsed.ok) return parsed;
-    const body = (parsed.body ?? {}) as Record<string, unknown>;
-    if (!isCredential(body.credential)) return { ok: false, res: fail(c, 400, 'That device answer is not valid.') };
-    if (opts.perCredential && !(await hit(kv, API_LIMITS.devicePerCredential, credentialHash(body.credential), now()))) return { ok: false, res: fail(c, 429, TOO_MANY) };
-    return { ok: true, credential: body.credential, body };
-  }
-
-  app.post('/api/push/device', async (c) => {
-    const r = await deviceRequest(c);
-    if (!r.ok) return r.res;
-    let subscription = null;
-    let revision: number | null = null;
-    if (r.body.subscription !== undefined) {
-      subscription = checkPushSubscription(r.body.subscription);
-      revision = typeof r.body.revision === 'number' && Number.isSafeInteger(r.body.revision) && r.body.revision >= 1 ? r.body.revision : null;
-      if (!subscription || revision === null) return fail(c, 400, 'That device answer is not valid.');
-    }
-    const state = await deviceCall(kv, keys, { credential: r.credential, subscription, revision, now: now() });
-    return c.json<{ state: DeviceState }>({ state });
-  });
-
-  app.delete('/api/push/device', async (c) => {
-    const r = await deviceRequest(c, { perCredential: false });
-    if (!r.ok) return r.res;
-    const { noChannel } = await turnOffDevice(kv, r.credential);
-    return c.json({ ok: true, noChannel });
-  });
-
-  app.post('/api/push/test', async (c) => {
-    const r = await deviceRequest(c);
-    if (!r.ok) return r.res;
-    const hash = credentialHash(r.credential);
-    const found = await findDevice(kv, hash);
-    const subscriber = found ? await load(kv, found.subscriberId) : null;
-    const meta = found ? (await kv.hGetAll(K.pushMeta(found.subscriberId)))[found.deviceId] : undefined;
-    if (!found || !subscriber || !meta || parseMeta(meta).state !== 'r' || !deps.pushTransport) {
-      return fail(c, 404, 'Notifications are not on for this device yet.');
-    }
-    if (await kv.get(K.pushPaused)) return fail(c, 503, 'Notifications are paused for maintenance. Try again later.');
-    if (!(await hit(kv, API_LIMITS.testPerDevice, hash, now()))) return fail(c, 429, 'You can send 3 test notifications an hour. Try again later.');
-    const pool = new PushPool({ transport: deps.pushTransport, inFlight: 1, budgetMs: PUSH_TIMEOUT_MS * 2, timeoutMs: PUSH_TIMEOUT_MS, now });
-    const payload = JSON.stringify({ v: 1, title: 'Test notification', body: 'Notifications work on this device.', tag: 'test', url: {} });
-    const { any } = await pushDecision({ kv, keys, pool, log, now }, { subscriberId: found.subscriberId, index: subscriber.index, payload, onlyDeviceId: found.deviceId });
-    if (any === 'none') return fail(c, 404, 'That test did not reach this device. Turn notifications off and on again.');
-    return c.json({ ok: true });
-  });
+  // The channel release's device routes: its pages are told to reload.
+  const gone = (c: Context) => c.json<ApiError>({ error: LEGACY_RELOAD, code: 'reload' }, 410);
+  app.post('/api/push/device', gone);
+  app.delete('/api/push/device', gone);
+  app.post('/api/push/test', gone);
 
   app.post('/api/deletion-request', async (c) => {
     if (mailer.mode !== 'live') return fail(c, 503, 'Email links are not switched on yet. Try again soon.');
