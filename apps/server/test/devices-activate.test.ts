@@ -53,6 +53,16 @@ for (const [name, make] of valkeyTargets()) {
       expect(op).not.toHaveProperty('nh');
     });
 
+    it('ends a new alert as full when the ceiling fell below it since admission (maxmemory lowered), releasing its reservation', async () => {
+      const kv = await make();
+      const s = await start(kv, { alertLimit: 10 });
+      expect(await kv.hGetAll(K.devRecords)).toMatchObject({ alerts: '1' });
+      const r = await ack(kv, s, { alertLimit: 0 });
+      expect(r.result).toBe('full');
+      expect(await kv.get(K.devCred(s.hash))).toBeNull();
+      expect(await kv.hGetAll(K.devRecords)).toMatchObject({ alerts: '0' });
+    });
+
     it('answers a recorded result again for free, an unknown op as unknown, a wrong nonce as invalid', async () => {
       const kv = await make();
       const s = await start(kv);

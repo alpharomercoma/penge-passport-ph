@@ -144,9 +144,7 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
       };
     },
     async memory() {
-      const info = await client.info('memory');
-      const read = (name: string) => Number(new RegExp(`^${name}:(\\d+)`, 'm').exec(info)?.[1] ?? 0);
-      return { used: read('used_memory'), max: read('maxmemory') };
+      return parseMemoryInfo(await client.info('memory'));
     },
     async write(ops) {
       if (ops.length === 0) return;
@@ -252,6 +250,16 @@ class ZSet {
 type Entry = { value: string | Map<string, string> | Set<string> | string[] | ZSet; expiresAt: number | null };
 
 /** In-memory twin of the Redis subset above, for tests and local runs. */
+/** used_memory and maxmemory from INFO memory: both must be there, whole numbers, or the reading is refused (never 0). */
+export function parseMemoryInfo(info: string): { used: number; max: number } {
+  const read = (name: string) => {
+    const m = new RegExp(`^${name}:(\\d+)\\r?$`, 'm').exec(info);
+    if (!m) throw new Error(`INFO memory has no readable ${name}`);
+    return Number(m[1]);
+  };
+  return { used: read('used_memory'), max: read('maxmemory') };
+}
+
 /** Patterns use only * and ?: brackets and escapes, which MemoryKv does not read as Valkey does, are refused on both. */
 function plainGlob(pattern: string) {
   if (/[[\]\\]/.test(pattern)) throw new Error(`scan patterns use only * and ?: ${pattern}`);

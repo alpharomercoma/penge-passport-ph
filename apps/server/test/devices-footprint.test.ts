@@ -2,7 +2,7 @@
 // before and after, so the allocator and the tables count). Runs only with DEVICE_TEST_VALKEY.
 import { createClient } from '@redis/client';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config.ts';
+import { memoryCeiling, SHARE } from '../src/devices/capacity.ts';
 import { DEVICE_COUNTERS } from '../src/devices/counters.ts';
 import { DEVICE_LIMITS, rateKeys } from '../src/devices/limits.ts';
 import { CHUNK_WORK } from '../src/devices/queue.ts';
@@ -16,13 +16,23 @@ import { valkeyTargets } from './valkey.ts';
 
 const valkey = valkeyTargets().find(([name]) => name === 'Valkey');
 const T0 = Date.parse('2026-10-06T02:00:00Z');
-const BUDGET = 0.25 * 64 * 1024 * 1024;
+const MB = 1024 * 1024;
 type Kv = Awaited<ReturnType<NonNullable<typeof valkey>[1]>>;
 const usage = (kv: Kv, key: string) =>
   kv.script({ name: 'usage', lua: "#!lua\nreturn tostring(redis.call('MEMORY', 'USAGE', KEYS[1], 'SAMPLES', '0') or 0)" }, [key], []).then(Number);
-const b64 = () => Buffer.alloc(32, 1).toString('base64');
-// The configuration's ceilings (DEVICE_ALERT_LIMIT and DEVICE_RECORD_LIMIT cannot be set higher).
-const ceilings = () => loadConfig({ REDIS_URL: 'redis://localhost:6379', EMAIL_ENC_KEY: b64(), EMAIL_HMAC_KEY: b64(), TOKEN_SECRET: b64() }).devices;
+/**
+ * Waits until Valkey has finished freeing what a wipe released in the background (lazyfree), so used_memory is this
+ * test's alone; fails if it never settles.
+ */
+async function settled(admin: { info(section: string): Promise<string> }) {
+  for (let i = 0; i < 400; i++) {
+    if (Number(/lazyfree_pending_objects:(\d+)/.exec(await admin.info('memory'))?.[1] ?? 0) === 0) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error('Valkey did not finish freeing the last test\'s data');
+}
+// The ceilings a server with this maxmemory runs with (devices/capacity.ts; no setting can go above them).
+const ceilings = (maxmemory: number) => memoryCeiling(maxmemory);
 
 /** The largest subscription the server accepts (its stored endpoint 1,024 characters, nothing JSON escapes), one per n. */
 function largestSubscription(n = 0) {
@@ -105,13 +115,17 @@ describe.skipIf(!valkey)('the largest footprint, measured', () => {
   });
 
   // Every alert on the same ten offices (ten large index sets), or each on ten of its own (thousands of small ones).
-  it.each(['concentrated', 'dispersed'] as const)("holds the whole namespace at its ceilings, the limiter's worst case and 40 days of numbers within 25% of 64 MB (offices %s)", async (layout) => {
+  it.each([64, 128, 256].flatMap((mb) => (['concentrated', 'dispersed'] as const).map((layout) => [mb, layout] as const)))("holds the whole namespace at the ceilings for %s MB, the limiter's worst case and 40 days of numbers within a quarter of it (offices %s)", async (mb, layout) => {
     const kv = await valkey![1]();
     const admin = createClient({ url: process.env.DEVICE_TEST_VALKEY! });
     await admin.connect();
     const used = async () => Number(/used_memory:(\d+)/.exec(await admin.info('memory'))![1]);
     try {
-      const c = ceilings();
+      const c = ceilings(mb * MB);
+      const budget = SHARE * mb * MB;
+      // Room for the fill (at most a quarter of mb) in the throwaway Valkey; set back to 64 MB below.
+      await admin.configSet('maxmemory', `${Math.max(mb, 64)}mb`);
+      await settled(admin);
       const before = await used();
       // Alerts at their largest, each on its own subscription with an operation in progress; the remaining units as the
       // largest one-unit record.
@@ -169,12 +183,13 @@ describe.skipIf(!valkey)('the largest footprint, measured', () => {
       }
       for (let d = 0; d < 40; d++) await kv.write([{ op: 'hSet', key: K.statsV2(`2026-09-${String((d % 30) + 1).padStart(2, '0')}x${d}`), fields }]);
       const total = (await used()) - before;
-      console.log(JSON.stringify({ layout, alertLimit: c.alertLimit, recordLimit: c.recordLimit, counters: names.length, total, budget: BUDGET }));
-      expect(total).toBeLessThanOrEqual(BUDGET);
+      console.log(JSON.stringify({ mb, layout, alertLimit: c.alertLimit, recordLimit: c.recordLimit, counters: names.length, total, budget }));
+      expect(total).toBeLessThanOrEqual(budget);
     } finally {
+      await admin.configSet('maxmemory', '64mb');
       await admin.close();
     }
-  }, 120_000);
+  }, 300_000);
 
   it('at its memory limit: refuses scripts that grow storage before they start, writing nothing; reclamation still runs', async () => {
     const kv = await valkey![1]();
@@ -182,6 +197,8 @@ describe.skipIf(!valkey)('the largest footprint, measured', () => {
     await admin.connect();
     try {
       const a = await seedAlert(kv, { now: T0, end: T0 - 1 });
+      // The wipe frees the last test's (up to 256 MB) fill in the background (lazyfree): read used_memory once it is done.
+      await settled(admin);
       const used = Number(/used_memory:(\d+)/.exec(await admin.info('memory'))![1]);
       await admin.configSet('maxmemory', String(used - 1024));
       const { admit, reclaim, turnOff } = await import('../src/devices/scripts-api.ts');
@@ -196,10 +213,10 @@ describe.skipIf(!valkey)('the largest footprint, measured', () => {
     }
   });
 
-  it('writes a fan-out chunk at the alert ceiling in under 50 ms, merging into the largest jobs and skipping other groups', async () => {
+  it('writes a fan-out chunk at the largest alert ceiling (256 MB) in under 50 ms, merging into the largest jobs and skipping other groups', async () => {
     const kv = await valkey![1]();
     await kv.set(K.checkLock, 'r1');
-    const c = ceilings();
+    const c = ceilings(256 * MB);
     const stamps = Array.from({ length: 30 }, (_, i) => ({ wall: T0 + i, up: 123456789.123 + i, boot: '0f8fad5b-d9cb-469f-a165-70867728950e' }));
     // The ceiling's alerts on one office: every one holding a full job (30 dates, 30 stamps) to merge into and bound;
     // and as many again for another group size, which the chunk reads and skips.
@@ -211,6 +228,10 @@ describe.skipIf(!valkey)('the largest footprint, measured', () => {
       await kv.write([{ op: 'hSet', key: K.devQueue, fields: { [a.id]: job } }]);
     }
     await queueWrite(kv, { now: T0, run: 'r1', mark: 'measure', ops: [], batch: { id: 'b1', entries: Array.from({ length: 100 }, (_, i) => `486|2026-11-${String((i % 28) + 1).padStart(2, '0')}|1|0`), stamps: [{ wall: T0 }] } });
+    // Timed once Valkey has finished freeing the earlier fills in the background (it shares the CPU with the script).
+    const admin = createClient({ url: process.env.DEVICE_TEST_VALKEY! });
+    await admin.connect();
+    await settled(admin).finally(() => admin.close());
     let worst = 0;
     for (let i = 0; i < 5; i++) {
       const started = performance.now();

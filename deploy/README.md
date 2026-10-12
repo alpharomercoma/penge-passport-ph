@@ -456,7 +456,7 @@ so a run already going keeps its mode):
 | `PUSH_OWNER_TOKEN` | For `owner` mode: at least 32 random characters (below) |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | The keys browsers subscribe with (`npx web-push generate-vapid-keys`). Kept with the server's configuration (a copy in the password manager). **Never rotate them while alerts exist**: every subscription would stop working until each device sets up again |
 | `VAPID_SUBJECT` | `mailto:` a monitored address of the site, never a personal one: push services use it to reach us |
-| `DEVICE_ALERT_LIMIT`, `DEVICE_RECORD_LIMIT` | 270 alerts and 1,700 storage units at most (the defaults and the ceilings: a larger value is refused at start). Measured on Valkey 8.1: at those limits notification data takes at most 15.9 MB, under a quarter of `maxmemory 64mb`. New setups are also refused while Valkey is above 70% of `maxmemory` |
+| `DEVICE_ALERT_LIMIT`, `DEVICE_RECORD_LIMIT` | Usually unset: the limits then follow Valkey's `maxmemory`, read live at every setup, activation and change (so a new `maxmemory` counts at once, raised or lowered; if it cannot be read, nothing is admitted until it can). Never lower `maxmemory` below what the alerts stored need: they stay, and keep renewing, while no new ones are admitted and a setup in progress ends as full (the daily report flags alerts or records stored above a ceiling of 0). To shrink notifications, set `DEVICE_ALERT_LIMIT` lower and let alerts end, or stop notifications (`pp:push:paused`). Notifications are supported on a `maxmemory` of 64 MB or more: below it the API and the checker log `maxmemory below the 64 MB notifications are supported on` (the rate counters at their worst could take more than a quarter), and below about 33 MB no notification is admitted at all. Notification data at its limits must fit in a quarter of `maxmemory`: by the measured worst case (8.2 MB fixed, then 31.6 KB an alert, with six storage units each) that is 271 alerts at 64 MB, 802 at 128 MB, 1,864 at 256 MB; the footprint test fills a real Valkey at each. Set lower to hold notifications back; a value above what memory holds is capped and logged (`notification limits capped to what memory holds`), never refused. New setups are also refused while Valkey is above 70% of `maxmemory` |
 
 What each mode allows:
 
@@ -492,6 +492,13 @@ The page moves the token from the address bar to the browser's storage before an
 fragment never reaches the server or its logs). It is sent with new setups only. To revoke it, change it and
 restart the API: setups admitted with the old one are refused when they would become alerts, and a page
 still holding the old one forgets it when its next new setup is refused.
+
+**Raising the limit.** Give Valkey more memory, within what the server can spare. Valkey forks for its
+snapshots and rewrites, and with no swap a busy fork can briefly need up to twice its data in RAM, so keep
+`maxmemory` under half the RAM that is free (`free -m`, "available"). On 13 October 2026 the server had 967 MB,
+about 490 MB available, and Valkey used 2.7 MB: 128 MB is the step that fits. Set `maxmemory 128mb` in
+`/etc/valkey/penge.conf`, and apply it without a restart (`CONFIG SET maxmemory 128mb`, through `valkey-cli` as in
+"Emergency stops"); the API and the next check read it at once.
 
 **Limits.** The daily report flags alerts or records at 80% of their limit, and a snapshot or an
 append-only rewrite that failed or has not finished in 2 hours.

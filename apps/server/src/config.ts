@@ -42,8 +42,8 @@ export interface Config {
   spoolDir: string;
   api: { host: string; port: number };
   push: PushConfig;
-  /** The notification alerts' ceilings (spec: "Bounds"): alerts plus reserving operations, and storage units. */
-  devices: { alertLimit: number; recordLimit: number };
+  /** The notification alerts' limits as set (null: unset), resolved against maxmemory at start (devices/capacity.ts). */
+  devices: { alertLimit: number | null; recordLimit: number | null };
 }
 
 export class ConfigError extends Error {
@@ -148,21 +148,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('R2_ENDPOINT must be an https:// URL');
   }
 
-  // Ceilings, not just defaults: Task 19 measured that the pp:dev namespace at these limits, with the limiter's
-  // worst case, fits in 25% of maxmemory; a larger value cannot be configured.
+  // Unset, the limits follow Valkey's maxmemory when the API or the checker starts (devices/capacity.ts: the measured
+  // footprint at a quarter of it); set, they are used up to that ceiling, never above it.
   // Set but empty is a slip in server.env, not a request for the default.
   for (const name of ['DEVICE_ALERT_LIMIT', 'DEVICE_RECORD_LIMIT']) {
     if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
   }
-  const alertLimit = int('DEVICE_ALERT_LIMIT', 270, 0, 270);
-  // Measured on Valkey (devices-footprint.test.ts), the whole namespace filled to these ceilings with the largest
-  // records (every alert with an operation in progress holding the largest sealed request), the limiter's every counter
-  // and 40 days of numbers: 15.75 MB of the 16 MB (25% of 64 MB) allowed, about 6% to spare. 270 alerts at 6 units
-  // each, and 80 units beyond them for other operations and end records.
-  const recordLimit = int('DEVICE_RECORD_LIMIT', 1700, 0, 1700);
-  // Every alert holds ALERT_UNITS storage units (devices/store.ts); the rest is for operation records.
+  const alertLimit = env.DEVICE_ALERT_LIMIT === undefined ? null : int('DEVICE_ALERT_LIMIT', 0, 0, 100_000);
+  const recordLimit = env.DEVICE_RECORD_LIMIT === undefined ? null : int('DEVICE_RECORD_LIMIT', 0, 0, 600_080);
   // Six units an alert: five for it and the end record it may leave, one for its last operation (kept a day after it ends).
-  if (recordLimit < alertLimit * 6) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 6 units for every alert DEVICE_ALERT_LIMIT allows');
+  if (alertLimit !== null && recordLimit !== null && recordLimit < alertLimit * 6) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 6 units for every alert DEVICE_ALERT_LIMIT allows');
 
   return {
     redisUrl,

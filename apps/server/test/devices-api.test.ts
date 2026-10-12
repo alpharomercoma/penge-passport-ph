@@ -200,6 +200,31 @@ describe('notification alerts through the API', () => {
     expect(r.status).toBe(400);
   });
 
+  it('takes its limits from the live maxmemory at each admission: lowered after start, the lower ceiling holds', async () => {
+    const w = await world({ limits: { alertLimit: 5000, recordLimit: 30_080 } });
+    expect((await w.call('POST', '/api/device-alerts', setupBody())).body.outcome).toBe('pending');
+    // maxmemory lowered to 20 MB while the API runs: a quarter cannot hold even the fixed part, so no new setup.
+    w.kv.memoryUse = { used: 0, max: 20 * 1024 * 1024 };
+    expect((await w.call('POST', '/api/device-alerts', setupBody(), {}, 'k'.repeat(43))).body.outcome).toBe('full');
+  });
+
+  it('logs once when the limits set are capped to what memory holds, and again only when that changes', async () => {
+    const w = await world({ limits: { alertLimit: 5000, recordLimit: 30_080 } });
+    await w.call('POST', '/api/device-alerts', setupBody());
+    await w.call('POST', '/api/device-alerts', setupBody(), {}, 'k'.repeat(43));
+    const capped = () => w.lines.filter((l) => l.includes('notification limits capped to what memory holds'));
+    expect(capped()).toHaveLength(1);
+    expect(capped()[0]).toMatch(/"alertLimit":271/);
+  });
+
+  it('refuses a setup when Valkey\'s memory cannot be read, never guessing a ceiling', async () => {
+    const w = await world();
+    w.kv.memory = async () => {
+      throw new Error('INFO failed');
+    };
+    expect((await w.call('POST', '/api/device-alerts', setupBody())).body.outcome).toBe('full');
+  });
+
   it('answers full when Valkey is above 70% of its memory', async () => {
     const w = await world();
     w.kv.memoryUse = { used: 72, max: 100 };

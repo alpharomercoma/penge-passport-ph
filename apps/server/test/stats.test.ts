@@ -616,6 +616,15 @@ const base0 = {
 });
 
 describe('notification numbers', () => {
+  it('flags notifications stored above a ceiling of 0 (maxmemory lowered below what they need)', async () => {
+    const t = clock(Date.parse('2026-10-07T00:00:00Z'));
+    const kv = new MemoryKv(t.now);
+    await kv.write([{ op: 'hSet', key: K.statsV2('2026-10-06'), fields: { ops_started: '1', since: String(Date.parse('2026-10-06T05:00:00Z')) } }]);
+    await kv.write([{ op: 'hSet', key: K.devRecords, fields: { units: '60', alerts: '10' } }]);
+    const s = await dailyStats(kv, '2026-10-06', t.now(), { alertLimit: 0, recordLimit: 0 });
+    expect(s.devices!.gauges!.flags).toEqual(expect.arrayContaining(['alerts stored above a DEVICE_ALERT_LIMIT of 0 (10)', 'records stored above a DEVICE_RECORD_LIMIT of 0 (60)']));
+  });
+
   it('reports the day\'s v2 counters and gauges, saying when counting began that day', async () => {
     const t = clock(Date.parse('2026-10-07T00:00:00Z'));
     const kv = new MemoryKv(t.now);

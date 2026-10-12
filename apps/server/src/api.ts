@@ -52,7 +52,8 @@ export interface ApiDeps {
   /** Whether notifications can be set up, and the key browsers subscribe with (the status reports both). */
   push: PushConfig;
   /** Notification alerts' ceilings; without them no notification alert can be set up. */
-  devices?: { alertLimit: number; recordLimit: number };
+  /** Notification limits as configured (null: follow maxmemory, devices/capacity.ts); absent: none admitted. */
+  devices?: { alertLimit: number | null; recordLimit: number | null };
   /** Sends setup and test pushes; without it they answer "unavailable". */
   pushTransport?: Transport;
   /** The local stack's extra origins, allowed on device changes. */

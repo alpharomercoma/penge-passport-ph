@@ -33,6 +33,7 @@ import { endpointHmac } from '../push/endpoint.ts';
 import { setupPayload } from '../push/payload.ts';
 import type { Keys } from '../subscribers.ts';
 import { countDevice, later } from './counters.ts';
+import { deviceLimitsNow, limitsNotice } from './capacity.ts';
 import { charge, DEVICE_LIMITS, ingressBucket, rateKeys } from './limits.ts';
 import { admit, change, dispatchBegin, dispatchEnd, markGone, type Prepared, readMine, ready, reclaim, renew, setBackoff, testCapture, turnOff } from './scripts-api.ts';
 import { credentialHash, digest, fingerprint, type OpRecord, openSetup, openSubscription, opView, pushService, sealSetup, sealSubscription, SETUP_MS } from './store.ts';
@@ -44,7 +45,8 @@ export interface DeviceRouteDeps {
   log: Logger;
   now: () => number;
   push: PushConfig;
-  limits: { alertLimit: number; recordLimit: number };
+  /** The limits as configured (null: follow maxmemory); resolved against a live reading each time they are used. */
+  limits: { alertLimit: number | null; recordLimit: number | null };
   transport: Transport | null;
   slots: SendSlots;
   ipOf: (c: Context) => string;
@@ -165,6 +167,22 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
   const answer = (c: Context, outcome: SetupOutcome, o?: OpRecord) => c.json<SetupAnswer>({ outcome, operation: o ? opView(o, d.now()) : null });
 
   /** A setup or a rotation, from the gate to the dispatch. */
+  // The limits from a live reading of maxmemory; what is worth saying about it (capped, or memory below the supported
+  // size) is logged once, and again only when it changes.
+  let noticed: string | null = null;
+  async function liveLimits() {
+    const live = await deviceLimitsNow(kv, d.limits);
+    if (live) {
+      const n = limitsNotice(d.limits, live);
+      const key = n ? `${n.msg}|${JSON.stringify(n.fields)}` : null;
+      if (key !== noticed) {
+        noticed = key;
+        if (n) log.warn(n.msg, n.fields);
+      }
+    }
+    return live;
+  }
+
   async function start(c: Context, kind: 'setup' | 'rotate') {
     const g = await gate(c, true);
     if (!g.ok) return g.res;
@@ -235,8 +253,10 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
     // Memory is read live, just before the admission step (the step itself cannot read it: INFO is not a script
     // command we use). Over maxmemory, Valkey refuses the admission script anyway; between 70% and 100% this guard
     // can admit one request that started a moment before the line was crossed, which the 25% budget absorbs.
-    const mem = await kv.memory();
-    if (mem.max > 0 && mem.used / mem.max > 0.7) {
+    // The limits come from the same reading (devices/capacity.ts): a maxmemory lowered since start holds at once, and an
+    // unreadable one admits nothing rather than guessing.
+    const live = await liveLimits();
+    if (!live || (live.max > 0 && live.used / live.max > 0.7) || live.limits.alertLimit === 0) {
       later(() => countDevice(kv, d.now(), 'requests_refused_memory'));
       return answer(c, 'full');
     }
@@ -252,7 +272,7 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
       digest: requestDigest, ep: endpointHmac(keys.index, sub.endpoint), fp: fingerprint(sub), svc,
       sealed: sealSetup(keys, { subscription: sub, choices, nonce }), nh: sha(nonce), tok, exp: now + SETUP_MS,
       stored: first ? [item(DEVICE_LIMITS.storedSetupAll, 'all'), item(DEVICE_LIMITS.storedSetupIp, ip(c))] : [],
-      ...d.limits,
+      ...live.limits,
     });
     if (r.outcome === 'limited') return limited(c);
     if (r.outcome !== 'pending' && r.outcome !== 'repeat') return answer(c, r.outcome);
@@ -278,9 +298,12 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
       prep = { sub: sealSubscription(keys, secret.subscription), ep: o.ep!, fp: o.fp!, svc: o.svc! };
       if (secret.choices) Object.assign(prep, { offices: secret.choices.siteIds.join(','), group: String(secret.choices.applicants), pace: secret.choices.pace });
     }
+    // Activation counts against the live ceiling too; unreadable, not now (not terminal: the device asks again).
+    const live = await liveLimits();
+    if (!live) return c.json<ReadyAnswer>({ result: 'unknown', activation: null });
     const r = await ready(kv, {
       now: d.now(), cred: g.hash, op: g.body.op as string, nh: sha(g.body.nonce as string), prep, newId: newId(), newInc: newId(),
-      ownerMode: d.push.mode === 'owner', ownerTok: d.push.ownerToken ? sha(d.push.ownerToken) : '', alertLimit: d.limits.alertLimit,
+      ownerMode: d.push.mode === 'owner', ownerTok: d.push.ownerToken ? sha(d.push.ownerToken) : '', alertLimit: live.limits.alertLimit,
     });
     if (r.result === 'limited') return limited(c);
     return c.json<ReadyAnswer>({ result: r.result, activation: r.activation });
@@ -330,9 +353,12 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
     if (!checked.ok || !sites) return bad(c);
     if (g.cls === 'unknown') return c.json<ChangeAnswer>({ result: 'changed' }, 409);
     const v = checked.value;
+    // A change's units count against the live ceiling; unreadable, try again (busy).
+    const live = await liveLimits();
+    if (!live) return c.json<ChangeAnswer>({ result: 'busy' }, 409);
     const r = await change(kv, {
       now: d.now(), cred: g.hash, op: g.body.op as string, seq: g.body.seq as number, digest: sha(JSON.stringify([g.body.incarnation, g.body.baseRevision, v])),
-      inc: g.body.incarnation as string, baseRev: g.body.baseRevision as number, offices: v.siteIds.join(','), group: String(v.applicants), pace: v.pace, recordLimit: d.limits.recordLimit,
+      inc: g.body.incarnation as string, baseRev: g.body.baseRevision as number, offices: v.siteIds.join(','), group: String(v.applicants), pace: v.pace, recordLimit: live.limits.recordLimit,
     });
     if (r.result === 'active') return c.json<ChangeAnswer>({ result: 'active', revision: r.revision! });
     // The brief's contract: every answer of the script is 200, but changed and busy (409).

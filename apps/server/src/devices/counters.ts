@@ -131,6 +131,9 @@ export async function deviceGauges(kv: Kv, now: number, limits: { alertLimit: nu
   const share = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
   if (limits.alertLimit > 0 && g.alerts >= 0.8 * limits.alertLimit) flags.push(`alerts at ${share(g.alerts, limits.alertLimit)}% of DEVICE_ALERT_LIMIT`);
   if (limits.recordLimit > 0 && g.units >= 0.8 * limits.recordLimit) flags.push(`records at ${share(g.units, limits.recordLimit)}% of DEVICE_RECORD_LIMIT`);
+  // A ceiling of 0 (maxmemory lowered below what notifications need) with notifications still stored: said, not hidden.
+  if (limits.alertLimit === 0 && g.alerts > 0) flags.push(`alerts stored above a DEVICE_ALERT_LIMIT of 0 (${g.alerts})`);
+  if (limits.recordLimit === 0 && g.units > 0) flags.push(`records stored above a DEVICE_RECORD_LIMIT of 0 (${g.units})`);
   return {
     readAt: new Date(now).toISOString(),
     alertsActive: g.active,

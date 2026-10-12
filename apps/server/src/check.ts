@@ -4,6 +4,7 @@
 import { NAME, PengePassportPH, VERSION } from 'penge-passport-ph';
 import { ABROAD_REQUESTS_PER_HOUR, abroadStateDir, SCAN_REQUESTS_PER_HOUR, scanStateDir } from './budget.ts';
 import { runCheck } from './checker.ts';
+import { deviceLimitsNow, limitsNotice } from './devices/capacity.ts';
 import { webPushTransport } from './devices/transport.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { connectRedis } from './kv.ts';
@@ -48,7 +49,12 @@ try {
     publicBaseUrl: config.publicBaseUrl ?? 'http://localhost:8787',
     mailDailyLimit: config.mailDailyLimit,
     devices: { mode: config.push.mode, transport: config.push.vapid ? webPushTransport(config.push.vapid) : null },
-    deviceLimits: config.devices,
+    // The report's ceilings, as this run reads them (none if Valkey's memory cannot be read).
+    ...(await deviceLimitsNow(kv, config.devices).then((l) => {
+      const n = l && limitsNotice(config.devices, l);
+      if (n) log.warn(n.msg, n.fields);
+      return l ? { deviceLimits: l.limits } : {};
+    })),
     alertsPerSubscriberPerDay: config.alertsPerSubscriberPerDay,
     client: `${NAME}@${VERSION}`,
     stats: createStats(kv, log),

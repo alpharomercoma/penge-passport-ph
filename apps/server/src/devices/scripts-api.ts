@@ -318,6 +318,9 @@ local p = A.prep
 local activation
 if not cap then
   if A.ownerMode and o.tok ~= A.ownerTok then return finish('owner-only') end
+  -- A reserved alert counts itself already: above the ceiling now (it fell since admission, as when maxmemory is
+  -- lowered) it ends as full, and finish releases the reservation.
+  if o.rsv == 'alert' and rec('alerts') > A.alertLimit then return finish('full') end
   -- A target that ended meanwhile is ended now, so its slot is free for the check below.
   if x and is_ended(x) then
     alert_delete(epOwner, x, 'ended')

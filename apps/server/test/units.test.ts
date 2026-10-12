@@ -219,11 +219,12 @@ describe('config', () => {
     expect(() => loadConfig({ ...env, PUSH_OWNER_EMAILS: 'juan@example.com' })).toThrow(/PUSH_OWNER_EMAILS is no longer used/);
   });
 
-  it('reads the device limits, with defaults', () => {
-    // 270 alerts at 6 units each and 80 to spare: measured (devices-footprint.test.ts) to fit in 25% of 64 MB.
-    expect(loadConfig(env).devices).toEqual({ alertLimit: 270, recordLimit: 1700 });
-    expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '1701' })).toThrow(/DEVICE_RECORD_LIMIT/);
-    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '271' })).toThrow(/DEVICE_ALERT_LIMIT/);
+  it('reads the device limits: unset, they follow Valkey\'s memory (devices/capacity.ts)', () => {
+    expect(loadConfig(env).devices).toEqual({ alertLimit: null, recordLimit: null });
+    // Above the 64 MB ceiling is allowed here: the server caps what memory cannot hold when it starts.
+    expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '800', DEVICE_RECORD_LIMIT: '4880' }).devices).toEqual({ alertLimit: 800, recordLimit: 4880 });
+    expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '800' }).devices).toEqual({ alertLimit: 800, recordLimit: null });
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100001' })).toThrow(/DEVICE_ALERT_LIMIT/);
     expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '10', DEVICE_RECORD_LIMIT: '100' }).devices).toEqual({ alertLimit: 10, recordLimit: 100 });
     expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '-1' })).toThrow(/DEVICE_ALERT_LIMIT/);
     expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100', DEVICE_RECORD_LIMIT: '100' })).toThrow(/DEVICE_RECORD_LIMIT must hold/);
@@ -591,12 +592,11 @@ describe('the rollback pre-step', () => {
     expect(env).not.toContain('PUSH_OWNER_EMAILS');
   });
 
-  it('gives limits in the env example that the server accepts: the measured ceilings', () => {
+  it('leaves the limits to Valkey\'s memory in the env example (not set), and documents them', () => {
     const text = readFileSync(join(import.meta.dirname, '../../../deploy/server.env.example'), 'utf8');
-    const value = (name: string) => text.match(new RegExp(`^${name}=(.*)$`, 'm'))?.[1];
-    expect(value('DEVICE_ALERT_LIMIT')).toBe('270');
-    expect(value('DEVICE_RECORD_LIMIT')).toBe('1700');
-    const env = { ...baseEnv(), DEVICE_ALERT_LIMIT: value('DEVICE_ALERT_LIMIT')!, DEVICE_RECORD_LIMIT: value('DEVICE_RECORD_LIMIT')! };
-    expect(loadConfig(env).devices).toEqual({ alertLimit: 270, recordLimit: 1700 });
+    expect(text).not.toMatch(/^DEVICE_ALERT_LIMIT=/m);
+    expect(text).not.toMatch(/^DEVICE_RECORD_LIMIT=/m);
+    expect(text).toMatch(/^# DEVICE_ALERT_LIMIT=/m);
+    expect(loadConfig(baseEnv()).devices).toEqual({ alertLimit: null, recordLimit: null });
   });
 });
