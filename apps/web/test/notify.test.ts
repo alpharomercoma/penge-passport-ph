@@ -14,7 +14,7 @@ vi.mock('../src/notify/shared.js', async (orig) => ({ ...(await orig<object>()),
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { detectContext, deviceLabel, ownerOverride, pushCapability } from '../src/notify/context.ts';
+import { detectContext, deviceLabel, pushCapability } from '../src/notify/context.ts';
 import { enablePush } from '../src/notify/push.ts';
 import { builtWorkerSource } from './worker-source.ts';
 
@@ -71,10 +71,6 @@ describe('where the app runs', () => {
     expect(pushCapability(fakeWindow(), { ...LIVE, push: 'off' }, { owner: false, workerOk: true })).toEqual({ ok: false, reason: 'off' });
     expect(pushCapability(fakeWindow(), { ...LIVE, push: 'owner' }, { owner: false, workerOk: true })).toEqual({ ok: false, reason: 'off' });
     expect(pushCapability(fakeWindow(), { ...LIVE, push: 'owner' }, { owner: true, workerOk: true })).toEqual({ ok: true });
-    const storage = new MemoryStorage();
-    expect(ownerOverride(fakeWindow({ location: { search: '?push=owner' } }, storage))).toBe(true);
-    expect(ownerOverride(fakeWindow({ location: { search: '' } }, storage))).toBe(true);
-    expect(ownerOverride(fakeWindow({ location: { search: '' } }))).toBe(false);
   });
 
   it('treats a browser without Web Locks, or whose worker failed to register, as not capable', () => {

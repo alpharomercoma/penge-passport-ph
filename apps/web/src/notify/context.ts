@@ -6,7 +6,6 @@ export type Context = 'play' | 'installed' | 'browser';
 const PLAY = 'com.alphaexperiments.pengepassportph';
 const DEBUG = 'com.alphaexperiments.pengepassportph.dev';
 const CONTEXT_KEY = 'pengepassportph-context';
-const OWNER_KEY = 'pengepassportph-push-owner';
 
 function remember(w: Window, key: string, value: string) {
   try {
@@ -39,11 +38,6 @@ export function detectContext(w: Window = window): Context {
   if (['standalone', 'minimal-ui', 'fullscreen'].some((m) => w.matchMedia(`(display-mode: ${m})`).matches)) return 'installed';
   if ((w.navigator as Navigator & { standalone?: boolean }).standalone === true) return 'installed';
   return 'browser';
-}
-
-export function ownerOverride(w: Window = window): boolean {
-  if (new URLSearchParams(w.location.search).get('push') === 'owner') remember(w, OWNER_KEY, '1');
-  return recall(w, OWNER_KEY) === '1' || new URLSearchParams(w.location.search).get('push') === 'owner';
 }
 
 export type Capability = { ok: true } | { ok: false; reason: 'ios-tab' | 'unsupported' | 'off' | 'no-worker' };

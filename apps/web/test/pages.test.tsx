@@ -407,9 +407,10 @@ describe('posts abroad', () => {
     fireEvent.change(await within(sheet).findByPlaceholderText(/Search a city/), { target: { value: 'emirates' } });
     fireEvent.click(await within(sheet).findByRole('checkbox', { name: /Dubai/ }));
     expect(within(sheet).getByRole('button', { name: 'Remove Dubai' })).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('switch', { name: 'Email' })); // Email starts off in the one alerts form
     fireEvent.change(within(sheet).getByLabelText('Your email'), { target: { value: 'ana@example.com' } });
     fireEvent.click(within(sheet).getByRole('button', { name: 'Send confirmation email' }));
-    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', channels: { emailOn: true, pushOn: false, pushCredentialHash: null, device: null }, website: '' }));
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledWith({ email: 'ana@example.com', siteIds: [36], applicants: 1, pace: 'hourly', website: '' }));
   });
 
   it('explains when posts abroad cannot be loaded, and offers to try again', async () => {

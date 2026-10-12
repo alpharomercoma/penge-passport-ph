@@ -253,6 +253,11 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
   .sheet-head { margin: 0 -28px; padding: 8px 20px 12px 28px; }
 }
 .sheet-done { display: grid; justify-items: start; gap: 14px; padding: 4px 0; }
+.sheet-result { display: flex; gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; margin: 0 0 0.75rem; }
+.sheet-result p { margin: 0; flex: 1 1 12rem; }
+.sheet-result svg { flex: none; color: var(--accent); }
+.sheet-result-failed p { color: var(--danger, #b42318); }
+
 .sheet-fine { margin-top: 12px; }
 
 /* confirm, unsubscribe, not found */

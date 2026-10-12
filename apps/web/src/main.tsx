@@ -3,6 +3,15 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { register, skipRegistration } from './notify/worker.ts';
 import './styles.css';
+import { takeOwnerLink } from './devices/owner.ts';
+
+// Before rendering or registering the worker: the owner link leaves the address bar at once.
+const owner = takeOwnerLink();
+try {
+  if (owner && !owner.kept) sessionStorage.setItem('pengepassportph-owner-unkept', '1');
+} catch {
+  // Storage refused: the sheet cannot say so, and the link simply is not kept.
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

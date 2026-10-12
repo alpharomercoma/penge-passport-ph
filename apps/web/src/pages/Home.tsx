@@ -7,6 +7,7 @@ import { AllOffices } from '../components/AllOffices.tsx';
 import { BellIcon } from '../components/Icons.tsx';
 import { OfficeView } from '../components/OfficeView.tsx';
 import { DeviceRow } from '../components/DeviceRow.tsx';
+import { deviceController } from '../devices/instance.ts';
 import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
 import { ago } from '../time.ts';
@@ -261,6 +262,7 @@ export function Home({ api }: { api: Api }) {
         <AlertSheet
           api={api}
           status={status}
+          controller={deviceController(() => status)}
           offices={[...home, ...posts]}
           selected={selected}
           initialApplicants={applicants}

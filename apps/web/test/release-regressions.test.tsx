@@ -144,6 +144,8 @@ describe('release readiness regressions', () => {
     opener.focus();
     fireEvent.click(opener);
     const dialog = screen.getByRole('dialog');
+    // Email starts off in the one alerts form: switched on, the send button is the last control.
+    fireEvent.click(within(dialog).getByRole('switch', { name: 'Email' }));
     const ancestors: HTMLElement[] = [];
     for (let element: HTMLElement | null = opener; element; element = element.parentElement) ancestors.push(element);
     expect(ancestors.some((element) => element.inert)).toBe(true);
