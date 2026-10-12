@@ -7,6 +7,8 @@ import type { Keys } from '../subscribers.ts';
 
 /** Storage units (spec: "Bounds"): an alert with its largest delivery footprint and the end record it may leave. */
 export const ALERT_UNITS = 5;
+/** The bytes one storage unit stands for: measured (devices-footprint.test.ts) with the largest valid records. */
+export const UNIT_BYTES = 4096;
 /** An operation record. */
 export const OP_UNITS = 1;
 export const SETUP_MS = SETUP_SECONDS * 1000;

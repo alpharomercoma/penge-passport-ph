@@ -10,8 +10,9 @@ import { fanoutChunk, LostLock, queueWrite } from './scripts-delivery.ts';
 export const FANOUT_MAX_ENTRIES = 2000;
 export const FANOUT_MAX_PENDING = 5;
 export const CHUNK_ENTRIES = 100;
-/** Recipients merged per chunk at most: measured (devices-queue.test.ts) to keep a chunk under 50 ms at the ceiling. */
-export const CHUNK_WORK = 200;
+/** Recipients merged per chunk at most: measured on Valkey (devices-footprint.test.ts), merging into full jobs at the alert
+ * ceiling, about 33 ms (200 took 60 ms): under the 50 ms a chunk may take. */
+export const CHUNK_WORK = 100;
 export const FANOUT_BUDGET_MS = 10_000;
 /** Above this share of maxmemory, the first write goes without its batch. */
 export const MEMORY_SKIP = 0.85;

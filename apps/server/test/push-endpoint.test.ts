@@ -66,6 +66,16 @@ describe('push endpoints', () => {
     expect(checkPushSubscription(sub('https://wns2-db5p.notify.windows.com/w/?token=BQYAAAB%2bx%2fy%3d'))).not.toBeNull();
   });
 
+  it('keeps the stored (normalized) endpoint within 1,024 characters, however short the one sent', () => {
+    // Characters the URL parser percent-encodes grow ninefold: 200 of them pass the raw 1,024 check but not the stored one.
+    expect(checkPushSubscription(sub(`https://db5p.notify.windows.com/w/?token=${'é'.repeat(200)}`))).toBeNull();
+    const ok = checkPushSubscription(sub(`https://db5p.notify.windows.com/w/?token=${'é'.repeat(100)}`));
+    expect(ok?.endpoint.length).toBeLessThanOrEqual(1024);
+    // Characters JSON escapes would double the sealed size: no push service uses them.
+    expect(checkPushSubscription(sub(`https://db5p.notify.windows.com/w/?token=${'\\'.repeat(100)}`))).toBeNull();
+    expect(checkPushSubscription(sub('https://db5p.notify.windows.com/w/?token=a"b'))).toBeNull();
+  });
+
   it('refuses a key that is not a P-256 point', () => {
     const notUncompressed = Buffer.from(PUSH_KEYS.p256dh, 'base64url');
     notUncompressed[0] = 0x02;

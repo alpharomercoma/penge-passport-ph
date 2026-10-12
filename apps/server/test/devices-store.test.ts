@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { K } from '../src/keys.ts';
 import { endpointHmac } from '../src/push/endpoint.ts';
 import { admit, type AdmitInput, dispatchBegin, dispatchEnd, reclaim } from '../src/devices/scripts-api.ts';
-import { ALERT_UNITS, credentialHash, digest, fingerprint, opView, pushService, sealSetup, SETUP_MS } from '../src/devices/store.ts';
+import { ALERT_UNITS, credentialHash, digest, fingerprint, OP_UNITS, opView, pushService, sealSetup, SETUP_MS } from '../src/devices/store.ts';
 import { choices, credential, opId, seedAlert, subscription } from './device-fixtures.ts';
 import { keys, MemoryKv } from './helpers.ts';
 import { valkeyTargets } from './valkey.ts';
@@ -416,8 +416,8 @@ describe('the request digest', () => {
 });
 
 describe('units', () => {
-  it('match the configuration check (5 per alert, config.ts)', () => {
-    expect(ALERT_UNITS).toBe(5);
+  it('match the configuration check (5 per alert, plus 1 for its last operation, config.ts)', () => {
+    expect(ALERT_UNITS + OP_UNITS).toBe(6);
   });
 });
 

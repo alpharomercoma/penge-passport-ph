@@ -653,7 +653,7 @@ describe('notification numbers', () => {
     const now = Date.parse('2026-10-07T00:00:00Z');
     const kv = new MemoryKv(() => now);
     kv.persistence = async () => ({ rdbLastSave: now / 1000 - 600, rdbStatus: 'err', aofRewrites: null, aofInProgress: null, aofFailures: null, aofRewriteStatus: null });
-    const g = await deviceGauges(kv, now, { alertLimit: 300, recordLimit: 1750 });
+    const g = await deviceGauges(kv, now, { alertLimit: 270, recordLimit: 1700 });
     expect(g.persistence.rdbLastOk).toBe(new Date(now - 600_000).toISOString());
     expect(g.flags).toContain('the latest snapshot attempt failed (err)');
   });

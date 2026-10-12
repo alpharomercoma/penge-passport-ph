@@ -38,6 +38,12 @@ export function checkPushSubscription(raw: unknown): PushSubscriptionInput | nul
   if (url.protocol !== 'https:' || url.port !== '' || url.username || url.password) return null;
   // No fragment, not even an empty one, and no empty query: either would give one resource a second spelling.
   if (s.endpoint.includes('#') || (url.search === '' && url.href.includes('?'))) return null;
+  // The stored spelling (url.href) is what is sealed and kept: at most 1,024 characters too, after the parser's
+  // percent-encoding, which can make a short endpoint ninefold longer.
+  if (url.href.length > 1024) return null;
+  // Nothing JSON escapes (a backslash, a quote): it would grow the sealed subscription past its measured size, and no push
+  // service uses them.
+  if (/[\\"]/.test(s.endpoint) || /[\\"]/.test(url.href)) return null;
   // Plain DNS labels only: web-push connects with the older url.parse, which cuts a host like
   // "127.0.0.1'.notify.windows.com" short at the quote, after it passed the suffix check here.
   // And no longer than a DNS name may be (253): past that, url.parse reads no host and HTTPS falls back to localhost.

@@ -154,10 +154,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   for (const name of ['DEVICE_ALERT_LIMIT', 'DEVICE_RECORD_LIMIT']) {
     if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
   }
-  const alertLimit = int('DEVICE_ALERT_LIMIT', 300, 0, 300);
-  const recordLimit = int('DEVICE_RECORD_LIMIT', 1750, 0, 1750);
+  const alertLimit = int('DEVICE_ALERT_LIMIT', 270, 0, 270);
+  // Measured on Valkey (devices-footprint.test.ts), the whole namespace filled to these ceilings with the largest
+  // records (every alert with an operation in progress holding the largest sealed request), the limiter's every counter
+  // and 40 days of numbers: 15.75 MB of the 16 MB (25% of 64 MB) allowed, about 6% to spare. 270 alerts at 6 units
+  // each, and 80 units beyond them for other operations and end records.
+  const recordLimit = int('DEVICE_RECORD_LIMIT', 1700, 0, 1700);
   // Every alert holds ALERT_UNITS storage units (devices/store.ts); the rest is for operation records.
-  if (recordLimit < alertLimit * 5) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 5 units for every alert DEVICE_ALERT_LIMIT allows');
+  // Six units an alert: five for it and the end record it may leave, one for its last operation (kept a day after it ends).
+  if (recordLimit < alertLimit * 6) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 6 units for every alert DEVICE_ALERT_LIMIT allows');
 
   return {
     redisUrl,

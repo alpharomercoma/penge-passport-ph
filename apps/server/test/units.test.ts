@@ -227,11 +227,16 @@ describe('config', () => {
   });
 
   it('reads the device limits, with defaults', () => {
-    expect(loadConfig(env).devices).toEqual({ alertLimit: 300, recordLimit: 1750 });
-    expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '1751' })).toThrow(/DEVICE_RECORD_LIMIT/);
+    // 270 alerts at 6 units each and 80 to spare: measured (devices-footprint.test.ts) to fit in 25% of 64 MB.
+    expect(loadConfig(env).devices).toEqual({ alertLimit: 270, recordLimit: 1700 });
+    expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '1701' })).toThrow(/DEVICE_RECORD_LIMIT/);
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '271' })).toThrow(/DEVICE_ALERT_LIMIT/);
     expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '10', DEVICE_RECORD_LIMIT: '100' }).devices).toEqual({ alertLimit: 10, recordLimit: 100 });
     expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '-1' })).toThrow(/DEVICE_ALERT_LIMIT/);
     expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100', DEVICE_RECORD_LIMIT: '100' })).toThrow(/DEVICE_RECORD_LIMIT must hold/);
+    // Six units an alert: five for it and its end record, one for its last operation (kept a day after it finishes).
+    expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100', DEVICE_RECORD_LIMIT: '599' })).toThrow(/DEVICE_RECORD_LIMIT must hold 6 units/);
+    expect(loadConfig({ ...env, DEVICE_ALERT_LIMIT: '100', DEVICE_RECORD_LIMIT: '600' }).devices).toEqual({ alertLimit: 100, recordLimit: 600 });
     // Set but empty (a slip in server.env) is an error, not the default.
     expect(() => loadConfig({ ...env, DEVICE_ALERT_LIMIT: '' })).toThrow(/DEVICE_ALERT_LIMIT/);
     expect(() => loadConfig({ ...env, DEVICE_RECORD_LIMIT: '  ' })).toThrow(/DEVICE_RECORD_LIMIT/);
