@@ -33,7 +33,7 @@ import { endpointHmac } from '../push/endpoint.ts';
 import { setupPayload } from '../push/payload.ts';
 import type { Keys } from '../subscribers.ts';
 import { countDevice, later } from './counters.ts';
-import { deviceLimitsNow, limitsNotice } from './capacity.ts';
+import { deviceLimitsNow, limitsNotice, REFERENCE_MAXMEMORY } from './capacity.ts';
 import { charge, DEVICE_LIMITS, ingressBucket, rateKeys } from './limits.ts';
 import { admit, change, dispatchBegin, dispatchEnd, markGone, type Prepared, readMine, ready, reclaim, renew, setBackoff, testCapture, turnOff } from './scripts-api.ts';
 import { credentialHash, digest, fingerprint, type OpRecord, openSetup, openSubscription, opView, pushService, sealSetup, sealSubscription, SETUP_MS } from './store.ts';
@@ -256,7 +256,8 @@ export function mountDeviceRoutes(app: Hono, d: DeviceRouteDeps): void {
     // The limits come from the same reading (devices/capacity.ts): a maxmemory lowered since start holds at once, and an
     // unreadable one admits nothing rather than guessing.
     const live = await liveLimits();
-    if (!live || (live.max > 0 && live.used / live.max > 0.7) || live.limits.alertLimit === 0) {
+    // An unlimited Valkey (maxmemory 0) is held to the 64 MB the ceiling assumed, for this guard too.
+    if (!live || live.used / (live.max > 0 ? live.max : REFERENCE_MAXMEMORY) > 0.7 || live.limits.alertLimit === 0) {
       later(() => countDevice(kv, d.now(), 'requests_refused_memory'));
       return answer(c, 'full');
     }

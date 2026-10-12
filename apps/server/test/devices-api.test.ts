@@ -225,9 +225,18 @@ describe('notification alerts through the API', () => {
     expect((await w.call('POST', '/api/device-alerts', setupBody())).body.outcome).toBe('full');
   });
 
-  it('answers full when Valkey is above 70% of its memory', async () => {
+  it('answers full above 70% of Valkey\'s memory, and admits below it (a ceiling with room either way)', async () => {
+    const MB = 1024 * 1024;
     const w = await world();
-    w.kv.memoryUse = { used: 72, max: 100 };
+    w.kv.memoryUse = { used: 46 * MB, max: 64 * MB }; // 71.9%
+    expect((await w.call('POST', '/api/device-alerts', setupBody())).body.outcome).toBe('full');
+    w.kv.memoryUse = { used: 44 * MB, max: 64 * MB }; // 68.8%
+    expect((await w.call('POST', '/api/device-alerts', setupBody(), {}, 'k'.repeat(43))).body.outcome).toBe('pending');
+  });
+
+  it('reads an unlimited Valkey (maxmemory 0) as 64 MB for the 70% guard too', async () => {
+    const w = await world();
+    w.kv.memoryUse = { used: 48 * 1024 * 1024, max: 0 };
     expect((await w.call('POST', '/api/device-alerts', setupBody())).body.outcome).toBe('full');
   });
 

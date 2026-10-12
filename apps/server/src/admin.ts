@@ -45,7 +45,20 @@ if (command === 'channel-inspect' || command === 'channel-dump' || command === '
   }
   // Written in full before the process ends: a dump through a pipe (ssh, gzip) is never cut short.
   const out = (text: string) => new Promise<void>((resolve, reject) => process.stdout.write(text, (err) => (err ? reject(err) : resolve())));
-  const kv = await connectRedis(url, (err) => process.stderr.write(`redis: ${err.message}\n`));
+  // REDIS_URL holds the database password: no error from here is printed as it is (a URL parser's carries its input).
+  // Within 10 s, or not at all (the client would otherwise retry for ever).
+  let reported = false;
+  const kv = await Promise.race([
+    connectRedis(url, () => {
+      if (!reported) process.stderr.write('redis: connection error\n');
+      reported = true;
+    }).catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000).unref()),
+  ]);
+  if (!kv) {
+    process.stderr.write('could not reach Valkey with REDIS_URL\n');
+    process.exit(1);
+  }
   try {
     const inspection = await inspectChannels(kv);
     if (command === 'channel-inspect') await out(`${JSON.stringify(inspection, null, 2)}\n`);
@@ -54,8 +67,13 @@ if (command === 'channel-inspect' || command === 'channel-dump' || command === '
       await out(`${JSON.stringify(inspection, null, 2)}\nadd --yes to clean\n`);
       process.exitCode = 2;
     } else await out(`${JSON.stringify(await cleanChannels(kv, inspection))}\n`);
+  } catch (err) {
+    // The clean's own refusal (the owner decides) says which records; anything else is named, not printed.
+    const message = err instanceof Error && err.message.startsWith('the owner decides first') ? err.message : `${command} failed (${err instanceof Error ? err.name : 'error'})`;
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
   } finally {
-    await kv.close();
+    await kv.close().catch(() => {});
   }
   process.exit();
 }

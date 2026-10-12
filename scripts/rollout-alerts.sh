@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
 # The alerts redesign's rollout, from this Mac, one phase at a time (deploy/README.md, "Leaving the channel design
-# (one maintenance window)"). Each phase checks what it expects, stops on anything else, and never runs the next one.
+# (one maintenance window)"). The phases run in this order only; each checks the state the one before left, and
+# none runs the next:
 #
 #   scripts/rollout-alerts.sh preflight          read only: this checkout, its tests, and the server's state
 #   scripts/rollout-alerts.sh stage              build this commit and upload it, NOT activated (before the window)
-#   scripts/rollout-alerts.sh stop               the window starts: no new check (waits for a running one), API stopped
+#   scripts/rollout-alerts.sh stop               the window starts: a copy of server.env kept as it was; no new check
+#                                                (waits for a running one); the API stopped
 #   scripts/rollout-alerts.sh inspect            read only: what the channel release left (the staged release's command)
-#   scripts/rollout-alerts.sh backup             server.env, the subscribers, and the channel keys if any; each checked
-#   scripts/rollout-alerts.sh clean --yes        only if inspect found anything (it stops for the owner on email off)
+#   scripts/rollout-alerts.sh backup             the subscribers (every one checked by id) and the channel keys if any
+#   scripts/rollout-alerts.sh clean --yes        only if inspect found anything, with no stop for the owner
 #   scripts/rollout-alerts.sh configure [--memory-128]
-#                                                server.env: PUSH_MODE=off, PUSH_OWNER_EMAILS removed, a new
-#                                                PUSH_OWNER_TOKEN (written to /root/penge-owner-link.txt, never shown)
-#   scripts/rollout-alerts.sh activate           switch to the staged release, run one check, the timer back on
+#                                                server.env: PUSH_MODE=off, PUSH_OWNER_EMAILS removed, a
+#                                                PUSH_OWNER_TOKEN (in /root/penge-owner-link.txt, never shown)
+#   scripts/rollout-alerts.sh activate           switch to the staged release, the timer back on, one check
+#   scripts/rollout-alerts.sh check              one more check on the new release (if activate's was not healthy)
 #   scripts/rollout-alerts.sh owner              after a healthy check on the new release: PUSH_MODE=owner
-#   scripts/rollout-alerts.sh abort              before activate: back to the release before, as it was, and running
-#   scripts/rollout-alerts.sh publish            after the window: main moved to this commit and pushed (CI then
-#                                                deploys the same code again, a normal deploy)
+#   scripts/rollout-alerts.sh publish            after owner: main moved to exactly the staged commit, and pushed
+#   scripts/rollout-alerts.sh abort              before activate: the release before, with its server.env, running
 #
 # The server is reached as root with your usual key (ssh-agent); the upload goes through the deploy user's gate with
-# .secrets/deploy_key, as deploy/release.sh does. What the phases learn (the release id, the backups made) is kept on
-# the server in /root/penge-rollout.state. Nothing here prints a secret: REDIS_URL, keys and the owner token stay in
-# files on the server.
+# .secrets/deploy_key, as deploy/release.sh does. The rollout's state is kept on the server, in
+# /root/penge-rollout.state, and every phase holds /root/penge-rollout.lock while it runs. Nothing here prints a
+# secret: REDIS_URL, the keys and the owner token stay in files on the server.
+
 # The phases' remote bodies are single-quoted on purpose: they expand on the server, not here.
 # shellcheck disable=SC2016
 set -euo pipefail
@@ -34,23 +37,53 @@ DEPLOY=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -i .secr
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 
-# Runs a script on the server as root. Its first lines are the shared helpers below; arguments follow.
+# Runs a script on the server as root, under the rollout's lock, after the shared helpers; arguments follow.
 remote() {
   local body=$1
   shift
   "${ROOT[@]}" bash -s -- "$@" <<REMOTE
 set -euo pipefail
+exec 9>/root/penge-rollout.lock
+flock -n 9 || { echo "!! another phase is running" >&2; exit 1; }
 STATE=/root/penge-rollout.state
+OLD_COMMIT=$OLD_COMMIT
 die() { printf '!! %s\n' "\$*" >&2; exit 1; }
-state() { grep -E "^\$1=" "\$STATE" 2>/dev/null | tail -1 | cut -d= -f2-; }
-setstate() { printf '%s=%s\n' "\$1" "\$2" >> "\$STATE"; chmod 0600 "\$STATE"; }
-# Valkey through the penge user and its server.env (REDIS_URL is never printed).
-vk() { sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec valkey-cli -u "\$REDIS_URL" --no-auth-warning "\$@"' sh "\$@"; }
-# A command of the staged (or a given) release's admin.mjs, as the penge user with the server's environment.
+state() { grep -E "^\$1=" "\$STATE" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+setstate() { touch "\$STATE"; chmod 0600 "\$STATE"; printf '%s=%s\n' "\$1" "\$2" >> "\$STATE"; }
+phase() { state phase; }
+need() { local p; p=\$(phase); for want in "\$@"; do [ "\$p" = "\$want" ] && return 0; done; die "this phase follows: \$* (the rollout is at: \${p:-nothing})"; }
+# Valkey through the penge user and its server.env (REDIS_URL is never printed); -e: an error is a failure.
+vk() { sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec valkey-cli -e -u "\$REDIS_URL" --no-auth-warning "\$@"' sh "\$@"; }
+# A command of a release's admin.mjs, as the penge user with the server's environment.
 admin() { local dir=\$1; shift; sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec /usr/local/bin/node --enable-source-maps "\$0/admin.mjs" "\$@"' "\$dir" "\$@"; }
-staged() { local id; id=\$(state release); [ -n "\$id" ] || die "nothing staged (run: stage)"; printf '%s' "\$id"; }
-stagedDir() { local id; id=\$(staged); if [ -d "/opt/penge/releases/\$id.partial" ]; then printf '%s' "/opt/penge/releases/\$id.partial/server"; elif [ -d "/opt/penge/releases/\$id" ]; then printf '%s' "/opt/penge/releases/\$id/server"; else die "release \$id is not on the server"; fi; }
-stopped() { [ "\$(systemctl is-active penge-api || true)" != active ] || die "penge-api is running: run stop first"; [ "\$(systemctl is-active penge-check.timer || true)" != active ] || die "penge-check.timer is on: run stop first"; local s; s=\$(systemctl show -p ActiveState --value penge-check.service); [ "\$s" = inactive ] || [ "\$s" = failed ] || die "a check is running (\$s)"; }
+stagedDir() { local id; id=\$(state release); [ -n "\$id" ] || die "nothing staged"; if [ -d "/opt/penge/releases/\$id.partial" ]; then printf '%s' "/opt/penge/releases/\$id.partial/server"; elif [ -d "/opt/penge/releases/\$id" ]; then printf '%s' "/opt/penge/releases/\$id/server"; else die "release \$id is not on the server"; fi; }
+stopped() { [ "\$(systemctl is-active penge-api || true)" != active ] || die "penge-api is running"; [ "\$(systemctl is-active penge-check.timer || true)" != active ] || die "penge-check.timer is on"; local s; s=\$(systemctl show -p ActiveState --value penge-check.service); [ "\$s" = inactive ] || [ "\$s" = failed ] || die "a check is running (\$s)"; }
+ready() { for _ in \$(seq 1 40); do curl -fsS --max-time 3 http://127.0.0.1:8787/api/ready >/dev/null 2>&1 && return 0; sleep 0.5; done; return 1; }
+pushMode() { curl -fsS --max-time 5 http://127.0.0.1:8787/api/status | /usr/local/bin/node -e 'let t=""; process.stdin.on("data", (c) => (t += c)).on("end", () => console.log(JSON.parse(t).push))'; }
+# An inspection's summary, strictly: "<found> <stops>", or a failure if it is not a whole inspection.
+summary() { /usr/local/bin/node -e '
+  const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  for (const k of ["pushKeys", "reservedKeys", "subscribers", "pending", "livePending", "stops"]) if (!Array.isArray(i[k])) throw new Error("no " + k);
+  if (typeof i.pendingChannels !== "boolean") throw new Error("no pendingChannels");
+  console.log((i.pushKeys.length + i.reservedKeys.length + i.subscribers.length + i.pending.length + (i.pendingChannels ? 1 : 0)) + " " + i.stops.length);
+' "\$1"; }
+# Sets one line of server.env (or removes it, with no value), atomically, keeping its owner and mode.
+envset() { local f=/etc/penge/server.env tmp; tmp=\$(mktemp /etc/penge/.server.env.XXXXXX); grep -vE "^\$1=" "\$f" > "\$tmp" || true; [ "\$#" -lt 2 ] || printf '%s=%s\n' "\$1" "\$2" >> "\$tmp"; chown --reference="\$f" "\$tmp"; chmod --reference="\$f" "\$tmp"; mv "\$tmp" "\$f"; }
+envget() { grep -E "^\$1=" /etc/penge/server.env | tail -1 | cut -d= -f2- || true; }
+tokenOk() { [[ \$(envget PUSH_OWNER_TOKEN) =~ ^[A-Za-z0-9_-]{32,256}\$ ]]; }
+# One check on what is current, now; prints its run id if it finished healthy (not skipped), and fails otherwise.
+oneCheck() {
+  systemctl start penge-check.service || true
+  local inv; inv=\$(systemctl show -p InvocationID --value penge-check.service)
+  journalctl _SYSTEMD_INVOCATION_ID="\$inv" -o cat --no-pager | /usr/local/bin/node -e '
+    let t = ""; process.stdin.on("data", (c) => (t += c)).on("end", () => {
+      const done = t.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((l) => l && l.msg === "check finished").pop();
+      if (!done) { console.error("no finished check in this run"); process.exit(1); }
+      console.error("check: healthy " + done.healthy + ", skipped " + done.skipped + ", problems " + JSON.stringify(done.problems ?? []).slice(0, 300));
+      if (done.healthy !== true || done.skipped !== null) process.exit(1);
+      console.log(done.runId);
+    });'
+}
 $body
 REMOTE
 }
@@ -69,23 +102,29 @@ preflight)
   say "The server (read only)"
   remote '
     cur=$(readlink /opt/penge/current); echo "current: $cur"
-    case $cur in *-'"$OLD_COMMIT"'-*) ;; *) echo "!! not the release this rollout starts from ('"$OLD_COMMIT"')";; esac
-    echo "PUSH_MODE=$(grep -E "^PUSH_MODE=" /etc/penge/server.env | cut -d= -f2)"
-    grep -q "^PUSH_OWNER_EMAILS=" /etc/penge/server.env && echo "PUSH_OWNER_EMAILS: set (configure removes it)" || echo "PUSH_OWNER_EMAILS: not set"
-    grep -q "^PUSH_OWNER_TOKEN=" /etc/penge/server.env && echo "PUSH_OWNER_TOKEN: already set" || true
+    case $cur in *-"$OLD_COMMIT"-*) ;; *) echo "!! not the release this rollout starts from ($OLD_COMMIT)";; esac
+    echo "PUSH_MODE=$(envget PUSH_MODE)"
+    if [ -n "$(envget PUSH_OWNER_EMAILS)" ]; then echo "PUSH_OWNER_EMAILS: set (configure removes it)"; else echo "PUSH_OWNER_EMAILS: not set"; fi
+    if [ -n "$(envget PUSH_OWNER_TOKEN)" ]; then if tokenOk; then echo "PUSH_OWNER_TOKEN: set, well formed"; else echo "!! PUSH_OWNER_TOKEN is set but malformed (configure replaces it)"; fi; fi
     echo "penge-api: $(systemctl is-active penge-api || true); penge-check.timer: $(systemctl is-active penge-check.timer || true)"
     echo "valkey: $(vk INFO memory | grep -E "^(used_memory_human|maxmemory_human):" | tr "\r\n" "  ")"
     echo "subscribers: $(vk SCARD pp:subs)"
     free -m | awk "/^Mem:/ {print \"RAM: \" \$2 \" MB, available \" \$7 \" MB\"}"
     df -h / | awk "NR==2 {print \"disk: \" \$4 \" free\"}"
-    [ -d /root/penge-backups ] && echo "backups folder: present" || echo "backups folder: missing (backup creates it)"
-    systemctl is-enabled penge-backup-expire.timer >/dev/null 2>&1 && echo "backup expiry: on" || echo "!! backup expiry timer is off (deploy/README.md, Rollout backups)"
-    [ -f "$STATE" ] && { echo "rollout state from an earlier run:"; cat "$STATE"; } || true
+    if [ -d /root/penge-backups ]; then echo "backups folder: present"; else echo "backups folder: missing (stop creates it)"; fi
+    if systemctl is-enabled penge-backup-expire.timer >/dev/null 2>&1; then echo "backup expiry: on"; else echo "!! backup expiry timer is off (deploy/README.md, Rollout backups)"; fi
+    if [ -f "$STATE" ]; then echo "a rollout in progress, at: $(phase)"; else echo "no rollout in progress"; fi
   '
   ;;
 
 stage)
   [ -z "$(git status --porcelain)" ] || die "uncommitted changes: commit them first"
+  sha=$(git rev-parse HEAD)
+  remote '
+    p=$(phase)
+    [ -z "$p" ] || [ "$p" = staged ] || die "a rollout is at $p: finish it, or abort it first"
+    case $(readlink /opt/penge/current) in *-"$OLD_COMMIT"-*) ;; *) die "current is not the release this rollout starts from";; esac
+  '
   dir=$(mktemp -d)
   trap 'rm -rf "$dir"' EXIT
   say "Building $(git rev-parse --short HEAD)"
@@ -98,190 +137,256 @@ stage)
   COPYFILE_DISABLE=1 tar --no-xattrs -C "$dir/$id" -cz . | "${DEPLOY[@]}" penge-receive "$id"
   remote '
     [ -f "/opt/penge/releases/$1.partial/server/admin.mjs" ] || die "the upload is not on the server"
+    # A new rollout: a re-stage starts it again.
+    rm -f "$STATE"
+    setstate rollout "$(date -u +%Y%m%dT%H%M%SZ)"
+    setstate orig_release "$(readlink /opt/penge/current)"
     setstate release "$1"
-    echo "staged: /opt/penge/releases/$1.partial (current is still $(readlink /opt/penge/current))"
-  ' "$id"
+    setstate sha "$2"
+    setstate phase staged
+    echo "staged: /opt/penge/releases/$1.partial; current is still $(state orig_release)"
+  ' "$id" "$sha"
   ;;
 
 stop)
-  say "The window starts: no new check; a running one finishes (up to its 20-minute lock); the API stops"
+  say "The window starts: server.env kept as it was; no new check; a running one finishes; the API stops"
   remote '
+    need staged
+    install -d -m 0700 /root/penge-backups
+    if [ -z "$(state orig_env)" ]; then
+      exp=$(date -u -d "+14 days" +%Y%m%dT%H%M%SZ)
+      env=/root/penge-backups/server.env-$(state rollout)-expires-$exp
+      install -m 0600 /etc/penge/server.env "$env"
+      test -s "$env" || die "the server.env copy is empty"
+      setstate orig_env "$env"
+    fi
     systemctl disable --now penge-check.timer
-    for _ in $(seq 1 300); do s=$(systemctl show -p ActiveState --value penge-check.service); [ "$s" = inactive ] || [ "$s" = failed ] && break; sleep 5; done
+    for _ in $(seq 1 300); do s=$(systemctl show -p ActiveState --value penge-check.service); { [ "$s" = inactive ] || [ "$s" = failed ]; } && break; sleep 5; done
     s=$(systemctl show -p ActiveState --value penge-check.service)
-    [ "$s" = inactive ] || [ "$s" = failed ] || die "the check is still $s after 25 minutes: look at journalctl -u penge-check"
-    echo "last check: $(systemctl show -p Result --value penge-check.service)"
+    [ "$s" = inactive ] || [ "$s" = failed ] || die "the check is still $s after 25 minutes: journalctl -u penge-check (the timer stays off; abort turns it back on)"
     systemctl stop penge-api
     stopped
-    setstate stopped "$(date -u +%Y%m%dT%H%M%SZ)"
-    echo "stopped: no checker, no API (the site shows that dates cannot be loaded)"
+    setstate phase stopped
+    echo "stopped: no checker, no API (the site says dates cannot be loaded). server.env as it was: $(state orig_env)"
   '
   ;;
 
 inspect)
   say "What the channel release left (read only)"
   remote '
+    need stopped inspected
     stopped
-    out=$(admin "$(stagedDir)" channel-inspect)
-    printf "%s\n" "$out" > /root/penge-rollout-inspect.json; chmod 0600 /root/penge-rollout-inspect.json
-    /usr/local/bin/node -e "
-      const i = JSON.parse(require(\"fs\").readFileSync(\"/root/penge-rollout-inspect.json\", \"utf8\"));
-      const n = i.pushKeys.length + i.reservedKeys.length + i.subscribers.length + i.pending.length + (i.pendingChannels ? 1 : 0);
-      console.log(JSON.stringify({ pushKeys: i.pushKeys.length, reservedKeys: i.reservedKeys.length, subscribersWithChannels: i.subscribers.length, pendingWithChannels: i.pending.length, pendingChannels: i.pendingChannels, stops: i.stops }));
-      console.log(n === 0 && i.stops.length === 0 ? \"found nothing: clean is not needed\" : i.stops.length ? \"STOPS: the owner decides before clean (see /root/penge-rollout-inspect.json)\" : \"found channel data: back up, then clean --yes\");
-    "
+    admin "$(stagedDir)" channel-inspect > /root/penge-rollout-inspect.json || die "channel-inspect failed"
+    chmod 0600 /root/penge-rollout-inspect.json
+    sum=$(summary /root/penge-rollout-inspect.json) || die "the inspection is not readable"
+    found=${sum% *}; stops=${sum#* }
+    setstate found "$found"; setstate stops "$stops"; setstate phase inspected
+    echo "found: $found channel records; stops for the owner: $stops"
+    if [ "$stops" != 0 ]; then echo "STOPS (the owner decides; nothing may be cleaned until then):"; /usr/local/bin/node -e "console.log(JSON.parse(require(\"fs\").readFileSync(\"/root/penge-rollout-inspect.json\", \"utf8\")).stops.join(\"\n\"))"; fi
+    if [ "$found" = 0 ]; then echo "nothing to clean: back up, then configure"; else echo "back up, then clean --yes"; fi
   '
   ;;
 
 backup)
-  say "Backups into /root/penge-backups (14 days)"
+  say "The subscribers, every one checked by id, and the channel keys if any"
   remote '
+    need inspected
     stopped
-    install -d -m 0700 /root/penge-backups
-    now=$(date -u +%Y%m%dT%H%M%SZ); exp=$(date -u -d "+14 days" +%Y%m%dT%H%M%SZ)
-    env=/root/penge-backups/server.env-$now-expires-$exp
-    subs=/root/penge-backups/subscribers-$now-expires-$exp.json
-    install -m 0600 /etc/penge/server.env "$env"
-    # The subscriber export with the CURRENT release, which runs with the current configuration.
-    admin /opt/penge/current/server backup > "$subs"; chmod 0600 "$subs"
-    test -s "$env" || die "the server.env backup is empty"
-    test -s "$subs" || die "the subscriber export is empty"
-    count=$(/usr/local/bin/node -e "const d = JSON.parse(require(\"fs\").readFileSync(process.argv[1], \"utf8\")); console.log((d.subscribers ?? []).length)" "$subs") || die "the subscriber export is not readable JSON"
-    live=$(vk SCARD pp:subs)
-    echo "subscribers: $count in the export, $live in the list of all subscribers"
-    # The export also takes subscribers reachable only through an office: never fewer than the list.
-    [ "$count" -ge "$live" ] || die "the export holds fewer subscribers than the list"
-    setstate env_backup "$env"; setstate subs_backup "$subs"
-    # The channel keys, only if inspect found anything.
-    if /usr/local/bin/node -e "const i = JSON.parse(require(\"fs\").readFileSync(\"/root/penge-rollout-inspect.json\", \"utf8\")); process.exit(i.pushKeys.length + i.reservedKeys.length + i.subscribers.length + i.pending.length + (i.pendingChannels ? 1 : 0) > 0 ? 0 : 1)"; then
-      keys=/root/penge-backups/channel-keys-$now-expires-$exp.json
-      admin "$(stagedDir)" channel-dump > "$keys"; chmod 0600 "$keys"
-      /usr/local/bin/node -e "JSON.parse(require(\"fs\").readFileSync(process.argv[1], \"utf8\"))" "$keys" || die "the channel key dump is not readable JSON"
-      setstate keys_backup "$keys"
+    exp=$(date -u -d "+14 days" +%Y%m%dT%H%M%SZ); r=$(state rollout)
+    subs=/root/penge-backups/subscribers-$r-expires-$exp.json
+    # With the CURRENT release, which runs with the current configuration.
+    admin /opt/penge/current/server backup > "$subs" || die "the subscriber export failed"
+    chmod 0600 "$subs"
+    # Every subscriber with a record that the list or an office set names must be in it.
+    { vk SMEMBERS pp:subs; for k in $(vk --scan --pattern "pp:site:*:subs"); do vk SMEMBERS "$k"; done; } | sort -u > /root/penge-rollout-listed
+    vk --scan --pattern "pp:sub:*" | sed "s/^pp:sub://" | sort -u > /root/penge-rollout-hashes
+    comm -12 /root/penge-rollout-listed /root/penge-rollout-hashes > /root/penge-rollout-expected
+    /usr/local/bin/node -e "
+      const fs = require(\"fs\");
+      const d = JSON.parse(fs.readFileSync(process.argv[1], \"utf8\"));
+      if (d.version !== 2 || !Array.isArray(d.subscribers)) throw new Error(\"not a version 2 export\");
+      for (const s of d.subscribers) if (typeof s.id !== \"string\" || !s.fields || typeof s.fields.email !== \"string\") throw new Error(\"a damaged entry\");
+      const have = new Set(d.subscribers.map((s) => s.id));
+      const want = fs.readFileSync(process.argv[2], \"utf8\").split(\"\n\").filter(Boolean);
+      const missing = want.filter((id) => !have.has(id));
+      console.log(\"subscribers: \" + have.size + \" exported, \" + want.length + \" expected, \" + missing.length + \" missing\");
+      if (missing.length) process.exit(1);
+    " "$subs" /root/penge-rollout-expected || die "the export does not hold every subscriber"
+    rm -f /root/penge-rollout-listed /root/penge-rollout-hashes /root/penge-rollout-expected
+    keys=""
+    if [ "$(state found)" != 0 ]; then
+      keys=/root/penge-backups/channel-keys-$r-expires-$exp.json
+      admin "$(stagedDir)" channel-dump > "$keys" || die "the channel key dump failed"
+      chmod 0600 "$keys"
+      /usr/local/bin/node -e "const d = JSON.parse(require(\"fs\").readFileSync(process.argv[1], \"utf8\")); if (!Object.keys(d).length) throw new Error(\"empty\")" "$keys" || die "the channel key dump is not readable, or empty"
       echo "channel keys: $(wc -c < "$keys") bytes"
-    else
-      echo "channel keys: none to back up"
     fi
-    ls -l /root/penge-backups/*-"$now"-*
+    setstate subs_backup "$subs"
+    if [ -n "$keys" ]; then setstate keys_backup "$keys"; fi
+    setstate phase backed_up
+    ls -l "$(state orig_env)" "$subs" ${keys:+"$keys"}
   '
   ;;
 
 clean)
-  [ "${1:-}" = --yes ] || die "clean changes data: run it as: clean --yes (only if inspect found anything)"
+  [ "${1:-}" = --yes ] || die "clean changes data: run it as: clean --yes"
   remote '
+    need backed_up
     stopped
-    [ -n "$(state subs_backup)" ] || die "no backup made in this window (run backup first)"
-    admin "$(stagedDir)" channel-clean --yes
-    echo "and again, expecting nothing:"
-    admin "$(stagedDir)" channel-inspect | /usr/local/bin/node -e "let t=\"\"; process.stdin.on(\"data\", (c) => (t += c)).on(\"end\", () => { const i = JSON.parse(t); const n = i.pushKeys.length + i.reservedKeys.length + i.subscribers.length + i.pending.length + (i.pendingChannels ? 1 : 0); console.log(n === 0 ? \"clean: nothing left\" : \"!! still found \" + n); process.exit(n === 0 ? 0 : 1); })"
+    [ "$(state found)" != 0 ] || die "inspect found nothing: there is nothing to clean (configure next)"
+    [ "$(state stops)" = 0 ] || die "the inspection has stops: the owner decides first"
+    for f in "$(state subs_backup)" "$(state keys_backup)"; do [ -s "$f" ] || die "a backup of this window is missing: $f"; done
+    admin "$(stagedDir)" channel-clean --yes || die "channel-clean failed or refused"
+    admin "$(stagedDir)" channel-inspect > /root/penge-rollout-after.json || die "channel-inspect failed"
+    # Nothing left but reservations a kept pending request still needs, and no stop.
+    /usr/local/bin/node -e "
+      const i = JSON.parse(require(\"fs\").readFileSync(\"/root/penge-rollout-after.json\", \"utf8\"));
+      const needed = new Set(i.livePending.map((p) => \"pp:reserved:\" + p.index));
+      const left = [...i.pushKeys, ...i.subscribers.map((s) => s.id), ...i.pending.map((p) => p.key), ...(i.pendingChannels ? [\"pp:pending:channels\"] : []), ...i.reservedKeys.filter((k) => !needed.has(k))];
+      console.log(left.length || i.stops.length ? \"!! left: \" + JSON.stringify(left) + \", stops: \" + JSON.stringify(i.stops) : \"clean: nothing left\");
+      process.exit(left.length || i.stops.length ? 1 : 0);
+    " || die "the clean left something"
+    setstate phase cleaned
   '
   ;;
 
 configure)
   memory=no
   [ "${1:-}" = --memory-128 ] && memory=yes
-  say "server.env for the new release (a backup of it was made by backup)"
+  say "server.env for the new release"
   remote '
-    stopped
-    [ -n "$(state env_backup)" ] || die "no server.env backup made in this window (run backup first)"
-    f=/etc/penge/server.env; tmp=$(mktemp /etc/penge/.server.env.XXXXXX)
-    # PUSH_MODE=off; PUSH_OWNER_EMAILS out; a new PUSH_OWNER_TOKEN unless one is there; the device limits left to memory.
-    grep -vE "^(PUSH_MODE|PUSH_OWNER_EMAILS)=" "$f" > "$tmp"
-    printf "PUSH_MODE=off\n" >> "$tmp"
-    if ! grep -q "^PUSH_OWNER_TOKEN=" "$tmp"; then
-      token=$(openssl rand -base64 33 | tr "+/" "-_" | tr -d "=\n")
-      [ ${#token} -ge 32 ] || die "could not make a token"
-      printf "PUSH_OWNER_TOKEN=%s\n" "$token" >> "$tmp"
-      umask 077; printf "https://alphaexperiments.com/pengepassportph/#owner=%s\n" "$token" > /root/penge-owner-link.txt
-      echo "owner link written to /root/penge-owner-link.txt (root only)"
+    p=$(phase)
+    if [ "$p" = backed_up ]; then
+      { [ "$(state found)" = 0 ] && [ "$(state stops)" = 0 ]; } || die "inspect found channel data or stops: clean (or the owner) first"
+    else
+      need cleaned configured
     fi
-    chown --reference="$f" "$tmp"; chmod --reference="$f" "$tmp"; mv "$tmp" "$f"
-    echo "server.env: PUSH_MODE=$(grep -E "^PUSH_MODE=" "$f" | cut -d= -f2); PUSH_OWNER_EMAILS $(grep -q "^PUSH_OWNER_EMAILS=" "$f" && echo still set || echo removed); PUSH_OWNER_TOKEN $(grep -q "^PUSH_OWNER_TOKEN=" "$f" && echo set || echo missing)"
+    stopped
+    envset PUSH_OWNER_EMAILS
+    envset PUSH_MODE off
+    if ! tokenOk; then
+      token=$(openssl rand -base64 33 | tr "+/" "-_" | tr -d "=\n")
+      [[ $token =~ ^[A-Za-z0-9_-]{32,256}$ ]] || die "could not make a token"
+      envset PUSH_OWNER_TOKEN "$token"
+    fi
+    ( umask 077; printf "https://alphaexperiments.com/pengepassportph/#owner=%s\n" "$(envget PUSH_OWNER_TOKEN)" > /root/penge-owner-link.txt )
+    tokenOk || die "PUSH_OWNER_TOKEN is not well formed"
+    { [ "$(envget PUSH_MODE)" = off ] && [ -z "$(envget PUSH_OWNER_EMAILS)" ]; } || die "server.env did not take the changes"
+    echo "server.env: PUSH_MODE=off; PUSH_OWNER_EMAILS removed; PUSH_OWNER_TOKEN set (owner link in /root/penge-owner-link.txt)"
     if [ "$1" = yes ]; then
       avail=$(free -m | awk "/^Mem:/ {print \$7}")
       # A fork for a snapshot or rewrite can need up to twice the data: keep maxmemory under half of what is free.
       [ "$avail" -ge 300 ] || die "only $avail MB available: not raising maxmemory"
+      grep -qxE "maxmemory (64|128)mb" /etc/valkey/penge.conf || die "penge.conf has no maxmemory line to raise"
+      vk CONFIG SET maxmemory 128mb >/dev/null || die "Valkey refused CONFIG SET maxmemory"
+      [ "$(vk CONFIG GET maxmemory | tail -1)" = 134217728 ] || die "Valkey did not take maxmemory 128mb"
       sed -i "s/^maxmemory 64mb$/maxmemory 128mb/" /etc/valkey/penge.conf
-      grep -qx "maxmemory 128mb" /etc/valkey/penge.conf || die "penge.conf has no maxmemory 64mb line to raise"
-      vk CONFIG SET maxmemory 128mb >/dev/null
-      echo "valkey: $(vk CONFIG GET maxmemory | tail -1) bytes (and 128mb in penge.conf)"
+      grep -qx "maxmemory 128mb" /etc/valkey/penge.conf || die "penge.conf was not updated (Valkey runs with 128mb until it restarts)"
+      echo "valkey: maxmemory 128mb, now and in penge.conf"
     fi
-    setstate configured "$(date -u +%Y%m%dT%H%M%SZ)"
+    setstate phase configured
   ' "$memory"
   ;;
 
 activate)
   say "Switching to the staged release"
   remote '
+    need configured
     stopped
-    [ -n "$(state configured)" ] || die "server.env not configured in this window (run configure first)"
-    id=$(staged)
-    if ! penge-activate "$id"; then
-      # penge-activate switched back to the release before; it starts with this server.env too. Email goes on.
+    id=$(state release); orig=$(state orig_release)
+    if penge-activate "$id"; then ok=yes; else ok=no; fi
+    cur=$(readlink /opt/penge/current)
+    if [ "$ok" = yes ] && [ "$cur" = "releases/$id" ] && ready; then
+      setstate phase activated
+      # Email goes on before anything else can fail.
       systemctl enable --now penge-check.timer
-      die "the release did not become ready; current is $(readlink /opt/penge/current); the timer is back on (email goes on). PUSH_MODE stays off."
+      echo "live: $id; status: push $(pushMode); the timer is on"
+      if run=$(oneCheck); then setstate check_ok "$run"; echo "healthy: run owner next"; else echo "!! not a healthy check: read journalctl -u penge-check; then: check"; fi
+      exit 0
     fi
-    [ "$(readlink /opt/penge/current)" = "releases/$id" ] || die "current is $(readlink /opt/penge/current), not $id"
-    curl -fsS --max-time 5 http://127.0.0.1:8787/api/status | /usr/local/bin/node -e "let t=\"\"; process.stdin.on(\"data\", (c) => (t += c)).on(\"end\", () => console.log(\"status: push \" + JSON.parse(t).push))"
-    echo "one check now (it waits for the run):"
-    systemctl start penge-check.service || true
-    r=$(systemctl show -p Result --value penge-check.service)
-    echo "check result: $r"
-    journalctl -u penge-check -n 15 --no-pager | cut -c1-220
-    systemctl enable --now penge-check.timer
-    setstate activated "$id"; setstate check "$r"
-    [ "$r" = success ] && echo "healthy: run owner next" || echo "!! the check was not healthy: read the journal; owner waits for a healthy one (the timer is on, email goes on)"
+    # Not live: put the release before back, running, whatever penge-activate managed, and say so.
+    if [ "$cur" != "$orig" ]; then
+      ln -sfn "$orig" /opt/penge/current.new && mv -T /opt/penge/current.new /opt/penge/current
+    fi
+    systemctl restart penge-api
+    if ready; then
+      systemctl enable --now penge-check.timer
+      die "the release did not become ready; back on $orig (with PUSH_MODE=off), running, and the timer is on: email goes on. Read journalctl -u penge-api; abort restores server.env as it was."
+    fi
+    die "neither release became ready: penge-api is down (journalctl -u penge-api). Restore by hand: deploy/README.md."
+  '
+  ;;
+
+check)
+  remote '
+    need activated
+    [ "$(readlink /opt/penge/current)" = "releases/$(state release)" ] || die "current is not the staged release"
+    if run=$(oneCheck); then setstate check_ok "$run"; echo "healthy: run owner next"; else die "not a healthy check: journalctl -u penge-check"; fi
   '
   ;;
 
 owner)
   remote '
-    id=$(state activated); [ -n "$id" ] || die "not activated (run activate first)"
-    [ "$(readlink /opt/penge/current)" = "releases/$id" ] || die "current is not the activated release"
-    r=$(systemctl show -p Result --value penge-check.service)
-    [ "$r" = success ] || die "the last check was $r: wait for a healthy one (journalctl -u penge-check)"
-    f=/etc/penge/server.env
-    sed -i "s/^PUSH_MODE=off$/PUSH_MODE=owner/" "$f"
-    grep -qx "PUSH_MODE=owner" "$f" || die "PUSH_MODE is not off here; nothing changed"
+    need activated
+    [ "$(readlink /opt/penge/current)" = "releases/$(state release)" ] || die "current is not the staged release"
+    [ -n "$(state check_ok)" ] || die "no healthy check on the new release yet (run: check)"
+    tokenOk || die "PUSH_OWNER_TOKEN is not well formed"
+    envset PUSH_MODE owner
     systemctl restart penge-api
-    for _ in $(seq 1 30); do curl -fsS --max-time 3 http://127.0.0.1:8787/api/ready >/dev/null 2>&1 && break; sleep 0.5; done
-    mode=$(curl -fsS --max-time 5 http://127.0.0.1:8787/api/status | /usr/local/bin/node -e "let t=\"\"; process.stdin.on(\"data\", (c) => (t += c)).on(\"end\", () => console.log(JSON.parse(t).push))")
-    [ "$mode" = owner ] || die "status says push $mode"
-    setstate owner "$(date -u +%Y%m%dT%H%M%SZ)"
-    echo "owner mode on. Your link: ssh root@'"$HOST"' cat /root/penge-owner-link.txt (open it once per browser or app)"
-  '
-  ;;
-
-abort)
-  say "Back to the release before, as it was"
-  remote '
-    [ -z "$(state activated)" ] || die "already activated: roll back as deploy/README.md says, not with abort"
-    env=$(state env_backup)
-    if [ -n "$env" ] && [ -f "$env" ]; then
-      install -m 0640 -o root -g penge "$env" /etc/penge/server.env
-      echo "server.env restored from $env"
+    if ready && [ "$(pushMode)" = owner ]; then
+      setstate phase owner
+      echo "owner mode on. Your link: ssh root@'"$HOST"' cat /root/penge-owner-link.txt (open it once per browser or app)"
+      exit 0
     fi
-    if grep -qx "maxmemory 128mb" /etc/valkey/penge.conf && [ -n "$(state configured)" ]; then echo "(Valkey keeps 128mb: harmless; set it back by hand if wanted)"; fi
-    systemctl start penge-api
-    systemctl enable --now penge-check.timer
-    echo "running: $(readlink /opt/penge/current), penge-api $(systemctl is-active penge-api), timer $(systemctl is-active penge-check.timer)"
-    mv "$STATE" "$STATE.aborted-$(date -u +%Y%m%dT%H%M%SZ)"
+    envset PUSH_MODE off
+    systemctl restart penge-api
+    if ready; then die "owner mode did not start; back to PUSH_MODE=off, running (journalctl -u penge-api)"; fi
+    die "owner mode did not start, and penge-api is down with PUSH_MODE=off (journalctl -u penge-api)"
   '
   ;;
 
 publish)
   [ -z "$(git status --porcelain)" ] || die "uncommitted changes"
-  remote '[ -n "$(state owner)" ] || [ -n "$(state activated)" ] || die "not activated yet: publish comes after the window"'
-  head=$(git rev-parse HEAD)
+  out=$(remote '
+    need owner
+    [ "$(readlink /opt/penge/current)" = "releases/$(state release)" ] || die "current is not the rolled-out release"
+    state sha
+  ')
+  sha=$(printf '%s\n' "$out" | tail -1)
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || die "no staged commit recorded"
+  [ "$(git rev-parse HEAD)" = "$sha" ] || die "this checkout is at $(git rev-parse --short HEAD), not the rolled-out $(git rev-parse --short "$sha")"
   git fetch origin main
-  git merge-base --is-ancestor origin/main "$head" || die "origin/main is not an ancestor of this commit: merge by hand"
-  say "Pushing: main → $(git rev-parse --short "$head") (CI then deploys it: the same code, a normal deploy)"
-  git push origin "$head:refs/heads/main"
-  git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"
+  git merge-base --is-ancestor origin/main "$sha" || die "origin/main is not an ancestor of the rolled-out commit: merge by hand"
+  say "Pushing: main → ${sha:0:10} (CI then deploys it: the same code, a normal deploy)"
+  git push origin "$sha:refs/heads/main"
+  git push origin "$sha:refs/heads/$(git rev-parse --abbrev-ref HEAD)"
+  ;;
+
+abort)
+  say "Back to the release before, with its server.env, running"
+  remote '
+    p=$(phase)
+    case $p in staged|stopped|inspected|backed_up|cleaned|configured) ;; *) die "the rollout is at ${p:-nothing}: after activate, roll back as deploy/README.md says";; esac
+    orig=$(state orig_release)
+    [ "$(readlink /opt/penge/current)" = "$orig" ] || die "current is $(readlink /opt/penge/current), not $orig: restore by hand (deploy/README.md)"
+    env=$(state orig_env)
+    if [ -n "$env" ]; then
+      [ -s "$env" ] || die "the server.env copy $env is missing"
+      tmp=$(mktemp /etc/penge/.server.env.XXXXXX); cp "$env" "$tmp"; chown --reference=/etc/penge/server.env "$tmp"; chmod --reference=/etc/penge/server.env "$tmp"; mv "$tmp" /etc/penge/server.env
+      echo "server.env restored from $env"
+    fi
+    if [ "$p" = cleaned ] || [ "$p" = configured ]; then echo "(if clean ran, the channel data it removed is in $(state keys_backup))"; fi
+    if grep -qx "maxmemory 128mb" /etc/valkey/penge.conf; then echo "(Valkey keeps maxmemory 128mb: harmless)"; fi
+    systemctl restart penge-api
+    ready || die "penge-api did not become ready on $orig (journalctl -u penge-api); the timer stays off"
+    systemctl enable --now penge-check.timer
+    mv "$STATE" "$STATE.aborted-$(date -u +%Y%m%dT%H%M%SZ)"
+    echo "running: $orig, penge-api ready, timer on"
+  '
   ;;
 
 *)
-  sed -n '2,22p' "$0"
+  sed -n '2,24p' "$0"
   exit 2
   ;;
 esac
