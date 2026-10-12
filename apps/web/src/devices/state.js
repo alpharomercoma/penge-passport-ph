@@ -17,6 +17,8 @@ export class Unsupported extends Error {
     this.name = 'Unsupported';
   }
 }
+/** This browser's storage (IndexedDB) refused or failed now, though it exists: not a missing capability. */
+export class StorageFailed extends Unsupported {}
 
 const empty = () => ({ credential: null, seq: 0, epoch: 0, op: null, needsRotation: false, claim: null, retired: [], vapidKey: null, known: null, renewedAt: null, gone: [], choices: null, knownVersion: 0 });
 
@@ -27,15 +29,15 @@ function open(env, name = DB_NAME) {
     try {
       req = env.indexedDB.open(name, 1);
     } catch {
-      reject(new Unsupported('IndexedDB refused'));
+      reject(new StorageFailed('IndexedDB refused'));
       return;
     }
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(new Unsupported('IndexedDB failed'));
-    req.onblocked = () => reject(new Unsupported('IndexedDB blocked'));
+    req.onerror = () => reject(new StorageFailed('IndexedDB failed'));
+    req.onblocked = () => reject(new StorageFailed('IndexedDB blocked'));
   });
 }
 
@@ -49,7 +51,7 @@ function transact(env, mode, use, name) {
         use(tx.objectStore(STORE), (v) => (value = v));
         const fail = () => {
           db.close?.();
-          reject(new Unsupported('IndexedDB could not save'));
+          reject(new StorageFailed('IndexedDB could not save'));
         };
         tx.oncomplete = () => {
           db.close?.();

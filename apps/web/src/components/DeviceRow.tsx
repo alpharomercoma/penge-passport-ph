@@ -30,7 +30,7 @@ export function rowText(view: RowView, names: (id: number) => string): string {
     case 'off':
       return `${view.unsubscribed ? TEXT.offDone : TEXT.offBrowser}${view.deleted ? '' : ` ${TEXT.offPending}`}`;
     case 'cant-check':
-      return "Can't check notifications on this device right now.";
+      return view.storage ? TEXT.storageRow : "Can't check notifications on this device right now.";
     case 'legacy':
       return TEXT.legacy;
     case 'updating':
@@ -78,7 +78,7 @@ export function DeviceRow({ controller, onChange, onSetUp, names }: { controller
           <button type="button" className="link-button" onClick={() => void controller.test().then(setNote)}>
             Send a test
           </button>
-          <button type="button" className="link-button" onClick={() => void controller.turnOff().then(setView)}>
+          <button type="button" className="link-button" onClick={() => void controller.turnOff().then(setView, () => undefined)}>
             Turn off
           </button>
         </span>
@@ -86,7 +86,7 @@ export function DeviceRow({ controller, onChange, onSetUp, names }: { controller
       {/* Only Turn off interrupts: it is there whenever this device has something to stop. */}
       {(view.kind === 'setting-up' || view.kind === 'updating' || view.kind === 'cant-check') && (
         <span className="device-actions">
-          <button type="button" className="link-button" onClick={() => void controller.turnOff().then(setView)}>
+          <button type="button" className="link-button" onClick={() => void controller.turnOff().then(setView, () => undefined)}>
             Turn off
           </button>
         </span>

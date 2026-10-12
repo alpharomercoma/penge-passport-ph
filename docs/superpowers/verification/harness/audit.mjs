@@ -12,7 +12,7 @@ const OUT = process.env.AUDIT_OUT ?? join(tmpdir(), 'penge-audit');
 mkdirSync(OUT, { recursive: true });
 const WIDTHS = [320, 360, 375, 390, 412, 768, 1280];
 const findings = [];
-const STATES = 31; // every audit() call below: 15 single states, 13 row states, 3 pages
+const STATES = 32; // every audit() call below: 15 single states, 14 row states, 3 pages
 
 /** Runs in the page: what sticks out or is clipped. */
 function inspect() {
@@ -209,6 +209,7 @@ try {
     'row-off-pending': { kind: 'off', unsubscribed: true, deleted: false },
     'row-off-both-unfinished': { kind: 'off', unsubscribed: false, deleted: false },
     'row-cant-check': { kind: 'cant-check' },
+    'row-cant-check-storage': { kind: 'cant-check', storage: true },
     'row-legacy': { kind: 'legacy' },
     'row-updating': { kind: 'updating' },
   };
@@ -225,6 +226,7 @@ try {
     'row-off-pending': ["Notifications are off on this device. Deleting them from our server when you're back online.", 'Try again'],
     'row-off-both-unfinished': ["This browser didn't stop its subscription. Block notifications for this site in its settings to be sure. Deleting them", 'Try again'],
     'row-cant-check': ["Can't check notifications on this device right now.", 'Turn off'],
+    'row-cant-check-storage': ['block them for this site in its settings', 'Turn off'],
     'row-legacy': ['Close other tabs of this site'],
     'row-updating': ["Updating this device's notifications", 'Turn off'],
   };

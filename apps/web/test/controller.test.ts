@@ -4,6 +4,7 @@ import { type Browser, type BrowserSub, DeviceController, TEXT } from '../src/de
 import * as S from '../src/devices/state.js';
 import { FakeDeviceServer } from './fake-device-server.ts';
 import { env as stateEnv } from './state.test.ts';
+import { rowText } from '../src/components/DeviceRow.tsx';
 
 const choices = { siteIds: [486], applicants: 1, pace: 'asap' as const };
 
@@ -133,6 +134,43 @@ describe('when this browser\'s storage fails', () => {
     const w = world();
     delete (w.env as { indexedDB?: unknown }).indexedDB;
     expect((await w.c.reconcile()).kind).toBe('none');
+  });
+
+  it('Turn off with storage refused never fails silently: the row says to block notifications in the settings', async () => {
+    const w = world();
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    w.env.indexedDB!.open = () => {
+      throw new DOMException('refused', 'UnknownError');
+    };
+    expect(await w.c.reconcile()).toEqual({ kind: 'cant-check', storage: true });
+    const v = await w.c.turnOff();
+    expect(v).toEqual({ kind: 'cant-check', storage: true });
+    expect(rowText(v, () => 'Antipolo')).toBe(TEXT.storageRow);
+    expect(TEXT.storageRow).toMatch(/block them for this site in its settings/);
+  });
+
+  it('a change joining its own unfinished operation sends it again, rather than only waiting', async () => {
+    const w = world();
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    const next = { siteIds: [486], applicants: 2, pace: 'asap' as const };
+    // A tab began this change and went away before sending it.
+    const s = await S.readState(w.env);
+    await S.begin(w.env, { kind: 'change', choices: next, captured: { incarnation: s.known!.incarnation, generation: s.known!.generation, revision: s.known!.revision }, now: w.now() });
+    expect(await w.c.change(next)).toEqual({ ok: true, text: 'Saved.' });
+  });
+
+  it('a service worker out of reach (storage working) is an ordinary "can\'t check", never the storage message', async () => {
+    const w = world();
+    // An operation that ended "gone", its subscription not yet remembered: reconcile removes it, asking the browser.
+    const r = (await S.begin(w.env, { kind: 'setup', choices, captured: null, now: w.now() })) as { started: S.Operation };
+    const sub = await w.browser.subscribe('B'.repeat(87));
+    await S.attach(w.env, { op: r.started.op, epoch: r.started.epoch, subscription: sub.json, fingerprint: await S.fingerprint(w.env, sub.json), by: 'page' });
+    await S.recordResult(w.env, { op: r.started.op, credential: (await S.readState(w.env)).credential!, result: 'gone', activation: null });
+    w.browser.subscription = async () => {
+      throw new S.Unsupported('no service worker registration');
+    };
+    const v = await w.c.reconcile();
+    expect(v).not.toEqual({ kind: 'cant-check', storage: true });
   });
 
   it('a change answers a failure with a retry, never throws', async () => {

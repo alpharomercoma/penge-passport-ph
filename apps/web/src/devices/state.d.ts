@@ -5,6 +5,8 @@ export const LOCK_NAME: 'pengepassportph-device-alerts';
 export const DRIVER_LOCK: 'pengepassportph-device-alerts-driver';
 export const LEGACY_DB: 'pengepassportph-push';
 export class Unsupported extends Error {}
+/** This browser's storage (IndexedDB) refused or failed now, though it exists: not a missing capability. */
+export class StorageFailed extends Unsupported {}
 export interface Env { indexedDB?: IDBFactory; locks?: Pick<LockManager, 'request' | 'query'>; crypto: Crypto }
 export interface SubscriptionJson { endpoint: string; keys: { p256dh: string; auth: string } }
 /** preparing → attached (a subscription, by one caller) → ready (that caller's handshake done) → sent (the server answered). */

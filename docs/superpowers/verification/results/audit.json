@@ -1,6 +1,6 @@
 {
   "version": "Chrome/154.0.8037.99",
-  "run": "mv5lmrq1",
+  "run": "mv5oagoh",
   "widths": [
     320,
     360,
@@ -37,6 +37,7 @@
     "row-off-pending",
     "row-off-both-unfinished",
     "row-cant-check",
+    "row-cant-check-storage",
     "row-legacy",
     "row-updating",
     "form-blocked-hint",

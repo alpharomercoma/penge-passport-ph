@@ -48,6 +48,7 @@ export const TEXT = {
   offline: 'We could not reach the server. Check your connection and try again.',
   changedMeanwhile: 'This alert changed meanwhile. Check it and try again.',
   storage: "This browser couldn't read or save its notification settings. Try again.",
+  storageRow: "This browser can't read its notification settings. To stop notifications here, block them for this site in its settings.",
 } as const;
 
 export interface BrowserSub {
@@ -87,7 +88,8 @@ export type RowView =
   | { kind: 'again' }
   /** Turned off: whether the browser confirmed its subscription gone, and whether the server confirmed the deletion. */
   | { kind: 'off'; unsubscribed: boolean; deleted: boolean }
-  | { kind: 'cant-check' }
+  /** `storage`: this browser's storage refuses now (not the network): only its own settings can stop notifications. */
+  | { kind: 'cant-check'; storage?: true }
   | { kind: 'legacy' }
   | { kind: 'updating' };
 export type SetupResult = { ok: true; text: string } | { ok: false; text: string; retry: boolean };
@@ -270,6 +272,7 @@ export class DeviceController {
       // No row only where nothing could ever be set up (no IndexedDB or no Web Locks at all). Storage that fails or
       // refuses now may hold an alert that is on: the row says it cannot check, and keeps Turn off.
       if (err instanceof S.Unsupported && (!this.d.env.indexedDB || !this.d.env.locks?.request)) return this.show({ kind: 'none' });
+      if (err instanceof S.StorageFailed) return this.show({ kind: 'cant-check', storage: true });
       return this.failedSince(seen);
     }
   }
@@ -983,21 +986,14 @@ export class DeviceController {
     const r = await S.begin(this.d.env, { kind: 'change', choices, captured: { incarnation: s.known.incarnation, generation: s.known.generation, revision: s.known.revision }, now: this.d.now() });
     if ('blocked' in r) return { ok: false, text: TEXT.finishingOff, retry: true };
     if ('waiting' in r) return { ok: false, text: TEXT.slow, retry: true };
-    if ('joined' in r) {
-      // The same change pressed twice, or in two tabs: wait for that operation's own result.
-      for (let i = 0; i < 12; i++) {
-        const now = await S.readState(this.d.env);
-        if (now.op?.op !== r.joined.op) break;
-        if (now.op.result) return now.op.result === 'active' ? { ok: true, text: 'Saved.' } : { ok: false, text: TEXT.changedMeanwhile, retry: true };
-        await this.d.sleep(POLL_FAST_MS);
-      }
-      return { ok: false, text: TEXT.slow, retry: true };
-    }
-    const v = await this.replayChange(r.started, s.credential);
+    // The same change pressed twice, in two tabs, or left unsent by a tab that went away: this operation is sent
+    // (again) until it has its own result. The server knows a repeat of the same operation and answers its result.
+    const op = 'joined' in r ? r.joined : r.started;
+    const v = await this.replayChange(op, s.credential);
     // Saved only on this operation's own result, never because the alert's revision moved (another change may have won).
     const after = (await S.readState(this.d.env)).op;
-    if (after?.op === r.started.op && after.result === 'active') return { ok: true, text: 'Saved.' };
-    if (after?.op === r.started.op && after.result) return { ok: false, text: TEXT.changedMeanwhile, retry: true };
+    if (after?.op === op.op && after.result === 'active') return { ok: true, text: 'Saved.' };
+    if (after?.op === op.op && after.result) return { ok: false, text: TEXT.changedMeanwhile, retry: true };
     if (v.kind === 'cant-check') return { ok: false, text: TEXT.offline, retry: true };
     return { ok: false, text: TEXT.slow, retry: true };
   }
@@ -1038,7 +1034,17 @@ export class DeviceController {
   }
 
   /** Turn off: one local step (state.js), then unsubscribing and the server deletion, each reported on its own. */
+  /** Turns off, or, when this browser's storage refuses, says how to stop notifications from its settings; never rejects. */
   async turnOff(): Promise<RowView> {
+    try {
+      return await this.turnOffOnce();
+    } catch (err) {
+      if (err instanceof S.StorageFailed) return this.show({ kind: 'cant-check', storage: true });
+      return this.show({ kind: 'cant-check' });
+    }
+  }
+
+  private async turnOffOnce(): Promise<RowView> {
     // The browser's subscription unknown (no worker reached): the turn-off goes on, and says it could not confirm.
     const current = await this.d.browser.subscription().catch(() => undefined);
     const fp = current === undefined ? S.UNKNOWN_SUBSCRIPTION : current ? await this.fp(current) : null;
