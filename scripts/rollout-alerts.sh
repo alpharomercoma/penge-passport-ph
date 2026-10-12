@@ -82,16 +82,33 @@ envset() {
 }
 envget() { grep -E "^\$1=" /etc/penge/server.env | tail -1 | cut -d= -f2- || true; }
 timerOn() { systemctl enable --now penge-check.timer && [ "\$(systemctl is-active penge-check.timer)" = active ]; }
-# Back to the original release, running: switched, verified, restarted; prints what it managed.
+# Restarted for real: the restart succeeded, a new process runs (so it read the current release and server.env), and
+# it answers ready; with an expected push mode, it says that mode.
+restartApi() {
+  local before after; before=\$(systemctl show -p MainPID --value penge-api)
+  systemctl restart penge-api || return 1
+  after=\$(systemctl show -p MainPID --value penge-api)
+  { [ "\$after" != 0 ] && [ "\$after" != "\$before" ]; } || return 1
+  ready || return 1
+  [ "\$#" -lt 1 ] || [ "\$(pushMode)" = "\$1" ] || return 1
+}
+# Writers stopped: no new check, a running one finished.
+quiesce() {
+  systemctl disable --now penge-check.timer || return 1
+  local s; for _ in \$(seq 1 300); do s=\$(systemctl show -p ActiveState --value penge-check.service); { [ "\$s" = inactive ] || [ "\$s" = failed ]; } && return 0; sleep 5; done; return 1
+}
+# Back to the original release, running, before activation is recorded: writers stopped, PUSH_MODE=off (the
+# release before refuses owner mode without its owner addresses), switched and verified, restarted for real.
 restoreOrig() {
   local orig; orig=\$(state orig_release)
   [ -d "/opt/penge/\$orig" ] || { echo "!! \$orig is gone from the server"; return 1; }
+  quiesce || { echo "!! could not stop the checker"; return 1; }
+  envset PUSH_MODE off
   if [ "\$(readlink /opt/penge/current)" != "\$orig" ]; then ln -sfn "\$orig" /opt/penge/current.new && mv -T /opt/penge/current.new /opt/penge/current || { echo "!! could not switch current back"; return 1; }; fi
   [ "\$(readlink /opt/penge/current)" = "\$orig" ] || { echo "!! current is \$(readlink /opt/penge/current)"; return 1; }
-  systemctl restart penge-api || true
-  ready || { echo "!! penge-api is not ready on \$orig"; return 1; }
+  restartApi off || { echo "!! penge-api did not restart on \$orig"; return 1; }
   timerOn || { echo "!! the timer did not start"; return 1; }
-  echo "back on \$orig, penge-api ready, the timer on"
+  echo "back on \$orig, penge-api restarted and ready (push off), the timer on"
 }
 tokenOk() { [[ \$(envget PUSH_OWNER_TOKEN) =~ ^[A-Za-z0-9_-]{32,256}\$ ]]; }
 # One check on what is current, now; prints its run id if it finished healthy (not skipped), and fails otherwise.
@@ -228,8 +245,14 @@ backup)
     admin /opt/penge/current/server backup > "$subs" || die "the subscriber export failed"
     chmod 0600 "$subs"
     # Every subscriber with a record that the list or an office set names must be in it.
-    { vk SMEMBERS pp:subs; for k in $(vk --scan --pattern "pp:site:*:subs"); do vk SMEMBERS "$k"; done; } | sort -u > /root/penge-rollout-listed
-    vk --scan --pattern "pp:sub:*" | sed "s/^pp:sub://" | sort -u > /root/penge-rollout-hashes
+    # Every read checked on its own: a failed one never shrinks the list it is checked against.
+    vk SMEMBERS pp:subs > /root/penge-rollout-all || die "could not read pp:subs"
+    vk --scan --pattern "pp:site:*:subs" > /root/penge-rollout-sitekeys || die "could not list the office sets"
+    : > /root/penge-rollout-inoffices
+    while read -r k; do [ -z "$k" ] || vk SMEMBERS "$k" >> /root/penge-rollout-inoffices || die "could not read $k"; done < /root/penge-rollout-sitekeys
+    sort -u /root/penge-rollout-all /root/penge-rollout-inoffices > /root/penge-rollout-listed
+    vk --scan --pattern "pp:sub:*" > /root/penge-rollout-hashkeys || die "could not list the subscriber records"
+    sed "s/^pp:sub://" /root/penge-rollout-hashkeys | sort -u > /root/penge-rollout-hashes
     comm -12 /root/penge-rollout-listed /root/penge-rollout-hashes > /root/penge-rollout-expected
     /usr/local/bin/node -e "
       const fs = require(\"fs\");
@@ -242,7 +265,7 @@ backup)
       console.log(\"subscribers: \" + have.size + \" exported, \" + want.length + \" expected, \" + missing.length + \" missing\");
       if (missing.length) process.exit(1);
     " "$subs" /root/penge-rollout-expected || die "the export does not hold every subscriber"
-    rm -f /root/penge-rollout-listed /root/penge-rollout-hashes /root/penge-rollout-expected
+    rm -f /root/penge-rollout-all /root/penge-rollout-sitekeys /root/penge-rollout-inoffices /root/penge-rollout-listed /root/penge-rollout-hashkeys /root/penge-rollout-hashes /root/penge-rollout-expected
     keys=""
     if [ "$(state found)" != 0 ]; then
       keys=/root/penge-backups/channel-keys-$r-expires-$exp.json
@@ -323,16 +346,26 @@ activate)
   remote '
     need configured activated
     id=$(state release); orig=$(state orig_release)
-    if [ "$(phase)" = configured ] && [ "$(readlink /opt/penge/current)" != "releases/$id" ]; then
+    if [ "$(phase)" = activated ]; then
+      # Activated already: only the staged release is carried on; switching back is the runbook'"'"'s rollback.
+      [ "$(readlink /opt/penge/current)" = "releases/$id" ] || die "activated, but current is $(readlink /opt/penge/current): deploy/README.md, by hand"
+      ready || die "activated, but penge-api is not ready: journalctl -u penge-api; roll back as deploy/README.md says if needed"
+      timerOn || die "the timer did not start"
+      echo "live: $id; the timer is on"
+      exit 0
+    fi
+    if [ "$(readlink /opt/penge/current)" != "releases/$id" ]; then
       stopped
-      # The original release must survive penge-activate'"'"'s pruning (it keeps the five newest): no other upload waits.
+      # The original survives penge-activate'"'"'s pruning (it keeps the five newest): made the newest but the new one,
+      # and no other upload waits.
       others=$(find /opt/penge/releases -mindepth 1 -maxdepth 1 -type d -name "*.partial" ! -name "$id.partial" | wc -l)
       [ "$others" = 0 ] || die "other uploads wait in /opt/penge/releases (*.partial): remove them first"
       [ -d "/opt/penge/$orig" ] || die "$orig is not on the server"
+      touch "/opt/penge/$orig"
       if penge-activate "$id"; then ok=yes; else ok=no; fi
+      [ -d "/opt/penge/$orig" ] || echo "!! $orig was pruned"
     else
-      # Switched already (an earlier run stopped after the switch): carried on from here, never switched back.
-      [ "$(readlink /opt/penge/current)" = "releases/$id" ] || die "the rollout is at $(phase), but current is $(readlink /opt/penge/current): by hand (deploy/README.md)"
+      # Switched already (an earlier run stopped after the switch, before recording it): carried on from here.
       ok=yes
     fi
     if [ "$ok" = yes ] && [ "$(readlink /opt/penge/current)" = "releases/$id" ] && ready; then
@@ -343,8 +376,8 @@ activate)
       if run=$(oneCheck); then setstate check_ok "$run"; echo "healthy: run owner next"; else echo "!! not a healthy check: read journalctl -u penge-check; then: check"; fi
       exit 0
     fi
-    # Not live: the release before back, verified and running, whatever penge-activate managed.
-    if restoreOrig; then die "the release did not become ready; the release before runs again (with PUSH_MODE=off) and email goes on. journalctl -u penge-api; abort restores server.env as it was."; fi
+    # Not live, and not recorded as activated: the release before back, verified and running.
+    if restoreOrig; then die "the release did not become ready; the release before runs again (push off) and email goes on. journalctl -u penge-api; abort restores server.env as it was."; fi
     die "the release did not become ready, and the release before could not be restored: deploy/README.md, by hand"
   '
   ;;
@@ -366,14 +399,13 @@ owner)
     [ "$(systemctl is-active penge-check.timer)" = active ] || die "the timer is off: run activate again"
     tokenOk || die "PUSH_OWNER_TOKEN is not well formed"
     envset PUSH_MODE owner
-    if systemctl restart penge-api && ready && [ "$(pushMode)" = owner ]; then
+    if restartApi owner; then
       setstate phase owner
       echo "owner mode on. Your link: ssh root@'"$HOST"' cat /root/penge-owner-link.txt (open it once per browser or app)"
       exit 0
     fi
     envset PUSH_MODE off
-    systemctl restart penge-api || true
-    if ready; then die "owner mode did not start; back to PUSH_MODE=off, running (journalctl -u penge-api)"; fi
+    if restartApi off; then die "owner mode did not start; back to PUSH_MODE=off, restarted and running (journalctl -u penge-api)"; fi
     die "owner mode did not start, and penge-api is down with PUSH_MODE=off (journalctl -u penge-api)"
   '
   ;;
@@ -412,9 +444,8 @@ abort)
     fi
     if [ "$p" = cleaned ] || [ "$p" = configured ]; then echo "(if clean ran, the channel data it removed is in $(state keys_backup))"; fi
     if grep -qx "maxmemory 128mb" /etc/valkey/penge.conf; then echo "(Valkey keeps maxmemory 128mb: harmless)"; fi
-    systemctl restart penge-api || true
-    ready || die "penge-api did not become ready on $orig (journalctl -u penge-api); the timer stays off"
-    timerOn || die "penge-api runs on $orig, but the timer did not start"
+    restartApi || die "penge-api did not restart and become ready on $orig (journalctl -u penge-api); the timer stays off, the rollout state is kept"
+    timerOn || die "penge-api runs on $orig, but the timer did not start; the rollout state is kept"
     mv "$STATE" "$STATE.aborted-$(date -u +%Y%m%dT%H%M%SZ)"
     echo "running: $orig, penge-api ready, timer on"
   '
