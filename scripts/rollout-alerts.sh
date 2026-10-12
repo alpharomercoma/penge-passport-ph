@@ -52,10 +52,12 @@ state() { grep -E "^\$1=" "\$STATE" 2>/dev/null | tail -1 | cut -d= -f2- || true
 setstate() { touch "\$STATE"; chmod 0600 "\$STATE"; printf '%s=%s\n' "\$1" "\$2" >> "\$STATE"; }
 phase() { state phase; }
 need() { local p; p=\$(phase); for want in "\$@"; do [ "\$p" = "\$want" ] && return 0; done; die "this phase follows: \$* (the rollout is at: \${p:-nothing})"; }
-# Valkey through the penge user and its server.env (REDIS_URL is never printed); -e: an error is a failure.
-vk() { sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec valkey-cli -e -u "\$REDIS_URL" --no-auth-warning "\$@"' sh "\$@"; }
-# A command of a release's admin.mjs, as the penge user with the server's environment.
-admin() { local dir=\$1; shift; sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec /usr/local/bin/node --enable-source-maps "\$0/admin.mjs" "\$@"' "\$dir" "\$@"; }
+# Valkey through the penge user and its server.env (REDIS_URL is never printed); -e: an error is a failure; ended
+# after 30 s at most, so a phase never hangs (the lock goes with it, and abort can run).
+vk() { timeout --kill-after=5s 30s sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec valkey-cli -e -u "\$REDIS_URL" --no-auth-warning "\$@"' sh "\$@"; }
+# A command of a release's admin.mjs, as the penge user with the server's environment; ended after 5 minutes at
+# most (an older release's client retries a lost Valkey for ever).
+admin() { local dir=\$1; shift; timeout --kill-after=10s 300s sudo -u penge sh -c 'set -a; . /etc/penge/server.env; exec /usr/local/bin/node --enable-source-maps "\$0/admin.mjs" "\$@"' "\$dir" "\$@"; }
 stagedDir() { local id; id=\$(state release); [ -n "\$id" ] || die "nothing staged"; if [ -d "/opt/penge/releases/\$id.partial" ]; then printf '%s' "/opt/penge/releases/\$id.partial/server"; elif [ -d "/opt/penge/releases/\$id" ]; then printf '%s' "/opt/penge/releases/\$id/server"; else die "release \$id is not on the server"; fi; }
 stopped() { [ "\$(systemctl is-active penge-api || true)" != active ] || die "penge-api is running"; [ "\$(systemctl is-active penge-check.timer || true)" != active ] || die "penge-check.timer is on"; local s; s=\$(systemctl show -p ActiveState --value penge-check.service); [ "\$s" = inactive ] || [ "\$s" = failed ] || die "a check is running (\$s)"; }
 ready() { for _ in \$(seq 1 40); do curl -fsS --max-time 3 http://127.0.0.1:8787/api/ready >/dev/null 2>&1 && return 0; sleep 0.5; done; return 1; }
