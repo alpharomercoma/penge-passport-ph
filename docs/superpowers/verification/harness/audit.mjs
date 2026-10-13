@@ -160,7 +160,7 @@ try {
   await sleep(600);
   await audit(page, 'home-abroad', { full: true });
   await page.goto(`${SITE}?office=486`, { waitUntil: 'networkidle0' });
-  await audit(page, 'office', { full: true });
+  await audit(page, 'office', { full: true, expect: ['.office-status', 'Checked', 'PHT'] });
   // The tabs show only on narrow screens (wide ones show both panes side by side).
   await page.setViewport({ width: 360, height: 780, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await page.goto(SITE, { waitUntil: 'networkidle0' });

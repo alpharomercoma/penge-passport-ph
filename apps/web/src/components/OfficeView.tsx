@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { type Api, errorText } from '../api.ts';
 import { BOOKING_URL } from '../links.ts';
 import { hourRange, type Office, PARTY_SIZES, partyLabel, plural, shortDate } from '../office.ts';
-import { ago } from '../time.ts';
+import { Checked } from './Checked.tsx';
 import { Calendar, type DayInfo, Legend, monthOf } from './Calendar.tsx';
 import { BellIcon, ChevronIcon, ExternalIcon } from './Icons.tsx';
 
@@ -36,6 +36,8 @@ const smooth = () => (window.matchMedia?.('(prefers-reduced-motion: reduce)').ma
 export function OfficeView(props: Props) {
   const { api, office, lastCheck, offices, today, initialDate, applicants, onApplicants, alertsOpen, onBack, onOpen, onAlert } = props;
   const [fresh, setFresh] = useState<Load<OfficeDates>>({ state: 'idle' });
+  // The group sizes whose latest lookup failed: their saved dates are not shown as fresh until one succeeds.
+  const [failedGroups, setFailedGroups] = useState<ReadonlySet<number>>(new Set());
   const [picked, setPicked] = useState<string | null>(initialDate);
   const [times, setTimes] = useState<Load<OfficeTimes>>({ state: 'idle' });
   // Days the live hours showed to be full since the dates were read.
@@ -58,9 +60,17 @@ export function OfficeView(props: Props) {
       setFresh((prev) => ({ state: 'loading', data: prev.data?.applicants === applicants ? prev.data : undefined }));
       try {
         const data = await api.officeDates(office.id, applicants);
-        if (live) setFresh({ state: 'ready', data });
+        if (live) {
+          setFresh({ state: 'ready', data });
+          // An answer saved after a failed lookup upstream (it carries a warning) is a failure too.
+          if (data.warning) setFailedGroups((prev) => (prev.has(applicants) ? prev : new Set([...prev, applicants])));
+          else setFailedGroups((prev) => (prev.has(applicants) ? new Set([...prev].filter((n) => n !== applicants)) : prev));
+        }
       } catch (err) {
-        if (live) setFresh((prev) => ({ state: 'error', message: errorText(err), data: prev.data }));
+        if (live) {
+          setFresh((prev) => ({ state: 'error', message: errorText(err), data: prev.data }));
+          setFailedGroups((prev) => (prev.has(applicants) ? prev : new Set([...prev, applicants])));
+        }
       } finally {
         busy = false;
       }
@@ -93,6 +103,9 @@ export function OfficeView(props: Props) {
   const seenAt = dates?.at ?? null;
   const closureAt = picked && office.ok && snapshotAt && (!dates?.at || snapshotAt > dates.at) && !office.openDates.includes(picked) ? snapshotAt : seenAt;
   const warning = fresh.state === 'error' ? fresh.message : !useSnapshot ? freshData?.warning : undefined;
+  // The dates shown are current: no warning about them, no failed lookup for this group size since its last success
+  // (a retry may still be waiting), and from a lookup or a scan that succeeded.
+  const datesFresh = !warning && !failedGroups.has(applicants) && (freshData && !useSnapshot ? true : office.ok);
 
   // A picked date must have been open for the current group size (it stays picked
   // after its live hours show it full, so the explanation stays on screen).
@@ -173,7 +186,12 @@ export function OfficeView(props: Props) {
     [offices, office],
   );
   const forGroup = applicants > 1 ? ` for ${applicants} people` : '';
-  const checked = seenAt ? ` Checked ${ago(seenAt)}.` : '';
+  const checked = seenAt ? (
+    <>
+      {' '}
+      Checked <Checked at={seenAt} fresh={datesFresh} />.
+    </>
+  ) : null;
   const hoursWithRoom = times.state === 'ready' ? times.data.slots.filter((s) => s.available).length : 0;
   // With nothing open, what can be done comes first: an alert is then the main action.
   const noneOpen = dates !== null && open.length === 0;
@@ -242,14 +260,24 @@ export function OfficeView(props: Props) {
             ))}
           </select>
         </label>
-        <p className="office-status" aria-live="polite">
+        <p className="office-status" aria-live="polite" aria-atomic="true">
           {!dates && fresh.state === 'error'
             ? 'Dates could not be checked.'
             : !dates
               ? `Checking the dates${forGroup}…`
               : open.length > 0
-                ? `${plural(open.length, 'open day')}${forGroup}, the first on ${shortDate(open[0]!)}.${checked}`
-                : `No open dates${forGroup}.${checked}`}
+                ? (
+                    <>
+                      {`${plural(open.length, 'open day')}${forGroup}, the first on ${shortDate(open[0]!)}.`}
+                      {checked}
+                    </>
+                  )
+                : (
+                    <>
+                      {`No open dates${forGroup}.`}
+                      {checked}
+                    </>
+                  )}
         </p>
       </div>
 
@@ -314,7 +342,14 @@ export function OfficeView(props: Props) {
 
       {picked && !date && dates && (
         <p className="note" role="status">
-          {formatDate(picked)} is no longer open{forGroup}{closureAt ? ` (checked ${ago(closureAt)})` : ''}.
+          {formatDate(picked)} is no longer open{forGroup}
+          {closureAt ? (
+            <>
+              {' '}
+              (checked <Checked at={closureAt} />)
+            </>
+          ) : null}
+          .
           {open.length > 0 ? ' The green days still are.' : ''}
         </p>
       )}
@@ -338,7 +373,14 @@ export function OfficeView(props: Props) {
           {times.state === 'ready' && times.data.warning && <p className="warning" role="status">{times.data.warning}</p>}
           {times.state === 'ready' && hoursWithRoom === 0 && (
             <p className="note">
-              {times.state === 'ready' && times.data.warning ? 'Every hour was full at the last successful lookup.' : 'Every hour is full now.'} It was open when we checked{seenAt ? ` ${ago(seenAt)}` : ''}.
+              {times.state === 'ready' && times.data.warning ? 'Every hour was full at the last successful lookup.' : 'Every hour is full now.'} It was open when we checked
+              {seenAt ? (
+                <>
+                  {' '}
+                  <Checked at={seenAt} />
+                </>
+              ) : null}
+              .
               {open.length > 0 ? ' Try another green day.' : ''}
             </p>
           )}
@@ -355,7 +397,7 @@ export function OfficeView(props: Props) {
                 ))}
               </ul>
               <p className="hint">
-                Checked {ago(times.data.checkedAt)}. The DFA gives a count of places for some hours only, and they can
+                Checked <Checked at={times.data.checkedAt} fresh={!times.data.warning} />. The DFA gives a count of places for some hours only, and they can
                 go in minutes.
               </p>
             </>

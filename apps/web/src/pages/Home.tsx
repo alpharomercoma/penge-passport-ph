@@ -10,7 +10,7 @@ import { DeviceRow } from '../components/DeviceRow.tsx';
 import { deviceController } from '../devices/instance.ts';
 import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
-import { ago, manilaClock } from '../time.ts';
+import { Checked } from '../components/Checked.tsx';
 
 const REFRESH_MS = 60_000;
 /** Posts abroad are checked about hourly: reading them every 5 minutes is plenty. */
@@ -168,6 +168,9 @@ export function Home({ api }: { api: Api }) {
 
   // An office whose latest check failed shows what was last known, with its age, but is not counted as open now.
   const openCount = offices.filter((o) => o.ok && o.earliest).length;
+  // Posts abroad are checked one at a time: the newest of their checks that succeeded (a failed post keeps the time of
+  // its last good one, which is not news of a check).
+  const lastPostCheck = abroad?.posts.reduce<string | null>((m, p) => (p.ok && p.checkedAt && (!m || Date.parse(p.checkedAt) > Date.parse(m)) ? p.checkedAt : m), null) ?? null;
   const loading = scope === 'abroad' ? !abroad && !abroadError : !status && !error;
   const failure = scope === 'abroad' ? (!abroad ? abroadError : null) : !status ? error : null;
 
@@ -200,8 +203,7 @@ export function Home({ api }: { api: Api }) {
               {status?.lastHealthyAt && (
                 <>
                   {' '}
-                  Updated <time className="fresh" dateTime={status.lastHealthyAt}>{ago(status.lastHealthyAt)}</time> ·{' '}
-                  <span className="fresh">{manilaClock(status.lastHealthyAt)}</span>.
+                  Updated <Checked at={status.lastHealthyAt} fresh />.
                 </>
               )}
             </p>
@@ -213,6 +215,12 @@ export function Home({ api }: { api: Api }) {
               </strong>{' '}
               posts abroad have open dates for one person. Each is checked about every {abroad.checkedEveryMinutes} minutes, or every few hours
               while it publishes none.
+              {lastPostCheck && (
+                <>
+                  {' '}
+                  Last checked <Checked at={lastPostCheck} fresh />.
+                </>
+              )}
             </p>
           )}
           {scope === 'abroad' && abroad && !abroad.catalogAt && (

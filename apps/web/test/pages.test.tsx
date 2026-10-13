@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiFailure, api } from '../src/api.ts';
 import { App } from '../src/App.tsx';
 import { manilaClock } from '../src/time.ts';
-import { fakeApi, STATUS } from './helpers.tsx';
+import { ABROAD, fakeApi, STATUS } from './helpers.tsx';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 150);
 
@@ -24,6 +24,10 @@ const scrolled = () => {
 };
 
 const SUMMARY = /DFA offices in the Philippines have open dates for one person/;
+/** A check time as the pages show it: its age, then the time in Manila. */
+const CLOCK = '\\d{1,2}:\\d{2} [AP]M PHT';
+/** The office's line of dates, once it matches (its text spans the highlighted parts). */
+const officeStatus = (re: RegExp) => waitFor(() => expect(document.querySelector('.office-status')?.textContent).toMatch(re));
 
 const visit = (path: string) => window.history.replaceState(null, '', path);
 
@@ -75,7 +79,9 @@ describe('home', () => {
     expect(screen.getByText('(02) 8651-9400')).toBeTruthy();
     expect(screen.getByRole('link', { name: /View map/ }).getAttribute('href')).toBe('https://maps.app.goo.gl/J4tPkGDgNSjURhQn7');
     // The page shows the last scan at once, then the fresh answer.
-    expect(await screen.findByText(/^2 open days, the first on Wed 7 Oct\. Checked just now\.$/)).toBeTruthy();
+    await officeStatus(new RegExp(`^2 open days, the first on Wed 7 Oct\\. Checked just now · ${CLOCK}\\.$`));
+    // Both the age and the time in Manila, highlighted, as on the summary.
+    expect([...document.querySelectorAll('.office-status .fresh')].map((e) => e.textContent)).toEqual(['just now', expect.stringMatching(new RegExp(`^${CLOCK}$`))]);
     expect(api.officeDates).toHaveBeenCalledWith(486, 1);
     expect(scroll).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Wed 7 Oct 2026: open, show the hours' }));
@@ -84,6 +90,7 @@ describe('home', () => {
     expect(scroll.mock.contexts.at(-1)).toBe(document.querySelector('.times'));
     expect(screen.getByText('Wed 7 Oct 2026: 2 of 3 hours open.')).toBeTruthy();
     expect(screen.getByText('11:00 AM to 12:00 PM').closest('li')!.textContent).toContain('Full');
+    expect(document.querySelector('.times .hint')!.textContent).toMatch(new RegExp(`^Checked just now · ${CLOCK}\\. The DFA gives`));
     expect(api.officeTimes).toHaveBeenCalledWith(486, '2026-10-07', 1);
     expect(screen.getByRole('link', { name: /Book on passport.gov.ph/ }).getAttribute('href')).toBe('https://passport.gov.ph/appointment');
     fireEvent.click(screen.getByRole('button', { name: /All offices/ }));
@@ -99,7 +106,7 @@ describe('home', () => {
     render(<App path="/" api={api} />);
     fireEvent.click((await inList()).getByRole('button', { name: /^Antipolo/ }));
     await waitFor(() => expect(api.officeDates).toHaveBeenCalled());
-    expect(await screen.findByText(/^2 open days, the first on Wed 7 Oct\. Checked 5 minutes ago\.$/)).toBeTruthy();
+    await officeStatus(new RegExp(`^2 open days, the first on Wed 7 Oct\\. Checked 5 minutes ago · ${manilaClock(STATUS.checkedAt!)}\\.$`));
   });
 
   it('turns a day grey, and says why, when its live hours are all full', async () => {
@@ -118,7 +125,8 @@ describe('home', () => {
     render(<App path="/" api={api} />);
     fireEvent.click((await inList()).getByRole('button', { name: /^Antipolo/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Wed 7 Oct 2026: open, show the hours' }));
-    expect(await screen.findByText(/^Every hour is full now\. It was open when we checked/)).toBeTruthy();
+    const full = await screen.findByText(/^Every hour is full now\. It was open when we checked/);
+    expect(full.textContent).toMatch(new RegExp(`It was open when we checked just now · ${CLOCK}\\.`));
     expect(screen.queryByRole('button', { name: 'Wed 7 Oct 2026: open, show the hours' })).toBeNull();
     expect(document.querySelector('.day.is-full.is-selected')!.textContent).toBe('7Full');
     expect(screen.getByText(/^1 open day, the first on Fri 9 Oct\. Checked/)).toBeTruthy();
@@ -132,7 +140,7 @@ describe('home', () => {
     // The DFA books one person, or a group of 2 to 5.
     expect([...people.options].map((o) => o.textContent)).toEqual(['Just me', '2 people', '3 people', '4 people', '5 people']);
     fireEvent.change(people, { target: { value: '4' } });
-    expect(await screen.findByText(/^1 open day for 4 people, the first on Fri 9 Oct\. Checked just now\.$/)).toBeTruthy();
+    await officeStatus(new RegExp(`^1 open day for 4 people, the first on Fri 9 Oct\\. Checked just now · ${CLOCK}\\.$`));
     expect(api.officeDates).toHaveBeenCalledWith(486, 4);
     // The group size stays while moving to another office.
     fireEvent.click(screen.getByRole('button', { name: /All offices/ }));
@@ -144,7 +152,7 @@ describe('home', () => {
   it('for a full office, says when dates usually appear and where else is open nearby', async () => {
     render(<App path="/" api={fakeApi()} />);
     fireEvent.click((await inList()).getByRole('button', { name: /^Angeles/ }));
-    expect(await screen.findByText(/^No open dates\. Checked (just now|\d+ minutes? ago)\.$/)).toBeTruthy();
+    await officeStatus(new RegExp(`^No open dates\\. Checked (just now|\\d+ minutes? ago) · ${CLOCK}\\.$`));
     expect(screen.queryByRole('link', { name: /View map/ })).toBeNull();
     expect(screen.getByText(/usually released around 12 noon and 9 PM/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Open elsewhere in Luzon' })).toBeTruthy();
@@ -194,7 +202,9 @@ describe('home', () => {
   it('says so when a date from a link is no longer open', async () => {
     visit('/?office=486&date=2026-10-08');
     render(<App path="/" api={fakeApi()} />);
-    expect(await screen.findByText(/Thu 8 Oct 2026 is no longer open \(checked just now\)\. The green days still are\./)).toBeTruthy();
+    // The last scan's time first, then the fresh look's.
+    const note = await screen.findByText(/Thu 8 Oct 2026 is no longer open/);
+    await waitFor(() => expect(note.textContent).toMatch(new RegExp(`Thu 8 Oct 2026 is no longer open \\(checked just now · ${CLOCK}\\)\\. The green days still are\\.`)));
   });
 
   it('opens straight to an office and day from a shared link', async () => {
@@ -235,7 +245,7 @@ describe('home', () => {
     const list = await inList();
     const antipolo = list.getByRole('button', { name: /^Antipolo/ });
     expect(antipolo.textContent).toContain('Wed 7 Oct');
-    expect(antipolo.textContent).toContain('Checked 32 minutes ago');
+    expect(antipolo.textContent).toContain(`Checked 32 minutes ago · ${manilaClock(earlier)}`);
     expect(antipolo.textContent).not.toContain('Couldn’t check');
     // Nothing known about it with a time: say so rather than guess.
     expect(list.getByRole('button', { name: /^Baguio/ }).textContent).toContain('Couldn’t check');
@@ -359,6 +369,10 @@ describe('posts abroad', () => {
     expect(api.abroad).toHaveBeenCalledTimes(1);
     expect(window.location.search).toBe('?in=abroad');
     expect(document.querySelector('.summary')!.textContent).toMatch(/^2 of 4 posts abroad have open dates for one person\. Each is checked about every 60 minutes/);
+    // When the newest of the posts' checks was, as the Philippines' summary says when it was updated.
+    const newest = ABROAD.posts.map((p) => p.checkedAt).filter((t): t is string => !!t).sort().at(-1)!;
+    expect(document.querySelector('.summary')!.textContent).toMatch(new RegExp(`while it publishes none\\. Last checked 20 minutes ago · ${manilaClock(newest)}\\.$`));
+    expect(document.querySelectorAll('.summary .fresh')).toHaveLength(2);
     expect([...document.querySelectorAll('.pane-offices .country-name')].map((e) => e.textContent)).toEqual(['Denmark', 'Japan', 'United Arab Emirates']);
     const copenhagen = within(list.getByRole('button', { name: /^Copenhagen/ }));
     // Under the Denmark heading, the row need not name Denmark again.
@@ -380,6 +394,24 @@ describe('posts abroad', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('says when posts abroad were last checked from healthy checks only', async () => {
+    const failedLater = new Date(Date.now() - 2 * 60_000).toISOString();
+    const posts = ABROAD.posts.map((p) => (p.id === 36 ? { ...p, ok: false, checkedAt: failedLater } : p));
+    visit('/?in=abroad');
+    render(<App path="/" api={fakeApi({ abroad: vi.fn(async () => ({ ...ABROAD, posts })) })} />);
+    await inAbroadList();
+    // Dubai's latest check failed (its time is kept from before): the newest healthy check is 20 minutes old.
+    expect(document.querySelector('.summary')!.textContent).toMatch(/Last checked 20 minutes ago · /);
+  });
+
+  it('says nothing about when posts abroad were checked while every check failed', async () => {
+    const posts = ABROAD.posts.map((p) => ({ ...p, ok: false }));
+    visit('/?in=abroad');
+    render(<App path="/" api={fakeApi({ abroad: vi.fn(async () => ({ ...ABROAD, posts })) })} />);
+    await inAbroadList();
+    expect(document.querySelector('.summary')!.textContent).not.toMatch(/Last checked/);
+  });
+
   it('opens a post like an office, and says when posts abroad release dates', async () => {
     const api = fakeApi();
     visit('/?in=abroad');
@@ -388,6 +420,8 @@ describe('posts abroad', () => {
     expect(await screen.findByRole('heading', { name: 'Copenhagen' })).toBeTruthy();
     expect(screen.getByText('Philippine Embassy, Denmark')).toBeTruthy();
     expect(screen.getByText('Arne Jacobsens Alle 13, 1st Floor, 2300 Copenhagen')).toBeTruthy();
+    // A post's own check time, as an office's.
+    await officeStatus(new RegExp(`^No open dates\\. Checked (just now|\\d+ minutes? ago) · ${CLOCK}\\.$`));
     expect(await screen.findByText(/Each post releases dates on its own schedule/)).toBeTruthy();
     expect(window.location.search).toBe('?in=abroad&office=497');
     fireEvent.click(screen.getByRole('button', { name: 'All posts abroad' }));

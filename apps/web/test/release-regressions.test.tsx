@@ -32,7 +32,7 @@ describe('release readiness regressions', () => {
     await act(async () => {});
     view.rerender(<OfficeView {...p} office={{ ...p.office, openDates: [], fullDates: ['2026-10-07'], checkedAt: '2026-10-01T00:09:00.000Z' }} />);
     expect(screen.queryByRole('button', { name: /Wed 7 Oct 2026: open/ })).toBeNull();
-    expect(screen.getByText('Wed 7 Oct 2026 is no longer open for 3 people (checked 1 minute ago).')).toBeTruthy();
+    expect(screen.getByText(/is no longer open for 3 people/).textContent).toBe('Wed 7 Oct 2026 is no longer open for 3 people (checked 1 minute ago · 8:09 AM PHT).');
     expect(screen.queryByRole('heading', { name: 'Wed 7 Oct 2026 for 3 people' })).toBeNull();
   });
 
@@ -54,15 +54,80 @@ describe('release readiness regressions', () => {
     render(<OfficeView {...props(api)} />);
     await screen.findByText(/QA upstream unavailable/);
     expect(screen.getByRole('button', { name: /Wed 7 Oct 2026: open/ })).toBeTruthy();
+    // Saved dates: their check time is shown, but not highlighted as fresh.
+    expect(document.querySelector('.office-status')!.textContent).toMatch(/Checked .+ PHT/);
+    expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Try checking again' }));
     await waitFor(() => expect(screen.queryByText(/QA upstream unavailable/)).toBeNull());
     expect(api.officeDates).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps saved dates unhighlighted while a retry after a failure waits', async () => {
+    const api = fakeApi({ officeDates: vi.fn().mockRejectedValueOnce(new ApiFailure('QA upstream unavailable', 503)).mockImplementation(() => new Promise(() => {})) });
+    render(<OfficeView {...props(api)} />);
+    await screen.findByText(/QA upstream unavailable/);
+    fireEvent.click(screen.getByRole('button', { name: 'Try checking again' }));
+    await waitFor(() => expect(api.officeDates).toHaveBeenCalledTimes(2));
+    expect(document.querySelector('.office-status')!.textContent).toMatch(/Checked .+ PHT/);
+    expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(0);
+  });
+
+  it('remembers each group size\'s failure until that group\'s lookup succeeds', async () => {
+    const pending = () => new Promise<never>(() => {});
+    const api = fakeApi({
+      officeDates: vi.fn()
+        .mockRejectedValueOnce(new ApiFailure('QA one person failed', 503))
+        .mockRejectedValueOnce(new ApiFailure('QA two people failed', 503))
+        .mockImplementation(pending),
+    });
+    const p = props(api);
+    const view = render(<OfficeView {...p} />);
+    await screen.findByText(/QA one person failed/);
+    view.rerender(<OfficeView {...p} applicants={2} />);
+    await screen.findByText(/QA two people failed/);
+    view.rerender(<OfficeView {...p} applicants={1} />);
+    await waitFor(() => expect(api.officeDates).toHaveBeenCalledTimes(3));
+    expect(document.querySelector('.office-status')!.textContent).toMatch(/Checked .+ PHT/);
+    expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(0);
+  });
+
+  it('counts an answer saved after a failed lookup as a failure for its group size', async () => {
+    const api = fakeApi({
+      officeDates: vi.fn()
+        .mockResolvedValueOnce({ siteId: 486, applicants: 1, openDates: ['2026-10-07'], fullDates: [], windowEnd: '2027-03-31', checkedAt: at, warning: 'Saved answer after failed refresh' })
+        .mockImplementation(() => new Promise(() => {})),
+    });
+    const p = props(api);
+    const view = render(<OfficeView {...p} />);
+    await screen.findByText(/Saved answer after failed refresh/);
+    view.rerender(<OfficeView {...p} applicants={2} />);
+    view.rerender(<OfficeView {...p} applicants={1} />);
+    await waitFor(() => expect(api.officeDates).toHaveBeenCalledTimes(3));
+    expect(document.querySelector('.office-status')!.textContent).toMatch(/Checked .+ PHT/);
+    expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(0);
   });
 
   it('discloses a server-side cached fallback warning and keeps its observation time', async () => {
     const api = fakeApi({ officeDates: vi.fn(async () => ({ siteId: 486, applicants: 1, openDates: ['2026-10-07'], fullDates: [], windowEnd: '2027-03-31', checkedAt: at, warning: 'Saved answer after failed refresh' })) });
     render(<OfficeView {...props(api)} />);
     await screen.findByText(/Saved answer after failed refresh/);
+    expect(document.querySelector('.office-status')!.textContent).toMatch(/Checked .+ PHT/);
+    expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(0);
+  });
+
+  it('highlights the dates line as fresh only for a healthy answer, and announces it whole', async () => {
+    const api = fakeApi({ officeDates: vi.fn(async () => ({ siteId: 486, applicants: 1, openDates: ['2026-10-07'], fullDates: [], windowEnd: '2027-03-31', checkedAt: '2026-10-01T00:09:00.000Z' })) });
+    render(<OfficeView {...props(api)} />);
+    await waitFor(() => expect(document.querySelectorAll('.office-status .fresh')).toHaveLength(2));
+    expect(document.querySelector('.office-status')!.getAttribute('aria-atomic')).toBe('true');
+  });
+
+  it('never highlights saved hours as fresh', async () => {
+    const api = fakeApi({ officeTimes: vi.fn(async () => ({ ...TIMES, warning: 'Saved hours after a failed lookup' })) });
+    render(<OfficeView {...props(api)} initialDate="2026-10-07" />);
+    await screen.findByText(/Saved hours after a failed lookup/);
+    expect(document.querySelector('.times .hint')!.textContent).toMatch(/^Checked .+ PHT\./);
+    expect(document.querySelectorAll('.times .hint .fresh')).toHaveLength(0);
   });
 
   it('lets a full hour reopen on a subsequent lookup', async () => {

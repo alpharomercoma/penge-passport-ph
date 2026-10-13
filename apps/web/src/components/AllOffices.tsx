@@ -1,7 +1,7 @@
 import { formatDate } from '@penge/contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { matches, type Office, plural, shortDate, sortOffices } from '../office.ts';
-import { ago } from '../time.ts';
+import { Checked } from './Checked.tsx';
 import { Calendar, type DayInfo, Legend, monthOf } from './Calendar.tsx';
 import { ChevronIcon, SearchIcon } from './Icons.tsx';
 
@@ -159,7 +159,11 @@ export function AllOffices({ offices, today, onOpen, areas: chips, abroad = fals
                             <span className="row-full">{o.publishedDays ? 'Fully booked' : 'No dates yet'}</span>
                           )}
                           {/* The latest check failed: this is what was known, and when. */}
-                          {!o.ok && o.checkedAt && <span className="row-stale">Checked {ago(o.checkedAt)}</span>}
+                          {!o.ok && o.checkedAt && (
+                            <span className="row-stale">
+                              Checked <Checked at={o.checkedAt} />
+                            </span>
+                          )}
                         </span>
                         <ChevronIcon />
                       </button>
