@@ -197,7 +197,9 @@ root (`handle /.well-known/assetlinks.json` in `deploy/caddy/Caddyfile.template`
 - as `application/json`, which Caddy gives any `.json` file.
 
 After the app is created in Play Console, add **Play's app signing key** to the file. Without it, copies
-installed from Play show the address bar.
+installed from Play show the address bar. Done on 2026-10-13: Play's key is
+`17:46:D9:86:D2:E2:87:F9:6B:36:8F:12:32:FE:66:29:2F:F8:1E:4A:D8:68:58:49:AD:FE:92:1F:2D:F1:D4:FD`
+(read from a copy installed from Play), listed after the upload key's.
 
 1. Find the key's SHA-256 in Play Console: your app, **App integrity**, the **App signing** tab, under
    "App signing key certificate".
