@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const A = __dirname + '/assets';
 (async () => {
-  const b = await chromium.launch();
+  const b = await chromium.launch({ channel: 'chromium' });
   const p = await (await b.newContext({ viewport: { width: 620, height: 900 }, deviceScaleFactor: 3 })).newPage();
   await p.goto('file://' + A + '/email.html');
   const card = p.locator('body > div').first();

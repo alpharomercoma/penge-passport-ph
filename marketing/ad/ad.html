@@ -29,7 +29,7 @@
   .phone .screen { position: relative; overflow: hidden; border-radius: 55px; background: #fff; }
   .phone .screen img { position: absolute; left: 0; top: 0; width: 100%; display: block; }
   .phone .status { position: absolute; left: 0; top: 0; right: 0; height: 51px; background: #fff; z-index: 4; font: 700 19px -apple-system, sans-serif; color: #111; padding: 17px 0 0 46px; }
-  .phone .island { position: absolute; left: 50%; top: 26px; width: 118px; height: 34px; margin-left: -59px; background: #0b0f0d; border-radius: 20px; z-index: 5; }
+  .phone .island { position: absolute; left: 50%; top: 30px; width: 26px; height: 26px; margin-left: -13px; background: #0b0f0d; border-radius: 50%; z-index: 5; }
 
   /* bits */
   .chip { position: absolute; display: inline-flex; align-items: center; gap: 12px; height: 70px; padding: 0 30px; border-radius: 999px; font-weight: 700; font-size: 32px; white-space: nowrap; }
@@ -47,10 +47,18 @@
   .stat { position: absolute; }
   .stat b { display: block; font-size: 150px; font-weight: 800; letter-spacing: -0.05em; line-height: 0.9; font-variant-numeric: tabular-nums; }
   .stat span { display: block; font-size: 32px; font-weight: 600; margin-top: 12px; }
-  .notif { position: absolute; width: 400px; border-radius: 30px; padding: 20px 22px; background: rgba(246,248,247,0.96); box-shadow: 0 18px 40px rgba(0,0,0,0.25); z-index: 30; display: grid; grid-template-columns: 52px 1fr; gap: 14px; font-size: 18px; line-height: 1.3; }
-  .notif .icon { width: 52px; height: 52px; border-radius: 13px; background: #fff; display: grid; place-items: center; box-shadow: 0 0 0 1px var(--line) inset; }
-  .notif .top { display: flex; justify-content: space-between; color: var(--ink-2); font-size: 16px; font-weight: 600; }
-  .notif .title { font-weight: 700; }
+  .notif { position: absolute; width: 397px; border-radius: 28px; padding: 18px 20px 20px; background: #fbfdfc; box-shadow: 0 16px 36px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.04); z-index: 30; font-family: Roboto, "Google Sans", -apple-system, sans-serif; font-size: 18px; line-height: 1.35; color: #1b1f1d; }
+  .notif .top { display: flex; align-items: center; gap: 10px; color: #4f5b55; font-size: 15px; margin-bottom: 8px; }
+  .notif .top .icon { width: 30px; height: 30px; border-radius: 50%; background: #0a7a43; display: grid; place-items: center; }
+  .notif .title { font-weight: 600; font-size: 19px; }
+  .notif .body { color: #4f5b55; }
+  .scrim { position: absolute; z-index: 25; background: rgba(0,0,0,0.42); border-radius: 55px; }
+  .perm { position: absolute; z-index: 26; width: 360px; border-radius: 28px; padding: 26px 24px 14px; background: #eef3f0; font-family: Roboto, "Google Sans", -apple-system, sans-serif; text-align: center; color: #1b1f1d; }
+  .perm .bell { width: 34px; height: 34px; margin: 0 auto 14px; color: #0a7a43; }
+  .perm p { font-size: 22px; line-height: 1.3; margin-bottom: 18px; }
+  .perm .btn { display: block; padding: 14px 0; border-radius: 999px; font-size: 18px; font-weight: 600; color: #0a5c34; }
+  .perm .btn.allow { background: #cfe8da; margin-bottom: 6px; }
+  .playbadge { position: absolute; width: 360px; display: block; }
   .mail { position: absolute; width: 720px; transform-origin: 0 0; background: #fff; border-radius: 26px; box-shadow: 0 40px 90px rgba(0,0,0,0.22); overflow: hidden; }
   .mail .head { padding: 24px 32px 18px; border-bottom: 1px solid var(--line); font-size: 21px; line-height: 1.5; color: var(--ink-2); }
   .mail .head b { color: var(--ink); font-weight: 700; }
@@ -136,11 +144,12 @@ const CHECK = `<svg width="30" height="30" viewBox="0 0 24 24"><path d="M5 12.5l
 const REFRESH = `<svg width="54" height="54" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const STATUS = 47, PHONE_S = 1.08, SCREEN_W = 390 * PHONE_S, SCREEN_H = 844 * PHONE_S;
-function phone(parent) {
+// The status bar's time: when the live screens were captured (capture.cjs), unless a scene sets its own.
+function phone(parent, time = window.BOXES.clock) {
   const p = el('div', 'phone abs', parent);
   const sc = el('div', 'screen', p);
   sc.style.width = SCREEN_W + 'px'; sc.style.height = SCREEN_H + 'px';
-  el('div', 'status', sc, '12:00');
+  el('div', 'status', sc, time);
   el('div', 'island', p);
   return { p, sc, imgs: {} };
 }
@@ -216,16 +225,19 @@ scene(bar(2), bar(4), 'dark', (r) => {
   const lab = line(r, 'New slots drop at', 'label muted', 170, 150, 44);
   const a = line(r, '12:00 NN', 'h1', 160, 220, 190, 'color:#fff');
   const b = line(r, '<span style="color:rgba(255,255,255,0.35)">&amp;</span> 9:00 PM', 'h1', 160, 400, 190, 'color:#fff');
+  // The DFA's own words: Mondays to Saturdays except holidays (docs/legal/README.md).
+  const when = line(r, 'Monday to Saturday, except holidays · Philippine time', 'label muted', 170, 612, 32);
   const row = el('div', 'cal', r); row.style.left = '170px'; row.style.top = '680px'; row.style.gridTemplateColumns = 'repeat(7, 120px)'; row.style.gap = '14px';
   const cells = Array.from({ length: 7 }, (_, i) => { const c = el('div', 'cell', row, `${12 + i}<small>Full</small>`); c.style.width = c.style.height = '120px'; return c; });
   const gone = line(r, 'Ubos agad.', 'h1', 1230, 660, 110, 'color:#fff');
   const gone2 = line(r, 'Gone in minutes.', 'label muted', 1236, 790, 38);
-  return { lab, a, b, row, cells, gone, gone2, r };
+  return { lab, a, b, when, row, cells, gone, gone2, r };
 }, (t, c) => {
   const t0 = bar(2);
   reveal(c.lab, t, t0, 0.35);
   reveal(c.a, t, t0 + 0.05, 0.4);
   reveal(c.b, t, t0 + BEAT * 2, 0.4);
+  reveal(c.when, t, t0 + BEAT * 3, 0.4);
   // At the next bar, days open green one by one... and go grey again just as fast.
   const t1 = bar(3);
   c.cells.forEach((cell, i) => {
@@ -256,7 +268,7 @@ scene(bar(4), bar(6), 'white', (r) => {
   logo.style.cssText += 'left:810px;top:180px;width:300px;height:300px;';
   const word = line(r, 'PengePassport<span style="color:var(--ink-2)">PH</span>', 'h1', 0, 540, 150);
   word.m.style.left = '0'; word.m.style.width = '1920px'; word.s.style.textAlign = 'center';
-  const tag = line(r, 'Free email alerts for DFA passport appointments.', 'label', 0, 720, 44, 'font-weight:600;color:var(--ink-2)');
+  const tag = line(r, 'Free DFA passport appointment alerts, by notification or email.', 'label', 0, 720, 44, 'font-weight:600;color:var(--ink-2)');
   tag.m.style.width = '1920px'; tag.s.style.textAlign = 'center';
   const pills = ['Free', 'Open source', 'Not a fixer'].map((w) => el('div', 'chip green abs', r, CHECK + w));
   return { glow, burst, logo, word, tag, pills };
@@ -350,7 +362,7 @@ scene(bar(9), bar(12), 'dark', (r) => {
   reveal(c.q, t, t0 + 0.05, 0.45, bar(10) - 0.35);
   reveal(c.qs, t, t0 + BEAT * 2, 0.4, bar(10) - 0.35);
   reveal(c.kick, t, bar(10), 0.4);
-  const n1 = Math.round(133 * E.outCubic(prog(t, bar(10), bar(10) + 1.2)));
+  const n1 = Math.round(136 * E.outCubic(prog(t, bar(10), bar(10) + 1.2)));
   const n2 = Math.round(67 * E.outCubic(prog(t, bar(10, 1), bar(10, 1) + 1.1)));
   c.s1.querySelector('b').textContent = n1; c.s2.querySelector('b').textContent = n2;
   const a1 = E.outExpo(prog(t, bar(10), bar(10) + 0.5)), a2 = E.outExpo(prog(t, bar(10, 1), bar(10, 1) + 0.5));
@@ -389,7 +401,7 @@ scene(bar(12), bar(15), 'light', (r) => {
   const s = line(r, 'Live from passport.gov.ph, hour by hour.', 'label', 154, 600, 36, 'font-weight:600;color:var(--ink-2)');
   const cam = el('div', 'abs', r);
   cam.style.transformOrigin = '0 0';
-  const ph = phone(cam); screenImg(ph, 'baguio-cal-top'); screenImg(ph, 'baguio-hours-view');
+  const ph = phone(cam); screenImg(ph, 'office-cal-top'); screenImg(ph, 'office-hours-view');
   const cur = el('div', 'cursor abs', ph.p, CURSOR);
   const rip = el('div', 'ripple abs', ph.p);
   const rings = BOX.hours.slice(0, 2).map(() => el('div', 'ring abs', ph.p));
@@ -406,9 +418,9 @@ scene(bar(12), bar(15), 'light', (r) => {
   put(c.ph.p, { x: 0, y: Math.sin(t * 1.3) * 6, ry: -4 });
   // One continuous scroll: the hours screenshot is the same page, further down.
   const sy = BOX.hoursScroll * E.inOutCubic(prog(t, bar(13) - 0.1, bar(13) + 0.45));
-  showImg(c.ph, 'baguio-cal-top', sy, 1);
-  showImg(c.ph, 'baguio-hours-view', sy - BOX.hoursScroll, 1);
-  // The tap on Wed 7 Oct.
+  showImg(c.ph, 'office-cal-top', sy, 1);
+  showImg(c.ph, 'office-hours-view', sy - BOX.hoursScroll, 1);
+  // The tap on Tue 20 Oct.
   const tapT = bar(12, 2.5);
   const d = BOX.day, target = onScreen(d.x + d.w / 2, d.y + d.h / 2);
   const ca = E.outExpo(prog(t, t0 + 0.4, tapT));
@@ -425,59 +437,81 @@ scene(bar(12), bar(15), 'light', (r) => {
   });
 });
 
-// 7. The email alert.
+// 7. The alert: notifications on this phone (no email needed), or email.
 const EMAIL = 'juan@example.com';
 const MAIL_K = 720 / MAIL.width; // email-card.png is shown 720 wide
 const MAIL_ROWS = MAIL.rows.slice(0, 4);
+const BELL = `<svg viewBox="0 0 24 24" width="34" height="34"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SMALL_BELL = BELL.replace('width="34" height="34"', 'width="18" height="18"').replace('currentColor', '#fff');
+// What the app shows, word for word (apps/web/src/sw.js; apps/server/src/push/payload.ts).
+const heads = (title, body) => `<div class="top"><span class="icon">${SMALL_BELL}</span><span>PengePassportPH • now</span></div><div class="title">${title}</div><div class="body">${body}</div>`;
 scene(bar(15), bar(19), 'light', (r) => {
-  const h = line(r, 'Pick your offices.', 'h1', 150, 300, 110);
-  const h2 = line(r, 'Add your email.', 'h1', 150, 410, 110);
+  const h = line(r, 'Pick your offices.', 'h1', 150, 300, 110, '', );
+  const h2 = line(r, 'Tap Notifications.', 'h1', 150, 410, 110);
   const h3 = line(r, 'A date opens?', 'h1', 150, 300, 112);
-  const h4 = line(r, 'You get the email.', 'h1', 150, 415, 112, 'color:var(--open)');
-  const s = line(r, 'Then book it yourself on passport.gov.ph, for free.', 'label', 154, 580, 36, 'font-weight:600;color:var(--ink-2)');
-  const ph = phone(r); screenImg(ph, 'alert-sheet-empty');
-  const cover = el('div', 'abs', ph.p);
-  const ib = BOX.email, ip = onScreen(ib.x + 2, ib.y + 2);
-  cover.style.cssText += `width:${(ib.w - 4) * PHONE_S}px;height:${(ib.h - 4) * PHONE_S}px;background:#fff;border-radius:6px;`;
-  put(cover, { x: ip.x, y: ip.y });
-  const typed = el('div', 'typed abs', ph.p);
+  const h4 = line(r, 'Your phone buzzes.', 'h1', 150, 415, 112, 'color:var(--open)');
+  const h5 = line(r, 'Prefer email?', 'h1', 150, 300, 112);
+  const h6 = line(r, 'That works too.', 'h1', 150, 415, 112, 'color:var(--open)');
+  const s0 = line(r, 'No email needed. No account required.', 'label', 154, 580, 36, 'font-weight:600;color:var(--ink-2)');
+  const s = line(r, 'Then book it yourself on passport.gov.ph.', 'label', 154, 580, 36, 'font-weight:600;color:var(--ink-2)');
+  const ph = phone(r, '12:02'); screenImg(ph, 'alert-sheet-empty'); screenImg(ph, 'alert-sheet-notify');
+  const scrim = el('div', 'scrim abs', ph.p);
+  scrim.style.width = SCREEN_W + 'px'; scrim.style.height = SCREEN_H + 'px';
+  const perm = el('div', 'perm abs', ph.p, `<div class="bell">${BELL}</div><p>Allow <b>PengePassportPH</b> to send you notifications?</p><div class="btn allow">Allow</div><div class="btn">Don’t allow</div>`);
   const cur = el('div', 'cursor abs', ph.p, CURSOR);
   const rip = el('div', 'ripple abs', ph.p);
-  const notif = el('div', 'notif abs', ph.p, `<div class="icon">${LOGO(40)}</div><div><div class="top"><span>PengePassportPH</span><span>now</span></div><div class="title">${MAIL.subject}</div><div>New appointment dates opened for 1 person…</div></div>`);
+  const on = el('div', 'notif abs', ph.p, heads('Notifications are on', 'We’ll tell you when dates open at Ilocos Norte.'));
+  const alert = el('div', 'notif abs', ph.p, heads('Dates open at Ilocos Norte', 'Tue 20 Oct, Wed 21 Oct and Thu 22 Oct · for 1 person · Checked 12:02'));
   const mail = el('div', 'mail abs', r, `<div class="head"><div><b>PengePassportPH</b> &lt;alerts@penge.alphaexperiments.com&gt;</div><div>To: ${EMAIL}</div><div class="subj">${MAIL.subject}</div></div><div class="mbody" style="position:relative"><img src="assets/email-card.png"></div>`);
   const hl = MAIL_ROWS.map(() => el('div', 'abs', mail.querySelector('.mbody')));
   hl.forEach((x) => (x.style.cssText += 'border-radius:6px;background:rgba(10,122,67,0.18);'));
-  return { h, h2, h3, h4, s, ph, cover, typed, cur, rip, notif, mail, hl };
+  return { h, h2, h3, h4, h5, h6, s0, s, ph, scrim, perm, cur, rip, on, alert, mail, hl };
 }, (t, c) => {
   const t0 = bar(15);
+  // The beats: tap the switch, Allow, tap the button, "on"; the chime brings the alert; then email.
+  const tapSwitch = bar(15, 2), tapAllow = bar(15, 3.5), tapSend = bar(16, 1.5), onAt = bar(16, 2.5);
   reveal(c.h, t, t0 + 0.05, 0.45, bar(17) - 0.35);
-  reveal(c.h2, t, t0 + BEAT * 2, 0.45, bar(17) - 0.35);
-  reveal(c.h3, t, bar(17), 0.4);
-  reveal(c.h4, t, bar(17, 1), 0.45);
-  reveal(c.s, t, bar(18, 2), 0.45);
-  // The phone; when the email arrives it drops away and the email takes its place.
+  reveal(c.h2, t, tapSwitch, 0.45, bar(17) - 0.35);
+  reveal(c.s0, t, bar(16, 2), 0.45, bar(17) - 0.35);
+  reveal(c.h3, t, bar(17), 0.4, bar(18) - 0.35);
+  reveal(c.h4, t, bar(17, 1), 0.45, bar(18) - 0.35);
+  reveal(c.h5, t, bar(18), 0.4);
+  reveal(c.h6, t, bar(18, 1), 0.45);
+  reveal(c.s, t, bar(18, 2.5), 0.45);
+  // The phone; when email comes up it drops away and the email takes its place.
   const pin = E.outExpo(prog(t, t0, t0 + 0.7));
   const away = E.inCubic(prog(t, bar(18) - 0.25, bar(18) + 0.2));
   put(c.ph.p, { x: 1230 + (1 - pin) * 800, y: 70 + Math.sin(t * 1.3) * 6 + away * 500, ry: -4, s: 1 - away * 0.1, o: 1 - away });
+  // The form: off until Allow, then Notifications on (the real screens, captured from the live site).
+  const switched = prog(t, tapAllow + 0.08, tapAllow + 0.2);
   showImg(c.ph, 'alert-sheet-empty', 0, 1);
-  // Typing, a character at a time, into the real field (its placeholder hidden once typing starts).
-  const n = Math.floor(clamp((t - (t0 + 0.4)) / 0.09, 0, EMAIL.length));
-  c.cover.style.opacity = t > t0 + 0.4 ? 1 : 0;
-  const field = onScreen(BOX.email.x + 13, BOX.email.y + 13);
-  c.typed.style.fontSize = 16 * PHONE_S + 'px';
-  c.typed.innerHTML = EMAIL.slice(0, n) + (t < bar(16) && Math.floor(t * 3) % 2 === 0 ? '<span class="caret"></span>' : '');
-  put(c.typed, { x: field.x, y: field.y });
-  // The tap on "Send confirmation email".
-  const tapT = bar(16, 1);
-  const sb = BOX.send, target = onScreen(sb.x + sb.w / 2, sb.y + sb.h / 2);
-  const ca = E.outExpo(prog(t, bar(16) - 0.3, tapT));
-  put(c.cur, { x: lerp(560, target.x - 8, ca), y: lerp(1100, target.y - 6, ca), o: t > bar(16) - 0.3 && t < bar(17) ? 1 : 0, s: 1 - 0.15 * Math.exp(-Math.max(0, t - tapT) * 12) * (t > tapT ? 1 : 0) });
-  const rp = prog(t, tapT, tapT + 0.4);
-  put(c.rip, { x: target.x, y: target.y, s: 0.3 + rp, o: t > tapT && t < bar(17) ? 1 - rp : 0 });
-  // The chime: a notification drops onto the screen.
-  const nq = E.outBack(prog(t, bar(17), bar(17) + 0.45));
-  put(c.notif, { x: 14 + 10, y: lerp(-200, 70, nq), o: t > bar(17) ? 1 : 0 });
-  // The email itself rises into the phone's place.
+  showImg(c.ph, 'alert-sheet-notify', 0, switched);
+  // Android's permission prompt, over a dimmed screen, from the tap on the switch to the tap on Allow.
+  const pIn = E.outBack(prog(t, tapSwitch + 0.1, tapSwitch + 0.45)), pOut = prog(t, tapAllow + 0.05, tapAllow + 0.25);
+  const permShown = t > tapSwitch + 0.1 && pOut < 1;
+  put(c.scrim, { x: 14, y: 14, o: permShown ? Math.min(clamp(pIn), 1 - pOut) : 0 });
+  const pw = 360, ph0 = onScreen(0, 0);
+  put(c.perm, { x: 14 + (SCREEN_W - pw) / 2, y: 14 + SCREEN_H * 0.36, s: Math.max(0.001, 0.92 + 0.08 * pIn), o: permShown ? 1 - pOut : 0 });
+  // Where the cursor goes: the switch, Allow, then the button.
+  const sw = BOX.notify, sb = BOX.submit;
+  const pSwitch = onScreen(sw.x + 26, sw.y + sw.h / 2);
+  const allowEl = { x: 14 + (SCREEN_W - pw) / 2 + pw / 2, y: 14 + SCREEN_H * 0.36 + 186 };
+  const pSend = onScreen(sb.x + sb.w / 2, sb.y + sb.h / 2);
+  let cx, cy, tapAt;
+  if (t < tapSwitch + 0.25) { const k = E.outExpo(prog(t, t0 + 0.5, tapSwitch)); cx = lerp(560, pSwitch.x, k); cy = lerp(1100, pSwitch.y, k); tapAt = tapSwitch; }
+  else if (t < tapAllow + 0.25) { const k = E.inOutCubic(prog(t, tapSwitch + 0.4, tapAllow)); cx = lerp(pSwitch.x, allowEl.x, k); cy = lerp(pSwitch.y, allowEl.y, k); tapAt = tapAllow; }
+  else { const k = E.inOutCubic(prog(t, tapAllow + 0.3, tapSend)); cx = lerp(allowEl.x, pSend.x, k); cy = lerp(allowEl.y, pSend.y, k); tapAt = tapSend; }
+  const since = t - tapAt;
+  put(c.cur, { x: cx - 8, y: cy - 6, o: t > t0 + 0.5 && t < tapSend + 0.5 ? 1 : 0, s: since > 0 ? 1 - 0.15 * Math.exp(-since * 12) : 1 });
+  const rp = clamp(since / 0.4);
+  put(c.rip, { x: cx, y: cy, s: 0.3 + rp, o: since > 0 && since < 0.4 && t < tapSend + 0.5 ? 1 - rp : 0 });
+  // "Notifications are on" drops in, then goes (the page says so itself).
+  const oIn = E.outBack(prog(t, onAt, onAt + 0.45)), oOut = E.inCubic(prog(t, bar(17) - 0.3, bar(17) - 0.05));
+  put(c.on, { x: 14 + 12, y: lerp(-220, 70, oIn) - oOut * 300, o: t > onAt && oOut < 1 ? 1 : 0 });
+  // The chime: the alert itself.
+  const aIn = E.outBack(prog(t, bar(17), bar(17) + 0.45));
+  put(c.alert, { x: 14 + 12, y: lerp(-220, 70, aIn) + (t > bar(17) ? 4 * kickPulse(t, bar(17)) : 0), o: t > bar(17) ? 1 : 0 });
+  // The email rises into the phone's place.
   const mq = E.outExpo(prog(t, bar(18) - 0.05, bar(18) + 0.7));
   put(c.mail, { x: 1085, y: lerp(1100, 150, mq) + Math.sin(t * 1.2) * 6, ry: -5, s: 1.02, o: mq > 0 ? 1 : 0 });
   // Its dates light up, one per half beat.
@@ -543,8 +577,11 @@ scene(bar(22), LENGTH, 'white', (r) => {
   const tag = line(r, 'Free passport appointment alerts,<br>in the Philippines and abroad.', 'label', 154, 590, 44, 'font-weight:600;color:var(--ink-2);line-height:1.25');
   const url = el('div', 'urlpill abs', r, 'alphaexperiments.com/pengepassportph');
   const qr = el('div', 'qrcard abs', r, '<img src="assets/qr.svg"><p>Scan to get alerts</p>');
-  const fine = el('div', 'fine abs', r, 'Unofficial. Not run by or affiliated with the Department of Foreign Affairs. Open source: github.com/alpharomercoma/penge-passport-ph');
-  return { logo, word, tag, url, qr, fine, r };
+  // Google's own badge, unaltered, with its trademark line in the fine print.
+  const play = el('img', 'playbadge abs', r);
+  play.src = 'assets/google-play-badge.png';
+  const fine = el('div', 'fine abs', r, 'Unofficial. Not run by or affiliated with the Department of Foreign Affairs. Open source: github.com/alpharomercoma/penge-passport-ph<br>Google Play and the Google Play logo are trademarks of Google LLC.');
+  return { logo, word, tag, url, qr, play, fine, r };
 }, (t, c) => {
   const t0 = bar(22);
   // A slow push-in holds the end card alive.
@@ -559,9 +596,11 @@ scene(bar(22), LENGTH, 'white', (r) => {
   const u = E.outExpo(prog(t, bar(23), bar(23) + 0.6));
   put(c.url, { x: 150, y: 760 + (1 - u) * 50, o: u });
   const q = E.outBack(prog(t, bar(23, 2), bar(23, 2) + 0.5));
-  put(c.qr, { x: 1410, y: 290 + (1 - q) * 60, s: Math.max(0.001, 0.9 + 0.1 * q), o: q > 0 ? 1 : 0 });
-  const f = prog(t, bar(24), bar(24) + 0.6);
-  put(c.fine, { x: 150, y: 960, o: f });
+  put(c.qr, { x: 1410, y: 190 + (1 - q) * 60, s: Math.max(0.001, 0.9 + 0.1 * q), o: q > 0 ? 1 : 0 });
+  const g = E.outBack(prog(t, bar(24), bar(24) + 0.5));
+  put(c.play, { x: 1410, y: 640 + (1 - g) * 40, s: Math.max(0.001, 0.92 + 0.08 * g), o: g > 0 ? 1 : 0 });
+  const f = prog(t, bar(24, 2), bar(24, 2) + 0.6);
+  put(c.fine, { x: 150, y: 945, o: f });
 });
 
 // ---------------------------------------------------------------------------

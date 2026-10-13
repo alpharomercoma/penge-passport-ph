@@ -179,7 +179,8 @@ a notification with the app's name and icon, and a tap opening the office. Its r
 `docs/superpowers/verification/2026-10-push-phone.md`.
 
 **For the owner, in Play Console, with 1.1.0:**
-1. **Data safety:** add "Device or other IDs" (the push subscription's endpoint), collected for
+1. **Data safety (due now, not only with 1.1.0: the site in 1.0.0 already offers notification
+   alerts):** add "Device or other IDs" (the push subscription's endpoint), collected for
    app functionality, encrypted in transit, deletable on request (turning notifications off, or
    "Stop alerts / delete data"). Push services (Google's, for Chrome on Android) receive it as
    service providers delivering the notifications; it is not otherwise shared.

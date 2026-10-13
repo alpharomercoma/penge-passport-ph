@@ -10,7 +10,7 @@ release the app is in [`docs/android.md`](../../docs/android.md).
 | Field | Value |
 | --- | --- |
 | App name (30 at most) | PengePassportPH: Slot Alerts (28) |
-| Short description (80 at most) | Open DFA passport appointment dates, with email alerts. Unofficial app. (71) |
+| Short description (80 at most) | Open DFA passport appointment dates, with alerts by notification or email. (74) |
 | Default language | English (United States), en-US |
 | Category | Travel & Local |
 | Tags (5 at most) | Chosen in the Console from its own fixed list, which Google does not publish; see below |
@@ -32,19 +32,19 @@ it with "Unofficial". The plain "PengePassportPH" works too if you'd rather keep
 **Tags.** Google's rule is that a tag's relevance should be obvious to someone who doesn't know the
 app, from its listing or its first screen. Pick only those, even if that's fewer than five.
 
-Full description (1,594 of 4,000 characters). Lead with appointment checking and alerts.
+Full description (1,670 of 4,000 characters). Lead with appointment checking and alerts.
 The sources, privacy link and clearly labelled independence disclosure appear at the bottom:
 
 ```text
-See open DFA passport appointment dates and get email alerts for the offices you choose.
+See open DFA passport appointment dates and get alerts for the offices you choose: a notification on this phone, with no email needed, or an email.
 
-The DFA releases new passport appointment dates at 12 noon and 9 PM, Monday to Saturday, except holidays. PengePassportPH checks for you and emails you when dates open at the offices you can get to.
+The DFA releases new passport appointment dates at 12 noon and 9 PM, Monday to Saturday, except holidays. PengePassportPH checks for you and tells you when dates open at the offices you can get to.
 
 What it does
 • Checks all 43 DFA offices in the Philippines every 5 minutes
-• Checks 133 embassies, consulates and outreach posts in 67 countries: hourly while they publish dates, every 6 hours while they don't
+• Checks 136 embassies, consulates and outreach posts in 67 countries: hourly while they publish dates, every 6 hours while they don't
 • Tap an open day to see its hours and how many places are left, live from passport.gov.ph
-• Pick up to 10 offices and get an email when a date opens: at most once an hour, or as soon as a check finds dates
+• Pick up to 10 offices and get a notification or an email when a date opens: at most once an hour, or as soon as a check finds dates
 • Booking for a group of 2 to 5? You only hear about dates with room for everyone
 
 What it doesn't do
@@ -67,8 +67,8 @@ PengePassportPH is an independent, unofficial project. It is not run by, affilia
 Where each claim comes from:
 - The release times are quoted from https://passport.gov.ph/faqs_2 ("12:00 noon and 9:00 p.m. Mondays to
   Saturdays except holidays", read on 29 September 2026).
-- The 43 offices, and the 133 posts in 67 countries, are the live site's counts (`/api/status` and
-  `/api/abroad`) on 29 September.
+- The 43 offices, and the 136 posts in 67 countries, are the live site's counts (`/api/status` and
+  `/api/abroad`) on 13 October 2026 (133 on 29 September, when version 1 went up).
 - The check cadence is set in `deploy/systemd/penge-check.timer` and `apps/server/src/abroad.ts`.
 - The 10 offices and groups of 2 to 5 are `LIMITS` in `packages/contracts`; the two paces are `PACES`
   there.
@@ -111,15 +111,15 @@ Five per set meets all of these. Each screenshot has a caption above the screen:
 | `01-offices` | Every office, soonest date first. *All 43 DFA offices in the Philippines, checked every 5 minutes* |
 | `02-calendar` | Open days at a glance. *Each office's calendar, from the latest check* |
 | `03-hours` | Tap a day for its hours. *Places left each hour, straight from passport.gov.ph* |
-| `04-alert` | An email when dates open. *You choose how often; unsubscribing deletes your address* |
-| `05-abroad` | Embassies and consulates too. *133 posts in 67 countries* |
+| `04-alert` | A notification when dates open. *No email needed, or choose email alerts instead* |
+| `05-abroad` | Embassies and consulates too. *136 posts in 67 countries* |
 
-The counts are read from the live API each time the script runs. The alert form is filled in with the
-placeholder `juan@example.com` and never sent. The office shown is the one with the soonest open date
-that day.
+The counts are read from the live API each time the script runs. The alert form is shown as the app
+shows it, with its Notifications switch on, and never sent. The office shown is the one with the soonest
+open date that day.
 
 **They are a snapshot.** The counts, dates and places left on screen are the live site's at the moment of
-capture (last run 30 September 2026), and change within hours. Rerun the script before each listing
+capture (last run 13 October 2026), and change within hours. Rerun the script before each listing
 update so the pictures stay close to what people will see.
 
 **Alt text**, which Google asks for with every graphic and screenshot (140 characters at most):
@@ -128,9 +128,9 @@ update so the pictures stay close to what people will see.
 | --- | --- |
 | Feature graphic | PengePassportPH: know when a passport appointment opens. A month of full days with one open day. Unofficial. |
 | `01-offices` | The list of DFA offices in the Philippines, each with its soonest open date and how many days are open. |
-| `02-calendar` | An office's calendar for the month, with its open days in green, and buttons to book or get an email. |
+| `02-calendar` | An office's calendar for the month, with its open days in green, and buttons to book or get an alert. |
 | `03-hours` | One day's hours at an office, showing which are open, which are full and how many places are left. |
-| `04-alert` | The form to get an email when dates open: an email address, who you are booking for, and how often. |
+| `04-alert` | The alerts form with Notifications on this device switched on: no email needed. Offices, group size and how often. |
 | `05-abroad` | Philippine embassies and consulates abroad, by country, each with its soonest open date. |
 
 **The tablet shots came with a fix.** At a 10-inch tablet's 900dp, an office's page was a 640px
@@ -162,6 +162,12 @@ the web: links to other sites open in the browser.
 First release: open DFA passport appointment dates at every office in the Philippines and posts abroad, and email alerts when dates open.
 ```
 
+For version 1.1.0 (`pengepassportph-2.aab`, the notifications release):
+
+```text
+Alerts can now be notifications on this phone, with no email needed: open an office, tap "Alert me when dates open here", and turn on Notifications. Email alerts still work. Each office also shows when it was last checked, in Philippine time, and a switch picks light or dark mode.
+```
+
 ## Data safety
 
 What Play asks about is data sent off the phone, including by web content the app controls, which a
@@ -173,14 +179,14 @@ runbook's inventory ([`deploy/README.md`](../../deploy/README.md#where-a-subscri
 | --- | --- |
 | Does the app collect or share any of the required user data types? | Yes |
 | Is all of the user data collected by the app encrypted in transit? | Yes: from the phone, HTTPS only (plain HTTP is redirected, HSTS for a year). The alert emails the server sends out use TLS when the recipient's mail server offers it (`smtp_tls_security_level = may`), as the privacy page says; that is delivery to the user, not collection from the phone |
-| Can users request that their data be deleted? | Yes: https://alphaexperiments.com/pengepassportph/delete-data is linked from the app and privacy page and works before the first alert or after an email link is lost. It emails a one-time link; pressing its button deletes the address, choices, waiting alerts and unused signup links. Links expire after 48 hours. Encrypted backups and mail logs retain their disclosed copies for up to 14 days; temporary abuse counters and anonymous totals retain their disclosed lifetimes |
+| Can users request that their data be deleted? | Yes: https://alphaexperiments.com/pengepassportph/delete-data is linked from the app and privacy page and works before the first alert or after an email link is lost. It emails a one-time link; pressing its button deletes the address, choices, waiting alerts and unused signup links. Links expire after 48 hours. A notification alert is deleted by turning notifications off in the app, and ends 180 days after the app was last opened. Encrypted backups and mail logs retain their disclosed copies for up to 14 days; temporary abuse counters and anonymous totals retain their disclosed lifetimes |
 | Does the app let users create an account? | **No**, on Google's definition of an account ("a unique user identity that developers provide as a user-facing feature"): there is no sign-in, username, password or profile. Signing up for alerts stores an email address to send alerts to. If Play reads that as an account, it will also want an in-app way to delete it (the unsubscribe page) and an external deletion URL: use https://alphaexperiments.com/pengepassportph/delete-data, which accepts the email address without requiring an old alert link ([requirement](https://support.google.com/googleplay/android-developer/answer/13327111)) |
 
 | Data type | Collected | Shared | Ephemeral | Required | Purpose |
 | --- | --- | --- | --- | --- | --- |
 | Personal info: Email address | Yes | No | No | Optional (only for alerts) | App functionality; Fraud prevention, security, and compliance (confirmation and deletion-link emails per address are counted under a keyed hash for about two days, so the form can't flood an inbox) |
-| App activity: Other actions (the offices, group size and pace chosen for alerts) | Yes | No | No | Optional | App functionality |
-| Device or other IDs (the network address every request comes from) | Yes | No | No | Required | Fraud prevention, security, and compliance; Analytics |
+| App activity: Other actions (the offices, group size and pace chosen for email or notification alerts) | Yes | No | No | Optional | App functionality |
+| Device or other IDs (the network address every request comes from; and the push subscription of a phone that turns notifications on) | Yes | No | No | Required (the address); optional (the push subscription, only for notifications) | App functionality (the push subscription); Fraud prevention, security, and compliance; Analytics (the address) |
 | App activity: App interactions (pages visited, offices opened, days' hours looked up) | Yes | No | No | Required | Analytics |
 
 The network address is declared because the server uses it:
@@ -195,7 +201,14 @@ they keep no one's details: the cautious reading, since the count starts from ea
 
 Not declared, and why:
 - **Service providers aren't sharing.** Huawei Cloud runs the server, and Cloudflare R2 holds the
-  encrypted backups. Play's guide exempts service providers acting on the developer's behalf.
+  encrypted backups. Play's guide exempts service providers acting on the developer's behalf. The push
+  service (Google's, for Chrome on Android) receives each notification, encrypted, to deliver it.
+- **Notification alerts** (the privacy page's "Notifications"): the server keeps the phone's push
+  subscription, encrypted, with the alert's offices, group size and pace, next to a random number; no
+  email. Turning notifications off in the app deletes them; an alert also ends 180 days after the app was
+  last opened. **Declare this now, not with 1.1.0:** version 1.0.0 shows the live site, which has offered
+  notification alerts (through Chrome) since 13 October 2026, and Play counts the web content the app
+  controls. 1.1.0 changes only who shows the notification (the app instead of Chrome).
 - **The saved office list stays on the phone** (browser storage), so it isn't collected.
 - **Location.** No location is inferred from the network address.
 - **Failed lookups.** When passport.gov.ph fails to answer, the log (kept 14 days) notes the office, day

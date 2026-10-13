@@ -5,6 +5,13 @@ What went into the "Submit an app" form on AppBuildersPH (2026-09-28). Same rule
 
 **Since then:** on 30 September 2026 the offices in the Philippines went to being checked every 5 minutes.
 The submission below says 15, as it was sent; the live listing's description needs the same change.
+On 13 October 2026: alerts can be notifications on a phone or browser, with no email at all (or email, as
+before); the app is on Google Play (https://play.google.com/store/apps/details?id=com.alphaexperiments.pengepassportph);
+abroad is 136 posts in 67 countries. For the live listing: tagline "Free alerts when DFA passport
+appointment dates open, by notification or email, at home and abroad." (99 characters, over the ~80: or
+"Free DFA passport appointment alerts, by notification or email." at 63), platforms Web and Android, and the
+email-only lines below reworded the same way. The screenshots' frame times are from the first cut of the
+video; the revised cut moves the alert scene (see `../ad/README.md`).
 
 | Field | Value |
 | --- | --- |

@@ -7,8 +7,9 @@
 // Screenshots are 24-bit PNG, 9:16: Play refuses one whose long side is more than twice the
 // short one. Each is the live site with a caption above it; the numbers in the captions are
 // read from the live API when this runs, so they are true on the day.
-// The alert form is filled with the site's own placeholder address and never sent. The office
-// shown is whichever has the soonest open date when this runs.
+// The alert form is shown as the app from Google Play shows it, with its Notifications switch on (the
+// permission granted), and is never sent. The office shown is whichever has the soonest open date
+// when this runs.
 //
 //   node marketing/play-store/capture.cjs
 //   SITE=http://localhost:4319/pengepassportph/ node marketing/play-store/capture.cjs
@@ -20,7 +21,6 @@ const fs = require('fs');
 
 const LIVE = 'https://alphaexperiments.com/pengepassportph/';
 const SITE = process.env.SITE || LIVE;
-const EMAIL = 'juan@example.com';
 const OUT = process.env.OUT || __dirname;
 
 const DEVICES = [
@@ -83,12 +83,13 @@ function framed(png, canvas, title, sub) {
     '02-calendar': ['Open days at a glance', "Each office's calendar, from the latest check"],
     '03-hours': ['Tap a day for its hours', 'Places left each hour, straight from passport.gov.ph'],
     // No "free" or other price words on the pictures: Google's rule for screenshots and graphics.
-    '04-alert': ['An email when dates open', 'You choose how often; unsubscribing deletes your address'],
+    '04-alert': ['A notification when dates open', 'No email needed, or choose email alerts instead'],
     '05-abroad': ['Embassies and consulates too', `${posts} posts in ${countries} countries`],
   };
 
   fs.mkdirSync(OUT, { recursive: true });
-  const b = await chromium.launch();
+  // The full Chromium build: the default headless shell reports notifications as denied whatever is granted.
+  const b = await chromium.launch({ channel: 'chromium' });
 
   // Full square on white: Play rounds the corners and adds the shadow itself.
   const i = await (await b.newContext({ viewport: { width: 512, height: 512 } })).newPage();
@@ -107,7 +108,11 @@ ${MARK.replace('<svg ', '<svg width="358" height="358" ')}</div></body>`);
   for (const device of DEVICES) {
     const dir = `${OUT}/${device.dir}`;
     fs.mkdirSync(dir, { recursive: true });
-    const p = await (await b.newContext({ viewport: device.viewport, deviceScaleFactor: device.scale, colorScheme: 'light' })).newPage();
+    const ctx = await b.newContext({ viewport: device.viewport, deviceScaleFactor: device.scale, colorScheme: 'light' });
+    // As in the app from Google Play: the switch reads "Notifications on this device", and the permission is granted.
+    await ctx.addInitScript(() => sessionStorage.setItem('pengepassportph-context', 'play'));
+    await ctx.grantPermissions(['notifications'], { origin: new URL(SITE).origin });
+    const p = await ctx.newPage();
     if (SITE !== LIVE) {
       await p.route(`${SITE}api/**`, async (route) => {
         const res = await fetch(LIVE + route.request().url().slice(SITE.length), {
@@ -174,17 +179,11 @@ ${MARK.replace('<svg ', '<svg width="358" height="358" ')}</div></body>`);
     await p.evaluate(() => scrollBy(0, -16));
     await shot('03-hours');
 
-    // The alert form, filled in and not sent.
-    await p.getByRole('button', { name: /Email me when dates open here/ }).first().click();
+    // The alert form with Notifications on, not sent.
+    await p.getByRole('button', { name: /Alert me when dates open here/ }).first().click();
     const sheet = p.getByRole('dialog');
-    await sheet.getByLabel('Your email').fill(EMAIL);
-    // From the address typed in down to the send button and the line about unsubscribing,
-    // which the caption mentions: the sheet scrolls under its own title.
-    await p.locator('.sheet').evaluate((el) => {
-      const label = [...el.querySelectorAll('label')].find((l) => l.textContent.trim() === 'Your email');
-      const head = el.querySelector('.sheet-head').getBoundingClientRect().bottom;
-      el.scrollTop += label.getBoundingClientRect().top - head - 12;
-    });
+    await sheet.getByRole('switch', { name: /Notifications/ }).click();
+    await p.waitForFunction(() => document.querySelector('[role="dialog"] [role="switch"][aria-checked="true"]'));
     await shot('04-alert');
 
     // The posts abroad.
