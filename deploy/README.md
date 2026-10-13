@@ -441,8 +441,8 @@ ask the person to set up again.
 A notification alert belongs to one device (a browser, an installed web app, or the Android app 1.1.0 and
 later) and needs no email address. The alerts form offers both kinds behind switches; a person can have
 either, both, or neither. Setting one up asks the browser for a push subscription and then sends this
-device a **ready check**: the device shows a "Setting up notifications…" notification, and the alert starts
-only once it has (then "Notifications are ready" follows), so an alert never exists for a device that
+device a **ready check**: the device shows a "Turning on notifications" notification, and the alert starts
+only once it has (then "Notifications are on" follows), so an alert never exists for a device that
 cannot show notifications. An alert lasts 180
 days after the last opening that reached us (each opening of the site renews it), until it is turned off,
 or until the push service says the subscription is gone.

@@ -210,7 +210,7 @@ and nothing worse; and one with an empty database beside a new setup.
    endpoint's limit has room, and moves the dispatch state from `unsent` (or `retryable`) to `sending` with a dispatch id. If a check
    fails nothing is sent: an expired operation ends as `expired`; otherwise the state stays `unsent` (or `retryable`) with the reason
    and the earliest time it may be tried again (the backoff's end, or 30 s), which the driving page uses (step 7); the push is sent
-   (`TTL` 300 s) as `{ v: 1, title: "Setting up PengePassportPH notifications", body: "<first office> and N more", tag:
+   (`TTL` 300 s) as `{ v: 1, title: "Turning on notifications", body: "<first office> and N more", tag:
    "setup-<op>", url: {}, kind: "setup", op, nonce, expiresAt }` (an older worker shows its title and body as they are); the
    transport's result moves the dispatch state, for that dispatch id:
 
@@ -226,14 +226,15 @@ and nothing worse; and one with an empty database beside a new setup.
    **or** (once the acknowledgement has been sent) that the operation was completed with `active` and its activation is still the
    alert the device knows (the page may have finished it first; that is success). The moment this fails, it shows (or replaces its notification with) "This notification setup didn't finish." and stops; whether
    notifications are on is shown only after the page reconciles.
-   1. Shows "Setting up notifications…" (tag `setup-<op>`). If showing fails, it stops without acknowledging: the proof requires
+   1. Shows "Turning on notifications", "For new dates at <offices>. This takes a few seconds." (tag `setup-<op>`; plain and
+      specific, since Chrome on Android hides notifications its on-device model reads as vague). If showing fails, it stops without acknowledging: the proof requires
       that this browser can display notifications.
    2. Stores the nonce in the operation (so the page can finish if the event ends).
    3. Posts `{ op, nonce }` with the credential header to `POST /api/device-alerts/ready`, up to 3 tries (after 0, 2 and 6 s); if the
       worker stored a nonce but no result arrived, the driving page tries again every 15 s until a terminal result or the expiry.
    4. Records a **terminal** answer as the operation's result (under the lock, if still current); a non-terminal one (see the API
       table) is not recorded and the operation stays in progress until a terminal result or its expiry. Then it replaces its
-      notification. For `active`, before showing "Notifications are ready" it reads `GET /mine` and checks, as the page does, that
+      notification. For `active`, before showing "Notifications are on" it reads `GET /mine` and checks, as the page does, that
       the server's current alert is that activation and the credential is not retired; after the notification is shown it checks
       again under the lock that **the credential is not retired and the activation is still the alert the device knows** (the
       operation itself may already have been completed by the page; that is success), and only if not, it replaces that
@@ -241,7 +242,7 @@ and nothing worse; and one with an empty database beside a new setup.
 
    | Answer | Worker's notification | Page |
    |---|---|---|
-   | `active` | **"Notifications are ready"**, "You'll get a notification like this when dates open at <offices>." | "Notifications are on for this device." |
+   | `active` | **"Notifications are on"**, "We'll tell you when dates open at <offices>." (closed by the worker 4 s later if a page of the site is in view, which says so itself) | "Notifications are on for this device." |
    | `expired` | "Setting up notifications took too long. Open PengePassportPH to try again." | The same, with **Try again** |
    | `full` | "Notifications are full right now. Email alerts still work." | The same, with **Try again** later |
    | `changed` | Removed | Reloads the alert; offers a fresh setup if it is gone, or the change again |

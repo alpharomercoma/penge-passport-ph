@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Plugin } from 'vite';
 
 /** Files from public/ the app needs offline, beside the page and its built assets. */
-export const PUBLIC_SHELL = ['manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge-96.png', 'favicon.svg'];
+export const PUBLIC_SHELL = ['manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge-96.png', 'favicon.svg', 'theme-boot.js'];
 
 /**
  * Writes sw.js from src/sw.js with this build's files to keep on the device (the

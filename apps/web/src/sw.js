@@ -111,9 +111,14 @@ async function stillOurs(data, credential, activation) {
   });
 }
 
+/** A quiet pause inside a push's waitUntil. */
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function setupPush(data) {
   const tag = `setup-${data.op}`;
-  const show = (title, body) => self.registration.showNotification(title, { body, tag, data: {}, ...ICONS });
+  // Plain and specific, naming the offices: Chrome on Android hides notifications its on-device model reads as vague.
+  const offices = typeof data.body === 'string' ? data.body : 'your offices';
+  const show = (title, body, data = {}) => self.registration.showNotification(title, { body, tag, data, ...ICONS });
   const didntFinish = () => show("This notification setup didn't finish.", 'Open PengePassportPH to see whether notifications are on.');
   /**
    * When this push's operation is no longer in progress: its recorded result is the answer (the page acknowledged, or
@@ -143,7 +148,7 @@ async function setupPush(data) {
     credential = f.credential;
   } else {
     try {
-      await show('Setting up notifications…', 'This shows notifications work on this device.');
+      await show('Turning on notifications', `For new dates at ${offices}. This takes a few seconds.`);
     } catch {
       return; // The proof is that this browser shows it: no acknowledgement without it.
     }
@@ -218,9 +223,23 @@ async function setupPush(data) {
       await setKnown(env, { credential, known: k, version: before.knownVersion });
     }
     if (!(await stillOurs(data, credential, act))) return notShown();
-    await show('Notifications are ready', `You'll get a notification like this when dates open at ${typeof data.body === 'string' ? data.body : 'your offices'}.`);
+    // This notification's own id: the clean-up below closes it, never a newer one shown under the same tag meanwhile.
+    const shownId = self.crypto.randomUUID();
+    await show('Notifications are on', `We'll tell you when dates open at ${offices}.`, { shown: shownId });
     // After showing it: still this credential, and the activation still the alert the device knows (or the operation).
-    if (!(await stillOurs(data, credential, act))) await notShown();
+    if (!(await stillOurs(data, credential, act))) return notShown();
+    // A page of this site in view says so itself: the notification goes after a few seconds. Best effort: a clean-up
+    // that fails leaves it, and never turns the success into a failure.
+    try {
+      const scopePath = new URL(self.registration.scope).pathname;
+      const pages = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (pages.some((c) => c.visibilityState === 'visible' && new URL(c.url).pathname.startsWith(scopePath))) {
+        await pause(4000);
+        for (const n of await self.registration.getNotifications({ tag })) if (n.data?.shown === shownId) n.close();
+      }
+    } catch {
+      // Left showing.
+    }
     return;
   }
   if (answer.result === 'changed') {

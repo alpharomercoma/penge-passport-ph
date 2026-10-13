@@ -162,7 +162,7 @@ name and `monochromeIconUrl` (the one-colour mark, `icons/monochrome-512.png`) i
 
 - Notifications need no email: the alerts form's "Notifications on this device" switch sets up a
   notification alert for this phone alone.
-- Setting up shows a "Setting up notifications…" notification first (the ready check): the alert
+- Setting up shows a "Turning on notifications" notification first (the ready check): the alert
   starts once the phone has shown it, so notifications never start on a phone that cannot show them.
 - On Android 13 and later, turning the switch on in the alert form shows Android's own permission
   prompt naming the app. Denied, the form says to allow it in Settings › Apps › PassportPH ›

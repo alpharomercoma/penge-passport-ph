@@ -10,7 +10,7 @@ import { DeviceRow } from '../components/DeviceRow.tsx';
 import { deviceController } from '../devices/instance.ts';
 import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
-import { ago } from '../time.ts';
+import { ago, manilaClock } from '../time.ts';
 
 const REFRESH_MS = 60_000;
 /** Posts abroad are checked about hourly: reading them every 5 minutes is plenty. */
@@ -200,7 +200,8 @@ export function Home({ api }: { api: Api }) {
               {status?.lastHealthyAt && (
                 <>
                   {' '}
-                  Updated <time dateTime={status.lastHealthyAt}>{ago(status.lastHealthyAt)}</time>.
+                  Updated <time className="fresh" dateTime={status.lastHealthyAt}>{ago(status.lastHealthyAt)}</time> ·{' '}
+                  <span className="fresh">{manilaClock(status.lastHealthyAt)}</span>.
                 </>
               )}
             </p>

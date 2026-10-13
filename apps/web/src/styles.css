@@ -30,8 +30,9 @@
   color-scheme: light;
 }
 
+/* Dark: the system's preference unless light was chosen (theme.ts sets <html data-theme>), or chosen. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #101412;
     --surface: #171d1a;
     --ink: #e6ece9;
@@ -48,6 +49,24 @@
     --link: #6fa8ff;
     color-scheme: dark;
   }
+}
+
+:root[data-theme='dark'] {
+  --bg: #101412;
+  --surface: #171d1a;
+  --ink: #e6ece9;
+  --ink-2: #a5b0aa;
+  --line: #29312d;
+  --line-strong: #3a443f;
+  --open: #3fbf7a;
+  --open-ink: #06170d;
+  --open-soft: #133222;
+  --full: #1e2521;
+  --full-ink: #97a29c;
+  --warn: #f0a947;
+  --warn-soft: #34260e;
+  --link: #6fa8ff;
+  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -70,7 +89,7 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .note, .warning { padding: 10px 12px; border-radius: var(--r); border-left: 4px solid var(--warn); background: var(--warn-soft); font-size: 0.875rem; }
 
 /* header and footer */
-.site-header { display: flex; align-items: center; padding-top: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.site-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .brand { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--ink); text-decoration: none; font-size: 1.125rem; font-weight: 800; letter-spacing: -0.01em; }
 .brand-ph { color: var(--ink-2); }
 .logo-mark { flex: none; }
@@ -94,6 +113,7 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .btn[aria-busy='true'] { opacity: 0.8; cursor: progress; }
 .icon-button { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ink); cursor: pointer; }
 .icon-button:hover { background: var(--surface); }
+.theme-toggle { margin-right: -10px; }
 .link-button { min-height: 44px; padding: 0; border: 0; background: none; color: var(--link); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 
 /* page header, on the page of all offices */
@@ -223,6 +243,8 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 
 /* email alert sheet */
 .field { min-width: 0; margin: 0 0 18px; padding: 0; border: 0; }
+/* The form's fields, as one group (disabled while sending): no box of its own, and room before the button below. */
+.form-body { min-width: 0; margin: 0 0 10px; padding: 0; border: 0; }
 .field > label, .field > legend { display: block; margin-bottom: 6px; padding: 0; font-weight: 600; }
 .field input[type='email'], .field select { width: 100%; min-height: 48px; padding: 10px 12px; border: 1.5px solid var(--line-strong); border-radius: var(--r); background: var(--bg); color: var(--ink); font: inherit; }
 .field input[aria-invalid='true'] { border-color: var(--warn); }
@@ -302,3 +324,6 @@ h1, h2, h3 { font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; }
 .device-actions { display: flex; flex-wrap: wrap; column-gap: 20px; }
 .debug-context { font: 12px/1.4 ui-monospace, monospace; opacity: 0.7; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }
+
+/* "Updated 5 minutes ago · 2:36 PM PHT": how fresh the dates are, in the open colour. */
+.fresh { padding: 1px 6px; border-radius: var(--r-sm); background: var(--open-soft); color: var(--open); font-weight: 600; white-space: nowrap; }

@@ -10,9 +10,12 @@ const SCOPE = 'https://penge.example/pengepassportph/';
 const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: `B${'A'.repeat(86)}`, auth: 'A'.repeat(22) } };
 
 /** The built worker in a fake `self`, with a fake server for /api/device-alerts. */
-function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; pages?: { url: string; controlled: boolean }[]; onShow?: (title: string) => Promise<void>; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void> } = {}) {
+function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; pages?: { url: string; controlled: boolean; visible?: boolean }[]; onShow?: (title: string) => Promise<void>; getNotificationsFails?: boolean; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void> } = {}) {
   const listeners: Record<string, ((e: any) => void)[]> = {};
   const shown: { title: string; body: string; tag?: string | undefined }[] = [];
+  // What the device shows now: a notification replaces the one with its tag, as browsers do.
+  const live = new Map<string, { title: string; data: unknown }>();
+  const closed: string[] = [];
   const posted: { path: string; body: unknown; auth: string | null }[] = [];
   const answers = [...(o.answers ?? [{ result: 'active', activation: { alertId: 'a'.repeat(22), incarnation: 'i'.repeat(22), generation: 1, revision: 1 } }])];
   const indexedDB = new IDBFactory();
@@ -25,12 +28,16 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
   const self = {
     registration: {
       scope: SCOPE,
-      showNotification: vi.fn(async (title: string, opts: { body: string; tag?: string }) => {
+      showNotification: vi.fn(async (title: string, opts: { body: string; tag?: string; data?: unknown }) => {
         if (o.showFails) throw new TypeError('no permission');
         shown.push({ title, body: opts.body, tag: opts.tag });
+        live.set(opts.tag ?? `untagged-${shown.length}`, { title, data: opts.data ?? null });
         await o.onShow?.(title);
       }),
-      getNotifications: async () => [],
+      getNotifications: async (f?: { tag?: string }) => {
+        if (o.getNotificationsFails) throw new TypeError('getNotifications failed');
+        return [...live].filter(([tag]) => !f?.tag || tag === f.tag).map(([tag, n]) => ({ title: n.title, tag, data: n.data, close: () => (live.get(tag) === n && live.delete(tag), closed.push(n.title)) }));
+      },
       pushManager: { getSubscription: async () => ({ toJSON: () => sub }) },
     },
     location: new URL(`${SCOPE}sw.js`),
@@ -45,7 +52,7 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
       },
       // Chromium settles a navigation only once it commits, which (on a first activation) waits for the activation.
       matchAll: async () =>
-        pages.filter((p) => p.controlled).map((p) => ({ url: p.url, navigate: (u: string) => (navigated.push(u), o.navigateHangs ? new Promise(() => {}) : Promise.resolve()) })),
+        pages.filter((p) => p.controlled).map((p) => ({ url: p.url, visibilityState: p.visible ? 'visible' : 'hidden', navigate: (u: string) => (navigated.push(u), o.navigateHangs ? new Promise(() => {}) : Promise.resolve()) })),
     },
   };
   const fetchFake = async (url: string, init: { method?: string; headers: Record<string, string>; body?: string }) => {
@@ -69,7 +76,7 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
     for (const f of listeners[type] ?? []) f({ ...event, waitUntil: (p: Promise<unknown>) => waits.push(p) });
     await Promise.all(waits);
   };
-  return { self, env, shown, posted, navigated, fire };
+  return { self, env, shown, closed, posted, navigated, fire };
 }
 
 async function pending(env: S.Env) {
@@ -78,7 +85,15 @@ async function pending(env: S.Env) {
   await S.confirmReady(env, { op: r.started.op, by: 'page' });
   return r;
 }
-const setupPush = (op: string) => ({ data: { json: () => ({ v: 1, title: 'Setting up PengePassportPH notifications', body: 'Antipolo', tag: `setup-${op}`, url: {}, kind: 'setup', op, nonce: 'n'.repeat(43), expiresAt: new Date(Date.now() + 300_000).toISOString() }) } });
+const setupPush = (op: string) => ({ data: { json: () => ({ v: 1, title: 'Turning on notifications', body: 'Antipolo', tag: `setup-${op}`, url: {}, kind: 'setup', op, nonce: 'n'.repeat(43), expiresAt: new Date(Date.now() + 300_000).toISOString() }) } });
+
+/** Fake time moved on until the event's work is done (its waits are scheduled as it goes, not all at once). */
+async function settled(work: Promise<unknown>) {
+  let done = false;
+  void work.then(() => (done = true), () => (done = true));
+  for (let i = 0; i < 120 && !done; i++) await vi.advanceTimersByTimeAsync(500);
+  await work;
+}
 
 describe('the worker and the ready check', () => {
   it('announces deviceAlerts: 1 and reads the operation back', async () => {
@@ -92,13 +107,69 @@ describe('the worker and the ready check', () => {
     expect(answers[1]).toEqual({ op: started.op });
   });
 
+  it('closes the on notification by itself a few seconds later while a page is in view (the page says so too)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const w = worker({ pages: [{ url: `${SCOPE}?office=486`, controlled: true, visible: true }] });
+    const { started } = await pending(w.env);
+    await settled(w.fire('push', setupPush(started.op)));
+    expect(w.shown.at(-1)!.title).toBe('Notifications are on');
+    expect(w.closed).toEqual(['Notifications are on']);
+  });
+
+  it('never closes a newer notification shown under the same tag meanwhile', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let again = false;
+    const w = worker({
+      pages: [{ url: `${SCOPE}?office=486`, controlled: true, visible: true }],
+      onShow: async (title) => {
+        // The same push again (or another path) shows the same words under the same tag, as a newer notification.
+        if (title === 'Notifications are on' && !again) {
+          again = true;
+          await w.self.registration.showNotification('Notifications are on', { body: 'newer', tag: w.shown.at(-1)!.tag!, data: { shown: 'newer' } });
+        }
+      },
+    });
+    const { started } = await pending(w.env);
+    await settled(w.fire('push', setupPush(started.op)));
+    expect(w.closed).toEqual([]);
+  });
+
+  it('counts only this site\'s pages as in view', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const w = worker({ pages: [{ url: new URL('/another-app/', SCOPE).href, controlled: true, visible: true }] });
+    const { started } = await pending(w.env);
+    await settled(w.fire('push', setupPush(started.op)));
+    expect(w.shown.at(-1)!.title).toBe('Notifications are on');
+    expect(w.closed).toEqual([]);
+  });
+
+  it('keeps the success when the clean-up after it fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const w = worker({ pages: [{ url: `${SCOPE}?office=486`, controlled: true, visible: true }], getNotificationsFails: true });
+    const { started } = await pending(w.env);
+    await settled(w.fire('push', setupPush(started.op)));
+    expect(w.shown.map((n) => n.title)).toEqual(['Turning on notifications', 'Notifications are on']);
+  });
+
+  it('keeps the on notification while no page is in view', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const w = worker({ pages: [{ url: `${SCOPE}?office=486`, controlled: true, visible: false }] });
+    const { started } = await pending(w.env);
+    await settled(w.fire('push', setupPush(started.op)));
+    expect(w.shown.at(-1)!.title).toBe('Notifications are on');
+    expect(w.closed).toEqual([]);
+  });
+
   it('shows the setup notification, stores the nonce, acknowledges with the credential, and says it is ready', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const w = worker();
     const { started, credential } = await pending(w.env);
     await w.fire('push', setupPush(started.op));
-    expect(w.shown.map((n) => n.title)).toEqual(['Setting up notifications…', 'Notifications are ready']);
-    expect(w.shown[1]!.body).toBe("You'll get a notification like this when dates open at Antipolo.");
+    // Plain and specific (Chrome hides notifications its on-device model reads as vague or spammy).
+    expect(w.shown.map((n) => [n.title, n.body])).toEqual([
+      ['Turning on notifications', 'For new dates at Antipolo. This takes a few seconds.'],
+      ['Notifications are on', "We'll tell you when dates open at Antipolo."],
+    ]);
     expect(w.shown.every((n) => n.tag === `setup-${started.op}`)).toBe(true);
     expect(w.posted[0]).toEqual({ path: '/ready', body: { op: started.op, nonce: 'n'.repeat(43) }, auth: `Device ${credential}` });
     expect((await S.readState(w.env)).op).toMatchObject({ nonce: 'n'.repeat(43), result: 'active' });
@@ -187,7 +258,7 @@ describe('the worker and the ready check', () => {
     const w = worker();
     const r = await pending(w.env);
     await w.fire('push', setupPush(r.started.op));
-    expect(w.shown.at(-1)!.title).toBe('Notifications are ready');
+    expect(w.shown.at(-1)!.title).toBe('Notifications are on');
     expect((await S.readState(w.env)).known).toMatchObject({ incarnation: 'i'.repeat(22), generation: 1 });
   });
 
@@ -195,7 +266,7 @@ describe('the worker and the ready check', () => {
     let env!: S.Env;
     const w = worker({
       onShow: async (title) => {
-        if (title === 'Notifications are ready') await S.update(env, (s) => ({ state: { ...s, known: null, knownVersion: s.knownVersion + 1 }, result: null }));
+        if (title === 'Notifications are on') await S.update(env, (s) => ({ state: { ...s, known: null, knownVersion: s.knownVersion + 1 }, result: null }));
       },
     });
     env = w.env;
@@ -216,7 +287,7 @@ describe('the worker and the ready check', () => {
     const r = await pending(w.env);
     await w.fire('push', setupPush(r.started.op));
     expect((await S.readState(w.env)).known).toBeNull();
-    expect(w.shown.map((n) => n.title)).not.toContain('Notifications are ready');
+    expect(w.shown.map((n) => n.title)).not.toContain('Notifications are on');
   });
 
   it('says nothing false when the page finished this setup and moved on while the acknowledgement was lost', async () => {
@@ -246,7 +317,7 @@ describe('the worker and the ready check', () => {
     const r = await pending(w.env);
     await w.fire('push', setupPush(r.started.op));
     await w.fire('push', setupPush(r.started.op));
-    expect(w.shown.at(-1)!.title).toBe('Notifications are ready');
+    expect(w.shown.at(-1)!.title).toBe('Notifications are on');
   });
 
   it.each([

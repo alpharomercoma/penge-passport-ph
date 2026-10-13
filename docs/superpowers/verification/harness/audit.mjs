@@ -12,7 +12,7 @@ const OUT = process.env.AUDIT_OUT ?? join(tmpdir(), 'penge-audit');
 mkdirSync(OUT, { recursive: true });
 const WIDTHS = [320, 360, 375, 390, 412, 768, 1280];
 const findings = [];
-const STATES = 32; // every audit() call below: 15 single states, 14 row states, 3 pages
+const STATES = 33; // every audit() call below: 16 single states, 14 row states, 3 pages
 
 /** Runs in the page: what sticks out or is clipped. */
 function inspect() {
@@ -123,7 +123,39 @@ try {
   }, inspect.toString());
   console.log('self-test', planted);
   if (!planted.includes('page scrolls sideways') || !planted.includes('clipped sideways')) throw new Error('the check misses planted problems');
-  await audit(page, 'home', { full: true, expect: ['main', 'DFA offices in the Philippines have open dates'] });
+  await audit(page, 'home', {
+    full: true,
+    expect: ['main', 'DFA offices in the Philippines have open dates', 'PHT'],
+    // The theme switch at the header's right, beside the name; the age and the time in Manila, both in the open colour.
+    holds: () => {
+      const t = document.querySelector('.site-header .theme-toggle')?.getBoundingClientRect();
+      const b = document.querySelector('.site-header .brand')?.getBoundingClientRect();
+      const h = document.querySelector('.site-header')?.getBoundingClientRect();
+      const open = getComputedStyle(document.documentElement).getPropertyValue('--open').trim();
+      const probe = Object.assign(document.createElement('span'), { style: `color: ${open}` });
+      document.body.append(probe);
+      const openRgb = getComputedStyle(probe).color;
+      probe.remove();
+      const fresh = [...document.querySelectorAll('.summary .fresh')];
+      return !!t && !!b && !!h && t.width >= 44 && t.height >= 44 && t.left >= b.right && h.right - t.right < 24 && Math.abs((t.top + t.bottom) / 2 - (b.top + b.bottom) / 2) < 4 && fresh.length === 2 && fresh.every((e) => getComputedStyle(e).color === openRgb);
+    },
+  });
+  // The other theme, chosen with the switch, whatever the system prefers: the page and its bar follow the choice.
+  await audit(page, 'home-theme-chosen', {
+    prep: () => {
+      const want = matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark';
+      if (document.documentElement.dataset.theme !== want) document.querySelector('.theme-toggle').click();
+    },
+    expect: ['main', 'DFA offices in the Philippines have open dates'],
+    holds: () => {
+      const want = matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark';
+      const bg = getComputedStyle(document.body).backgroundColor;
+      const bar = [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => m.content);
+      return document.documentElement.dataset.theme === want && bg === (want === 'dark' ? 'rgb(16, 20, 18)' : 'rgb(255, 255, 255)') && bar.every((c) => c === (want === 'dark' ? '#101412' : '#ffffff'));
+    },
+  });
+  await page.evaluate(() => localStorage.removeItem('pengepassportph-theme'));
+  await page.goto(SITE, { waitUntil: 'networkidle0' });
   await clickText(page, 'button', 'Abroad');
   await sleep(600);
   await audit(page, 'home-abroad', { full: true });
@@ -150,7 +182,18 @@ try {
     holds: () => [...document.querySelectorAll('[role="dialog"] [role="switch"]')].every((e) => e.getAttribute('aria-checked') === 'false') && document.querySelector('[role="dialog"] button[type="submit"]')?.disabled === true,
   });
   await (await emailSwitch(page)).evaluate((e) => e.click());
-  await audit(page, 'form-email-only', { prep: () => document.querySelector('input[type="email"]')?.scrollIntoView({ block: 'center' }), expect: [DIALOG, 'Send confirmation email'] });
+  await audit(page, 'form-email-only', {
+    prep: () => document.querySelector('input[type="email"]')?.scrollIntoView({ block: 'center' }),
+    expect: [DIALOG, 'Send confirmation email'],
+    // The fields draw no box of their own, and the button has room above it.
+    holds: () => {
+      const f = document.querySelector('[role="dialog"] fieldset.form-body');
+      const fields = [...f.querySelectorAll(':scope > .field')].at(-1).getBoundingClientRect();
+      const button = document.querySelector('[role="dialog"] button[type="submit"]').getBoundingClientRect();
+      const cs = getComputedStyle(f);
+      return cs.borderTopWidth === '0px' && cs.borderBottomWidth === '0px' && cs.paddingLeft === '0px' && button.top - fields.bottom >= 20;
+    },
+  });
   await (await emailSwitch(page)).evaluate((e) => e.click());
   await (await pushSwitch(page)).evaluate((e) => e.click());
   await page.waitForFunction((el) => el.getAttribute('aria-checked') === 'true', { timeout: 20_000 }, await pushSwitch(page));

@@ -55,6 +55,11 @@ describe('manifest', () => {
   it('is linked from the page', () => {
     const html = readFileSync(join(web, 'index.html'), 'utf8');
     expect(html).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+    // The theme chosen on an earlier visit, applied in the head before anything paints (the CSP allows only files).
+    const boot = html.indexOf('<script src="/theme-boot.js"></script>');
+    expect(boot).toBeGreaterThan(html.indexOf('name="theme-color"'));
+    expect(boot).toBeLessThan(html.indexOf('</head>'));
+    expect(PUBLIC_SHELL).toContain('theme-boot.js');
     for (const name of PUBLIC_SHELL) expect(existsSync(join(web, 'public', name))).toBe(true);
   });
 });

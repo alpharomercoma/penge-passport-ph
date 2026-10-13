@@ -58,7 +58,7 @@ describe('notification alerts through the API', () => {
     expect(setup.status).toBe(200);
     expect(setup.body).toMatchObject({ outcome: 'pending', operation: { op: body.op, dispatch: 'accepted', result: null } });
     const push = w.transport.sent[0]!.payload;
-    expect(push).toMatchObject({ v: 1, title: 'Setting up PengePassportPH notifications', body: 'Antipolo', tag: `setup-${body.op}`, url: {}, kind: 'setup', op: body.op });
+    expect(push).toMatchObject({ v: 1, title: 'Turning on notifications', body: 'Antipolo', tag: `setup-${body.op}`, url: {}, kind: 'setup', op: body.op });
     const nonce = push.nonce as string;
 
     const proof = await w.call('POST', '/api/device-alerts/ready', { op: body.op, nonce });

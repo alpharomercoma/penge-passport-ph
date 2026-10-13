@@ -44,13 +44,37 @@ try {
   await workerReady(page);
   // 1. Notifications only: no email asked, the ready check, the row.
   // Notifications only, as sent: no email field, and Email off.
-  await notifyOnly(page, {
-    beforePress: async () =>
-      record('No email was asked for', !(await page.$('[role="dialog"] input[type="email"]')) && (await (await emailSwitch(page)).evaluate((e) => e.getAttribute('aria-checked'))) === 'false'),
-  });
-  await shot(page, `${kind}-device-on`);
-  const setup = (await shown(page)).filter((n) => n.tag?.startsWith('setup-'));
-  record('The ready check showed its notification', setup.some((n) => n.title === 'Notifications are ready'), JSON.stringify(setup.map((n) => n.title)));
+  // The setup notifications come and go (the last closes itself while the page is in view): watched throughout.
+  const setupSeen = new Set();
+  let watching = true;
+  const watch = (async () => {
+    while (watching) {
+      for (const n of await shown(page).catch(() => [])) if (n.tag?.startsWith('setup-')) setupSeen.add(n.title);
+      await sleep(200);
+    }
+  })();
+  let lingering = true;
+  // Stopped whatever happens, so a failed setup never leaves it polling a closed browser.
+  try {
+    await notifyOnly(page, {
+      beforePress: async () =>
+        record('No email was asked for', !(await page.$('[role="dialog"] input[type="email"]')) && (await (await emailSwitch(page)).evaluate((e) => e.getAttribute('aria-checked'))) === 'false'),
+    });
+    await shot(page, `${kind}-device-on`);
+    for (let i = 0; i < 50 && !setupSeen.has('Notifications are on'); i++) await sleep(200);
+    // ("Turning on notifications" comes first, but locally the check takes milliseconds: too short to observe here; the
+    // worker's tests pin its words.)
+    record('The ready check showed its notification', setupSeen.has('Notifications are on'), JSON.stringify([...setupSeen]));
+    // The page in view says so itself: the notification goes a few seconds later.
+    for (let i = 0; i < 50 && lingering; i++) {
+      await sleep(200);
+      lingering = (await shown(page)).some((n) => n.tag?.startsWith('setup-') && n.title === 'Notifications are on');
+    }
+  } finally {
+    watching = false;
+    await watch;
+  }
+  record('The "on" notification closed itself while the page was in view', !lingering);
   await page.goto(SITE, { waitUntil: 'networkidle0' });
   const row = await rowText(page);
   record('The row says what is on and until when', /^Notifications on this device: Antipolo · for 1 person · as soon as possible · until \d+ \w{3} \d{4}/.test(row ?? ''), row ?? '');

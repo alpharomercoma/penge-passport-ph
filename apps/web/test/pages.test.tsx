@@ -5,6 +5,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiFailure, api } from '../src/api.ts';
 import { App } from '../src/App.tsx';
+import { manilaClock } from '../src/time.ts';
 import { fakeApi, STATUS } from './helpers.tsx';
 
 const RUNS = Number(process.env.FUZZ_RUNS ?? 150);
@@ -37,7 +38,11 @@ describe('home', () => {
 
   it('lists every office, soonest date first', async () => {
     render(<App path="/" api={fakeApi()} />);
-    expect((await screen.findByText(SUMMARY)).textContent).toMatch(/^2 of 12 DFA offices in the Philippines have open dates for one person\. Updated 5 minutes ago\.$/);
+    const summary = await screen.findByText(SUMMARY);
+    const clock = manilaClock(STATUS.lastHealthyAt!);
+    expect(summary.textContent).toBe(`2 of 12 DFA offices in the Philippines have open dates for one person. Updated 5 minutes ago · ${clock}.`);
+    // Both the age and the time in Manila, highlighted.
+    expect([...summary.querySelectorAll('.fresh')].map((e) => e.textContent)).toEqual(['5 minutes ago', clock]);
     const places = [...document.querySelectorAll('.pane-offices .row-place')].map((e) => e.textContent);
     expect(places.slice(0, 2)).toEqual(['Antipolo', 'Baguio']);
     expect(screen.getAllByText('Wed 7 Oct')[0]).toBeTruthy();
@@ -455,7 +460,8 @@ describe('confirm and unsubscribe pages', () => {
     const fake = fakeApi();
     render(<App path="/confirm" api={fake} />);
     expect(screen.getByText(/This link is incomplete/)).toBeTruthy();
-    expect(screen.queryByRole('button')).toBeNull();
+    // Nothing to press on the page (the header's theme switch aside).
+    expect(within(screen.getByRole('main')).queryByRole('button')).toBeNull();
   });
 
   it('unsubscribes on the button press', async () => {

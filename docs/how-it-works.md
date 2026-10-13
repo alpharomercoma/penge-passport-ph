@@ -145,8 +145,8 @@ size and pace, and a one-click unsubscribe in every email.
 **Notification alerts** belong to one device (a browser, an installed web app, or the Android app) and
 need no email. The device makes a random credential, kept in its IndexedDB, and asks the browser for a push
 subscription. Setting up is an **operation**: the server stores it and sends this device a push through
-the push service; the device's service worker shows "Setting up notifications…" and acknowledges it, and
-only then does the alert start (and "Notifications are ready" follow). So an alert never exists for a device that cannot show notifications.
+the push service; the device's service worker shows "Turning on notifications" and acknowledges it, and
+only then does the alert start (and "Notifications are on" follow). So an alert never exists for a device that cannot show notifications.
 A device has at most one alert; changing it, sending a test and turning it off are operations on that
 alert. An alert lasts 180 days after the last opening that reached the server, and each opening renews it.
 

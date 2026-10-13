@@ -4,6 +4,10 @@ import { App } from './App.tsx';
 import { register, skipRegistration } from './notify/worker.ts';
 import './styles.css';
 import { takeOwnerLink } from './devices/owner.ts';
+import { startTheme } from './theme.ts';
+
+// The theme chosen on an earlier visit, before anything draws.
+startTheme();
 
 // Before rendering or registering the worker: the owner link leaves the address bar at once.
 const owner = takeOwnerLink();

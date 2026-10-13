@@ -9,7 +9,12 @@
     {
       "item": "The ready check showed its notification",
       "pass": true,
-      "note": "[\"Notifications are ready\"]"
+      "note": "[\"Notifications are on\"]"
+    },
+    {
+      "item": "The \"on\" notification closed itself while the page was in view",
+      "pass": true,
+      "note": ""
     },
     {
       "item": "The row says what is on and until when",
@@ -24,7 +29,7 @@
     {
       "item": "An opening arrives as a notification, with when it was checked",
       "pass": true,
-      "note": "{\"title\":\"Dates open at Antipolo\",\"body\":\"Fri 16 Oct · for 1 person · Checked 03:53\",\"tag\":\"alert-local109-1791834809708-EIH-rW6sKB5sMUy1CTVqxw\",\"data\":{\"office\":486,\"date\":\"2026-10-16\",\"people\":1}}"
+      "note": "{\"title\":\"Dates open at Antipolo\",\"body\":\"Sat 17 Oct · for 1 person · Checked 15:49\",\"tag\":\"alert-local43-1791877769742-Ry-6uJE6wbwItZoDW6fGeA\",\"data\":{\"office\":486,\"date\":\"2026-10-17\",\"people\":1}}"
     },
     {
       "item": "Change has no switches and no email field",
@@ -39,7 +44,7 @@
     {
       "item": "Changed: the next opening's notification is for 2 people, and opens that office, date and group",
       "pass": true,
-      "note": "[{\"body\":\"Mon 19 Oct · for 2 people · Checked 03:55\",\"data\":{\"office\":486,\"date\":\"2026-10-19\",\"people\":2}}]"
+      "note": "[{\"body\":\"Tue 20 Oct · for 2 people · Checked 15:51\",\"data\":{\"office\":486,\"date\":\"2026-10-20\",\"people\":2}}]"
     },
     {
       "item": "The test notification arrived",
@@ -49,7 +54,7 @@
     {
       "item": "Turned off: nothing left on the server",
       "pass": true,
-      "note": "EIH-rW6sKB5sMUy1CTVqxw"
+      "note": "Ry-6uJE6wbwItZoDW6fGeA"
     },
     {
       "item": "Turned off: the browser has no subscription",
@@ -89,7 +94,7 @@
     {
       "item": "The email alert is confirmed",
       "pass": true,
-      "note": "both-1791834950310@example.com"
+      "note": "both-1791877908732@example.com"
     },
     {
       "item": "Both on: one opening gives one alert email and one notification",

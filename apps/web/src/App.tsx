@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { type Api, api as realApi } from './api.ts';
 import { LogoMark } from './components/Logo.tsx';
+import { ThemeToggle } from './components/ThemeToggle.tsx';
 import { BASE, BOOKING_URL, REPO_URL, routeOf } from './links.ts';
 import { Confirm } from './pages/Confirm.tsx';
 import { DeleteData } from './pages/DeleteData.tsx';
@@ -21,6 +22,7 @@ function Layout({ children }: { children: ReactNode }) {
             PengePassport<span className="brand-ph">PH</span>
           </span>
         </a>
+        <ThemeToggle />
       </header>
       <main id="main">{children}</main>
       <footer className="site-footer">

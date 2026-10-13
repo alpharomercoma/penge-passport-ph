@@ -1,6 +1,6 @@
 {
   "version": "Chrome/154.0.8037.99",
-  "run": "mv5oagoh",
+  "run": "mv6daydn",
   "widths": [
     320,
     360,
@@ -14,6 +14,7 @@
   "states": [
     "sheet-iphone-tab",
     "home",
+    "home-theme-chosen",
     "home-abroad",
     "office",
     "by-date",

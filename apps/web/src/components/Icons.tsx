@@ -39,3 +39,16 @@ export const CheckIcon = () => (
     <path d="m8 12 3 3 5-6" />
   </svg>
 );
+
+export const SunIcon = () => (
+  <svg {...base} className="icon" aria-hidden="true">
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+  </svg>
+);
+
+export const MoonIcon = () => (
+  <svg {...base} className="icon" aria-hidden="true">
+    <path d="M20.5 14.1A8.5 8.5 0 1 1 9.9 3.5a6.6 6.6 0 0 0 10.6 10.6Z" />
+  </svg>
+);

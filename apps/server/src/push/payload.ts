@@ -38,5 +38,5 @@ export function buildPayload(a: { openings: Opening[]; applicants: number; decis
 export function setupPayload(a: { op: string; nonce: string; expiresAt: number; offices: string[] }): string {
   const first = [...shortName(a.offices[0] ?? 'your offices')].slice(0, NAME_CHARS).join('');
   const body = a.offices.length > 1 ? `${first} and ${a.offices.length - 1} more` : first;
-  return JSON.stringify({ v: 1, title: 'Setting up PengePassportPH notifications', body, tag: `setup-${a.op}`, url: {}, kind: 'setup', op: a.op, nonce: a.nonce, expiresAt: new Date(a.expiresAt).toISOString() });
+  return JSON.stringify({ v: 1, title: 'Turning on notifications', body, tag: `setup-${a.op}`, url: {}, kind: 'setup', op: a.op, nonce: a.nonce, expiresAt: new Date(a.expiresAt).toISOString() });
 }
