@@ -1480,7 +1480,9 @@ describe('checker fuzz', () => {
       }),
       { seed: 20260927, numRuns: RUNS },
     );
-  }, 10_000 + RUNS * 10);
+    // Each run is up to 12 checks, each with its notification pass: about 75 ms a run on a laptop and 120 ms on CI,
+    // which the 10 ms a run it had before could not cover.
+  }, 10_000 + RUNS * 200);
 });
 
 describe('fresh delivery verification', () => {

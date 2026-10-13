@@ -422,6 +422,25 @@ describe('setting up on this device', () => {
     expect(w.current()).toBeNull();
   });
 
+  it('says on when another path stores the same alert again during the last proof (a reconcile that finished it too)', async () => {
+    const w = world();
+    const real = w.browser.subscription;
+    let rewrote = false;
+    w.browser.subscription = async () => {
+      const s = await S.readState(w.env);
+      // In the setup's last proof (the one its result is judged on), the page's own background reconcile, finishing the
+      // same operation, stores the same alert again.
+      const lastProof = /DeviceController\.proof[^\n]*\n[^\n]*DeviceController\.result/.test(new Error().stack ?? '');
+      if (!rewrote && s.credential && s.known && lastProof) {
+        rewrote = true;
+        await S.setKnown(w.env, { credential: s.credential, known: { ...s.known } });
+      }
+      return real();
+    };
+    expect(await w.c.setup(choices)).toEqual({ ok: true, text: TEXT.on });
+    expect(rewrote).toBe(true);
+  });
+
   it.each(['preparing', 'attached'] as const)('carries on an operation a page left %s, opened again 5 seconds later', async (phase) => {
     const w = world();
     const r = (await S.begin(w.env, { kind: 'setup', choices, captured: null, now: w.now() })) as { started: S.Operation };

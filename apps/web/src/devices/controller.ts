@@ -925,11 +925,20 @@ export class DeviceController {
       if (mine) await this.afterRead(credential, mine, before);
       // This activation, exactly, is what the device knows: its incarnation, generation and subscription.
       const isThis = (s: S.DeviceState) => s.credential === credential && s.known?.incarnation === act.incarnation && s.known.generation === act.generation && s.known.fingerprint === fp;
-      const now = await S.readState(this.d.env);
-      const proof = fp ? await this.proof(fp) : 'other';
-      // And still is after the proof's wait: the same epoch, `known` untouched, and still this activation.
-      const last = await S.readState(this.d.env);
-      const stable = last.epoch === now.epoch && last.knownVersion === now.knownVersion;
+      let now: S.DeviceState;
+      let proof: Awaited<ReturnType<DeviceController['proof']>>;
+      let last: S.DeviceState;
+      let stable: boolean;
+      for (let attempt = 0; ; attempt++) {
+        now = await S.readState(this.d.env);
+        proof = fp ? await this.proof(fp) : 'other';
+        // And still is after the proof's wait: the same epoch, `known` untouched, and still this activation.
+        last = await S.readState(this.d.env);
+        stable = last.epoch === now.epoch && last.knownVersion === now.knownVersion;
+        // `known` rewritten during the proof, still as this activation (another path of this page, such as its
+        // background reconcile, finished the same operation too): the proof is taken again, never read as a change.
+        if (stable || attempt === 2 || !serverOk || !isThis(now) || !isThis(last) || proof !== 'ok') break;
+      }
       if (serverOk && isThis(now) && isThis(last) && stable && proof === 'ok') {
         // The row shows it, whoever stored it: the worker stores the same alert after the ready check, and its write can
         // win the fence the read above was refused by, leaving that read nothing to show. Only while this operation is
