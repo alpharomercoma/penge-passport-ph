@@ -132,6 +132,12 @@ describe('templates', () => {
     expect(mail.html).not.toContain('/api/unsubscribe');
   });
 
+  it('links booking to www.passport.gov.ph', () => {
+    const mail = alertEmail({ openings: [{ id: 1, name: 'A', dates: ['2026-10-05'] }], applicants: 1, unsubscribeUrl: 'u', manageUrl: 'm', lastToday: false });
+    expect(mail.text).toContain('Book on the DFA site: https://www.passport.gov.ph/appointment');
+    expect(mail.html).toContain('href="https://www.passport.gov.ph/appointment"');
+  });
+
   it('lists at most three places in a subject', () => {
     const openings = ['A (x)', 'B (x)', 'C (x)', 'D (x)', 'E (x)'].map((name, id) => ({ id, name, dates: ['2026-10-05'] }));
     const { subject } = alertEmail({ openings, applicants: 1, unsubscribeUrl: 'u', manageUrl: 'm', lastToday: false });

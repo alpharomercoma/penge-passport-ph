@@ -6,7 +6,7 @@ import type { DailyStats } from './stats.ts';
 
 export { formatDate, shortName };
 
-export const BOOKING_URL = 'https://passport.gov.ph/appointment';
+export const BOOKING_URL = 'https://www.passport.gov.ph/appointment';
 
 export interface Rendered {
   subject: string;

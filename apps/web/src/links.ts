@@ -1,5 +1,5 @@
 export const REPO_URL = 'https://github.com/alpharomercoma/penge-passport-ph';
-export const BOOKING_URL = 'https://passport.gov.ph/appointment';
+export const BOOKING_URL = 'https://www.passport.gov.ph/appointment';
 
 /** Where the site lives, with a trailing slash: "/" or e.g. "/pengepassportph/" (Vite's `base`). */
 export const BASE: string = import.meta.env.BASE_URL;

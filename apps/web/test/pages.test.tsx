@@ -92,7 +92,7 @@ describe('home', () => {
     expect(screen.getByText('11:00 AM to 12:00 PM').closest('li')!.textContent).toContain('Full');
     expect(document.querySelector('.times .hint')!.textContent).toMatch(new RegExp(`^Checked just now · ${CLOCK}\\. The DFA gives`));
     expect(api.officeTimes).toHaveBeenCalledWith(486, '2026-10-07', 1);
-    expect(screen.getByRole('link', { name: /Book on passport.gov.ph/ }).getAttribute('href')).toBe('https://passport.gov.ph/appointment');
+    expect(screen.getByRole('link', { name: /Book on passport.gov.ph/ }).getAttribute('href')).toBe('https://www.passport.gov.ph/appointment');
     fireEvent.click(screen.getByRole('button', { name: /All offices/ }));
     expect(window.location.search).toBe('');
   });
@@ -286,9 +286,83 @@ describe('home', () => {
     expect(api.officeTimes).not.toHaveBeenCalled();
   });
 
-  it('says when the last check failed', async () => {
-    render(<App path="/" api={fakeApi({ status: async () => ({ ...STATUS, healthy: false }) })} />);
-    expect(await screen.findByText(/latest check ran into problems/)).toBeTruthy();
+  describe('while checks fail', () => {
+    const lastGood = new Date(Date.now() - 21 * 3600_000).toISOString();
+    const failing = () => fakeApi({ status: async () => ({ ...STATUS, healthy: false, lastHealthyAt: lastGood }) });
+    const HOME = /^Checks of DFA offices in the Philippines are failing\./;
+    const ABROAD_FAILING = /^Checks of posts abroad are failing\./;
+    const notice = (re: RegExp) =>
+      waitFor(() => {
+        const n = [...document.querySelectorAll<HTMLElement>('.warning')].find((e) => re.test(e.textContent!));
+        if (!n) throw new Error(`no notice matching ${re}`);
+        return n;
+      });
+    const allPostsFailing = () => fakeApi({ abroad: vi.fn(async () => ({ ...ABROAD, posts: ABROAD.posts.map((p) => ({ ...p, ok: false, checkedAt: p.checkedAt ?? STATUS.checkedAt })) })) });
+
+    it('says when the last check passed, that alerts for those offices are paused, and where to look instead', async () => {
+      render(<App path="/" api={failing()} />);
+      const n = await notice(HOME);
+      expect(n.textContent).toBe(
+        `Checks of DFA offices in the Philippines are failing. Our last successful check was at ${manilaClock(lastGood)} (21 hours ago). Their dates here may be out of date, and alerts for them are paused until checks work again. You can still look for dates on the DFA site.`,
+      );
+      expect(within(n).getByRole('link', { name: 'the DFA site' }).getAttribute('href')).toBe('https://www.passport.gov.ph/appointment');
+    });
+
+    it('announces only the unchanging headline, not the age that ticks every minute', async () => {
+      render(<App path="/" api={failing()} />);
+      const n = await notice(HOME);
+      expect(n.getAttribute('role')).toBeNull();
+      expect(within(n).getByRole('status').textContent).toBe('Checks of DFA offices in the Philippines are failing.');
+    });
+
+    it('does not highlight the last update as fresh', async () => {
+      render(<App path="/" api={failing()} />);
+      await notice(HOME);
+      expect(document.querySelector('.summary')!.textContent).toMatch(/Updated 21 hours ago · /);
+      expect(document.querySelectorAll('.summary .fresh')).toHaveLength(0);
+    });
+
+    it('shows the notice on an office in the Philippines too', async () => {
+      visit('/?office=486');
+      render(<App path="/" api={failing()} />);
+      expect(await screen.findByRole('heading', { name: 'Antipolo' })).toBeTruthy();
+      await notice(HOME);
+    });
+
+    it('says nothing about posts abroad when only the Philippines fails (their alerts still go)', async () => {
+      visit('/?in=abroad');
+      render(<App path="/" api={failing()} />);
+      await waitFor(() => expect(document.querySelector('.summary')!.textContent).toMatch(/Last checked /));
+      expect([...document.querySelectorAll('.warning')].map((e) => e.textContent)).toEqual([]);
+    });
+
+    it('says when every post abroad is failing, on the list and on a post', async () => {
+      visit('/?in=abroad');
+      render(<App path="/" api={allPostsFailing()} />);
+      const n = await notice(ABROAD_FAILING);
+      expect(n.textContent).toBe(
+        'Checks of posts abroad are failing. Their dates here may be out of date, and alerts for them are paused until checks work again. You can still look for dates on the DFA site.',
+      );
+      cleanup();
+      // On a post, with the Philippines failing as well: only the notice for the list the post belongs to.
+      visit('/?office=36');
+      render(<App path="/" api={{ ...allPostsFailing(), status: failing().status }} />);
+      await notice(ABROAD_FAILING);
+      expect([...document.querySelectorAll('.warning')].map((e) => e.textContent).filter((t) => HOME.test(t!) || ABROAD_FAILING.test(t!))).toHaveLength(1);
+    });
+
+    it('waits for a first check before saying anything', async () => {
+      const api = fakeApi({ status: vi.fn(async () => ({ ...STATUS, healthy: false, checkedAt: null, lastHealthyAt: null })) });
+      render(<App path="/" api={api} />);
+      await waitFor(() => expect(api.status).toHaveBeenCalled());
+      await screen.findByText(SUMMARY);
+      expect(document.querySelectorAll('.warning')).toHaveLength(0);
+    });
+
+    it('leaves out the last success when none is recorded', async () => {
+      render(<App path="/" api={fakeApi({ status: async () => ({ ...STATUS, healthy: false, lastHealthyAt: null }) })} />);
+      expect((await notice(HOME)).textContent).not.toMatch(/last successful/);
+    });
   });
 
   it('explains an outage and offers to try again', async () => {

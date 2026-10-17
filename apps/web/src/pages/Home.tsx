@@ -11,6 +11,8 @@ import { deviceController } from '../devices/instance.ts';
 import { detectContext } from '../notify/context.ts';
 import { manilaToday, toAbroadOffices, toOffices } from '../office.ts';
 import { Checked } from '../components/Checked.tsx';
+import { BOOKING_URL } from '../links.ts';
+import { ago, manilaClock } from '../time.ts';
 
 const REFRESH_MS = 60_000;
 /** Posts abroad are checked about hourly: reading them every 5 minutes is plenty. */
@@ -28,6 +30,25 @@ function loadSaved(): number[] {
 }
 
 type Scope = 'home' | 'abroad';
+
+/**
+ * Checks of one list (the Philippines, or the posts abroad) are failing: what that means for its dates and alerts, and
+ * where to look instead. Only the headline is a live region: the rest carries an age that changes every minute.
+ */
+function ChecksFailing({ subject, lastGood }: { subject: string; lastGood: string | null }) {
+  return (
+    <p className="warning">
+      <strong role="status">Checks of {subject} are failing.</strong>{' '}
+      {lastGood && `Our last successful check was at ${manilaClock(lastGood)} (${ago(lastGood)}). `}
+      Their dates here may be out of date, and alerts for them are paused until checks work again. You can still look for
+      dates on{' '}
+      <a href={BOOKING_URL} target="_blank" rel="noreferrer">
+        the DFA site
+      </a>
+      .
+    </p>
+  );
+}
 
 /**
  * ?office=486&date=2026-10-07 opens that office (and day), and ?in=abroad the
@@ -171,6 +192,11 @@ export function Home({ api }: { api: Api }) {
   // Posts abroad are checked one at a time: the newest of their checks that succeeded (a failed post keeps the time of
   // its last good one, which is not news of a check).
   const lastPostCheck = abroad?.posts.reduce<string | null>((m, p) => (p.ok && p.checkedAt && (!m || Date.parse(p.checkedAt) > Date.parse(m)) ? p.checkedAt : m), null) ?? null;
+  // What is on screen: an open office belongs to the Philippines or to the posts abroad, whichever list it came from.
+  const view: Scope = office ? (office.country ? 'abroad' : 'home') : scope;
+  // Posts abroad have their own checks (and alerts): failing when every post checked so far failed its latest check.
+  const checkedPosts = abroad?.posts.filter((p) => p.checkedAt) ?? [];
+  const abroadFailing = checkedPosts.length > 0 && checkedPosts.every((p) => !p.ok);
   const loading = scope === 'abroad' ? !abroad && !abroadError : !status && !error;
   const failure = scope === 'abroad' ? (!abroad ? abroadError : null) : !status ? error : null;
 
@@ -203,7 +229,7 @@ export function Home({ api }: { api: Api }) {
               {status?.lastHealthyAt && (
                 <>
                   {' '}
-                  Updated <Checked at={status.lastHealthyAt} fresh />.
+                  Updated <Checked at={status.lastHealthyAt} fresh={status.healthy} />.
                 </>
               )}
             </p>
@@ -239,11 +265,10 @@ export function Home({ api }: { api: Api }) {
           <DeviceRow controller={deviceController(() => status)} onChange={openChange} onSetUp={() => openAlert(null)} names={(id) => byId.get(id)?.place ?? `Office ${id}`} />
         </div>
       )}
-      {scope === 'home' && status && !status.healthy && status.checkedAt && (
-        <p className="warning" role="status">
-          The latest check ran into problems, so these dates may be out of date. Alerts wait until checks pass again.
-        </p>
+      {view === 'home' && status && !status.healthy && status.checkedAt && (
+        <ChecksFailing subject="DFA offices in the Philippines" lastGood={status.lastHealthyAt} />
       )}
+      {view === 'abroad' && abroadFailing && <ChecksFailing subject="posts abroad" lastGood={null} />}
 
       {failure && !office ? (
         <div className="down">

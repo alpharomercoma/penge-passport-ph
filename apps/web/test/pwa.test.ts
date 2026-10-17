@@ -60,6 +60,9 @@ describe('manifest', () => {
     expect(boot).toBeGreaterThan(html.indexOf('name="theme-color"'));
     expect(boot).toBeLessThan(html.indexOf('</head>'));
     expect(PUBLIC_SHELL).toContain('theme-boot.js');
+    // Booking goes to www.passport.gov.ph, which browsers reach even when the bare address does not answer.
+    expect(html).not.toMatch(/https:\/\/passport\.gov\.ph/);
+    expect(html).toContain('https://www.passport.gov.ph/appointment');
     for (const name of PUBLIC_SHELL) expect(existsSync(join(web, 'public', name))).toBe(true);
   });
 });
