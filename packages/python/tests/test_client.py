@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from penge_passport_ph import VERSION, AvailabilityEvent, ErrorEvent, PengePassportPH
-from penge_passport_ph.client import HttpResponse
+from penge_passport_ph.client import HttpRequest, HttpResponse
 from penge_passport_ph.errors import RateLimitError, SessionError, UpstreamError
 
 from .conftest import Call, FakeClock, FakeSite, fixture_text, html_response, json_response
@@ -194,6 +194,41 @@ def test_does_not_follow_redirects(make_client: MakeClient, clock: FakeClock) ->
     with pytest.raises(UpstreamError, match=r"HTTP 302 \(a redirect, which is not followed\)"):
         client.sites()
     assert client.stats()["consecutive_failures"] == 1
+
+
+def test_asks_www_by_default(tmp_path: Path, clock: FakeClock) -> None:
+    """The bare passport.gov.ph only redirects to www's home page."""
+    site = FakeSite()
+    urls: list[str] = []
+
+    def transport(request: HttpRequest) -> HttpResponse:
+        urls.append(request.url)
+        return site(request)
+
+    client = PengePassportPH(transport=transport, state_dir=str(tmp_path / "state-www"))
+    client.sites()
+    assert urls == ["https://www.passport.gov.ph/sites"]
+
+
+def test_names_cloudflares_bot_check(make_client: MakeClient, clock: FakeClock) -> None:
+    challenge = HttpResponse(403, [("cf-mitigated", "challenge")], "<title>Just a moment</title>")
+    client = make_client(
+        FakeSite(
+            overrides={
+                "/sites": lambda c: challenge,
+                "/countries": lambda c: html_response("Forbidden", 403),
+            }
+        ),
+        max_wait=600,
+    )
+    with pytest.raises(
+        UpstreamError, match=r"^POST /sites was stopped by Cloudflare's bot check \(HTTP 403\)$"
+    ) as err:
+        client.sites()
+    assert err.value.status == 403
+    assert client.stats()["consecutive_failures"] == 1
+    with pytest.raises(UpstreamError, match=r"^POST /countries returned HTTP 403$"):
+        client.countries(1)
 
 
 def test_the_default_transport_refuses_to_follow_redirects() -> None:

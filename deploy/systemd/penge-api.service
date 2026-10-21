@@ -14,9 +14,10 @@ UnsetEnvironment=R2_ENDPOINT R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 ExecStart=/usr/local/bin/node --enable-source-maps /opt/penge/current/server/server.mjs
 Restart=on-failure
 RestartSec=5
-# Observed ~55 MB. The box has 464 MB and 512 MB swap; these leave room for Caddy and the rest.
-MemoryHigh=100M
-MemoryMax=150M
+# Observed ~85 MB, plus ~20 MB for impit (upstream.ts) once it asks passport.gov.ph. The box has 967 MB and
+# 512 MB swap; these leave room for Caddy and the rest.
+MemoryHigh=130M
+MemoryMax=180M
 
 # Sandboxing: the API reads its bundle and talks to Redis and local SMTP, nothing else.
 NoNewPrivileges=yes

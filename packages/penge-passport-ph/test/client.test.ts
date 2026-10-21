@@ -444,6 +444,30 @@ describe('input and transport hardening', () => {
     expect((await c.stats()).consecutiveFailures).toBe(1);
   });
 
+  it('asks www.passport.gov.ph by default: the bare address only redirects to its home page', async () => {
+    const site = fakeSite();
+    const c = new PengePassportPH({ fetch: site.fetch, stateDir: freshStateDir() });
+    await settle(c.sites(), 1000);
+    expect(vi.mocked(site.fetch).mock.calls[0]![0]).toBe('https://www.passport.gov.ph/sites');
+  });
+
+  it("names Cloudflare's bot check when it stops a request, and backs off as for any 403", async () => {
+    const site = fakeSite({
+      '/sites': () =>
+        new Response('<title>Just a moment...</title>', { status: 403, headers: { 'cf-mitigated': 'challenge' } }),
+      '/countries': () => new Response('Forbidden', { status: 403 }),
+    });
+    const c = client(site, { maxWaitMs: 10 * 60_000 });
+    await expect(settle(c.sites(), 1000)).rejects.toMatchObject({
+      name: 'UpstreamError',
+      status: 403,
+      message: "POST /sites was stopped by Cloudflare's bot check (HTTP 403)",
+    });
+    expect((await c.stats()).consecutiveFailures).toBe(1);
+    // A plain 403 keeps the plain message.
+    await expect(settle(c.countries(1), 30_000)).rejects.toThrow('POST /countries returned HTTP 403');
+  });
+
   it('rejects a contact that would break the User-Agent', () => {
     for (const contact of ['a\r\nX-Injected: 1', 'emoji \u{1F600}', 'a(b)', '', 'x'.repeat(201)]) {
       expect(() => client(fakeSite(), { contact })).toThrow(RangeError);

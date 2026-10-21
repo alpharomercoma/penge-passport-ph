@@ -120,7 +120,7 @@ booking on top of it.
 
 ```python
 PengePassportPH(
-    base_url="https://passport.gov.ph",
+    base_url="https://www.passport.gov.ph",
     contact=None,  # added to the User-Agent
     min_interval=3.0,  # seconds, at least 2
     max_requests_per_hour=300,  # at most 1200
@@ -132,6 +132,11 @@ PengePassportPH(
     transport=None,  # custom HTTP transport (proxies, tests)
 )
 ```
+
+Since October 2026 the site sits behind Cloudflare's bot check, which refuses the default `urllib`
+transport from any address; a refused request fails with "was stopped by Cloudflare's bot check (HTTP
+403)". To get through, pass a `transport` that looks like a browser on the wire (for example built on
+[curl_cffi](https://github.com/lexiforest/curl_cffi)), from an address Cloudflare lets in.
 
 ## More
 

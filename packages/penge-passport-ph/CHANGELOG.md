@@ -6,6 +6,15 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
 
 ## [Unreleased]
 
+### Changed
+
+- The default site root is `https://www.passport.gov.ph`: since October 2026 the bare `passport.gov.ph`
+  only redirects to www's home page, so every request to it failed. Both editions.
+- A request Cloudflare's bot check stops (`403` with `cf-mitigated: challenge`) fails with "… was stopped
+  by Cloudflare's bot check (HTTP 403)" instead of "… returned HTTP 403", so a refused client can be told
+  from the site being down. It still counts as a failure and backs off the same way. The READMEs say what
+  gets through: a browser-like `fetch` (or Python `transport`) from an address Cloudflare lets in.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

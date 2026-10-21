@@ -257,7 +257,12 @@ screenshots. The issue closes itself when the canary passes again. What to do wh
 | `minIntervalMs`, `maxRequestsPerHour`, `maxWaitMs` | options | 3000, 300, 60000 |
 | `availabilityTtlMs`, `directoryTtlMs`, `timeoutMs` | options | 60 s, 6 h, 20 s |
 | `stateDir` | option, `PENGE_PASSPORT_PH_STATE_DIR` | `$XDG_STATE_HOME/penge-passport-ph`, else `~/.local/state/penge-passport-ph` |
-| `baseUrl`, `fetch` | options | `https://passport.gov.ph`, global `fetch` |
+| `baseUrl`, `fetch` | options | `https://www.passport.gov.ph`, global `fetch` |
+
+Since October 2026 the site sits behind Cloudflare's bot check, which refuses Node's own `fetch` from any
+address. A refused request fails with "was stopped by Cloudflare's bot check (HTTP 403)". To get through,
+pass a `fetch` that looks like a browser on the wire, from an address Cloudflare lets in: the website uses
+[impit](https://github.com/apify/impit) (`firefox144`) through a residential proxy.
 
 The canary has its own `PENGE_PASSPORT_PH_*` variables, listed in [docs/canary.md](docs/canary.md#settings).
 

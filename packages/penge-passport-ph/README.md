@@ -169,8 +169,8 @@ golden files, and share one rate-limit state file, so they can run side by side.
 
 `apps/` holds a website built on this package, live at <https://alphaexperiments.com/pengepassportph/>
 (short link `/p3h`): every office's open dates at a glance, in the Philippines and at the embassies and
-consulates abroad, each one's calendar and hourly times for one person or a group, and an email when a
-date opens where you can get to.
+consulates abroad, each one's calendar and hourly times for one person or a group, and an email, a push
+notification or both when a date opens where you can get to.
 
 - **Checks every office in the Philippines every 5 minutes, and each of about 130 posts abroad about
   hourly,** through this package's rate limiter, and stores what changes in Cloudflare R2 for later
@@ -184,6 +184,9 @@ date opens where you can get to.
   unsubscribe (RFC 8058). No trackers: visitors are counted on the server, without cookies, scripts or
   stored addresses ([how](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#daily-numbers)). [Where an address goes](https://github.com/alpharomercoma/penge-passport-ph/blob/main/deploy/README.md#where-a-subscribers-address-goes)
   lists every place it exists, including the two where it is not encrypted.
+- **Push notifications too.** In a browser, an installed app or the Android app, alerts can also (or only)
+  come as notifications, through Web Push: a second channel on the same subscription, turned on per device,
+  confirmed by the same email link, and turned off from the device itself ([how](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/how-it-works.md#alerts-by-email-and-push)).
 - **Self-hosted, free to run.** One small server: Caddy, Node.js, Valkey (Redis), and its own Postfix
   with DKIM.
 
@@ -254,7 +257,12 @@ screenshots. The issue closes itself when the canary passes again. What to do wh
 | `minIntervalMs`, `maxRequestsPerHour`, `maxWaitMs` | options | 3000, 300, 60000 |
 | `availabilityTtlMs`, `directoryTtlMs`, `timeoutMs` | options | 60 s, 6 h, 20 s |
 | `stateDir` | option, `PENGE_PASSPORT_PH_STATE_DIR` | `$XDG_STATE_HOME/penge-passport-ph`, else `~/.local/state/penge-passport-ph` |
-| `baseUrl`, `fetch` | options | `https://passport.gov.ph`, global `fetch` |
+| `baseUrl`, `fetch` | options | `https://www.passport.gov.ph`, global `fetch` |
+
+Since October 2026 the site sits behind Cloudflare's bot check, which refuses Node's own `fetch` from any
+address. A refused request fails with "was stopped by Cloudflare's bot check (HTTP 403)". To get through,
+pass a `fetch` that looks like a browser on the wire, from an address Cloudflare lets in: the website uses
+[impit](https://github.com/apify/impit) (`firefox144`) through a residential proxy.
 
 The canary has its own `PENGE_PASSPORT_PH_*` variables, listed in [docs/canary.md](https://github.com/alpharomercoma/penge-passport-ph/blob/main/docs/canary.md#settings).
 

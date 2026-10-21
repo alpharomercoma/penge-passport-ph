@@ -9,7 +9,7 @@ const env = (key) => process.env[`${ENV_PREFIX}${key}`] || undefined;
 
 /** Where results, screenshots and diffs are written (uploaded as an artifact in CI). */
 export const RESULTS_DIR = env('RESULTS_DIR') ?? 'canary-results';
-/** Override the site root (defaults to https://passport.gov.ph). */
+/** Override the site root (defaults to the package's, https://www.passport.gov.ph). */
 export const BASE_URL = env('BASE_URL');
 /** Override the site the canary scrapes (defaults to expected.json's canarySiteId). */
 export const SITE_ID = env('SITE_ID');

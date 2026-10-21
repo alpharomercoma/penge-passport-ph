@@ -18,6 +18,7 @@ beforeAll(async () => {
     platform: 'node',
     format: 'esm',
     target: 'node22',
+    external: ['impit'],
     banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
     logLevel: 'silent',
   });

@@ -13,9 +13,9 @@ ExecStart=/usr/local/bin/node --enable-source-maps /opt/penge/current/server/che
 # Exit 3 means the scan failed its health checks and nothing was emailed:
 # systemd records it as a failure so `systemctl --failed` shows it.
 TimeoutStartSec=15min
-# Observed peak ~66 MB.
-MemoryHigh=130M
-MemoryMax=180M
+# Observed peak ~66 MB before impit (upstream.ts), which adds ~25 MB over a scan.
+MemoryHigh=160M
+MemoryMax=220M
 Nice=5
 
 NoNewPrivileges=yes

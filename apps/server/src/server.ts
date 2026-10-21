@@ -10,10 +10,14 @@ import { log } from './log.ts';
 import { createLookups } from './lookups.ts';
 import { createMailer } from './mailer.ts';
 import { createStats } from './stats.ts';
+import { createUpstreamFetch, describeUpstream } from './upstream.ts';
 
 const config = loadConfig();
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
 const mailer = createMailer(config, log);
+// Loaded before listening: a release whose impit cannot load never becomes ready (upstream.ts).
+const upstreamFetch = await createUpstreamFetch(config.upstream);
+log.info('upstream', { via: describeUpstream(config.upstream) });
 // What visitors ask for has its own budget, apart from the scans (budget.ts);
 // a visitor never waits more than 15 s in its queue.
 const upstream = new PengePassportPH({
@@ -21,6 +25,7 @@ const upstream = new PengePassportPH({
   maxRequestsPerHour: LOOKUP_REQUESTS_PER_HOUR,
   maxWaitMs: 15_000,
   ...(config.publicBaseUrl ? { contact: config.publicBaseUrl } : {}),
+  ...(upstreamFetch ? { fetch: upstreamFetch } : {}),
 });
 const lookups = createLookups({ kv, upstream, log });
 const app = createApi({

@@ -22,6 +22,15 @@ build() {
   id="$(date -u +%Y%m%dT%H%M%SZ)-$rev-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
   mkdir -p "$out/$id/server" "$out/$id/web"
   cp apps/server/dist/*.mjs apps/server/dist/*.map "$out/$id/server/"
+  # impit is native (build.mjs leaves it out of the bundles): ship it beside them, with the binary npm installed
+  # for this machine. CI builds on linux-x64-gnu, which is the server's platform; ship() checks for it.
+  local impit bin
+  impit=$(cd apps/server && node -p "require('node:path').dirname(require.resolve('impit/package.json'))")
+  mkdir -p "$out/$id/server/node_modules"
+  cp -R "$impit" "$out/$id/server/node_modules/impit"
+  for bin in "$(dirname "$impit")"/impit-*; do
+    if [[ -d $bin ]]; then cp -R "$bin" "$out/$id/server/node_modules/"; fi
+  done
   cp -R apps/web/dist/. "$out/$id/web/"
   # World-readable, so the penge user and Caddy can read what the deploy user owns.
   # (Set here rather than with rsync --chmod, which macOS's openrsync lacks.)
@@ -37,7 +46,8 @@ ship() {
   # Without any of these the site or the Android app breaks. (CI moves the release
   # between jobs as an artifact, which leaves hidden files out unless told not to.)
   local need
-  for need in web/index.html web/sw.js web/manifest.webmanifest web/.well-known/assetlinks.json server/server.mjs server/check.mjs; do
+  for need in web/index.html web/sw.js web/manifest.webmanifest web/.well-known/assetlinks.json server/server.mjs server/check.mjs \
+    server/node_modules/impit/package.json server/node_modules/impit-linux-x64-gnu/impit-node.linux-x64-gnu.node; do
     [[ -f "$dir/$id/$need" ]] || { echo "the release has no $need" >&2; exit 2; }
   done
   # A plain gzipped tar over SSH works the same from macOS and Linux (no rsync

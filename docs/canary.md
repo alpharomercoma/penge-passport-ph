@@ -96,7 +96,7 @@ npm run canary                    # all three parts; or canary:api / canary:pyth
 | Variable | Default | Effect |
 |---|---|---|
 | `PENGE_PASSPORT_PH_SITE_ID` | `canarySiteId` in `expected.json` (486, Antipolo) | Site to scrape |
-| `PENGE_PASSPORT_PH_BASE_URL` | `https://passport.gov.ph` | Site root |
+| `PENGE_PASSPORT_PH_BASE_URL` | `https://www.passport.gov.ph` | Site root |
 | `PENGE_PASSPORT_PH_RESULTS_DIR` | `canary-results` | Where results, screenshots and diffs go |
 | `PENGE_PASSPORT_PH_ISSUE_DRY_RUN` | unset | `1` prints the `gh` calls instead of making them |
 

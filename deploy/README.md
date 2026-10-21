@@ -171,10 +171,52 @@ keep it only in GitHub's `production` environment.
 never evicts. The server refuses a Redis elsewhere unless it is `rediss://` (TLS). Addresses in it are
 encrypted and queued alerts are signed; the checker copies the subscribers to R2 every day.
 
+## Reaching passport.gov.ph
+
+Since 16 October 2026 the site sits behind Cloudflare's bot check, and `passport.gov.ph` only redirects to
+`www.passport.gov.ph` (the library's default now). Cloudflare challenges every request from this server's
+address, and Node's own `fetch` from any address. What gets through (measured 21 October) is
+[impit](https://github.com/apify/impit), a client that looks like Firefox on the wire, through a residential
+proxy. The checker and the API both use it when `server.env` says so (`apps/server/src/upstream.ts`):
+
+```sh
+UPSTREAM_BROWSER=firefox144                      # impit's profile; its Chrome ones and plain `firefox` are challenged
+UPSTREAM_PROXY_URL=http://<user>:<password>@<proxy-host>:<port>   # needs UPSTREAM_BROWSER
+```
+
+Unset, both use Node's `fetch`, as before. The proxy URL carries its credentials: no log line, error, stored
+scan or email repeats it (each process logs `"upstream","via":"impit firefox144 through <proxy-host>"` at start).
+The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (`release.sh`).
+
+- **When it stops working**, runs fail as when the site is down (breaker, the site's notice). The cause is in
+  the journal: `was stopped by Cloudflare's bot check (HTTP 403)` means the profile or the proxy's address is
+  refused now (try another profile, or another proxy address); `failed: Proxy authentication required.` means
+  the credentials; `failed: …` otherwise, the proxy or the site unreachable.
+- **Changing either setting**: the checker reads them at every run; the API only at start, so
+  `systemctl restart penge-api.service` after any change. To back out, remove both and restart the API.
+- **Trying a profile or a proxy before switching**, without touching the running service:
+
+  ```sh
+  sudo -u penge sh -c 'set -a; . /etc/penge/server.env; cd /opt/penge/current/server &&
+    node --input-type=module -e "const { Impit } = await import(\"impit\");
+      const r = await new Impit({ browser: process.env.UPSTREAM_BROWSER, proxyUrl: process.env.UPSTREAM_PROXY_URL })
+        .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
+      console.log(r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\")"'
+  ```
+
+  `200 not challenged` is good; `403 challenge` is refused. Override either variable on the `sh -c` line to try another.
+  Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
+  challenged (21 October), so a test without it says nothing about the service.
+- **Traffic**: a full scan of the Philippine offices is ~46 requests and ~160 KB (uncompressed), so ~1.4 GB a month
+  at one scan every 5 minutes, plus the hourly posts abroad and visitors' lookups. Keep the proxy plan above that.
+- **Memory**: impit adds ~20 MB to each process; the units' limits were raised for it (`penge-api` 130M/180M,
+  `penge-check` 160M/220M).
+
 ## Moving to another server
 
-**Check first that the new server can reach passport.gov.ph**: `curl -4 -m 15 -sS -o /dev/null -w '%{http_code}\n'
-https://passport.gov.ph/` must print a status, not time out, and keep doing so for a while. The site's
+**Check first that the new server can reach passport.gov.ph** (through the proxy since October 2026: the command
+under "Reaching passport.gov.ph" must print `200 not challenged`, and keep doing so for a while). Before that,
+`curl -4 -m 15 -sS -o /dev/null -w '%{http_code}\n' https://passport.gov.ph/` had to print a status. The site's
 server lets some networks in and silently drops others, sometimes only part of the time, so a looking
 glass cannot tell (it only pings and traces, which the site ignores from everyone). On 27 September 2026:
 

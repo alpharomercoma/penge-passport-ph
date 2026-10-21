@@ -14,6 +14,8 @@ await build({
   target: 'node22',
   sourcemap: true,
   legalComments: 'none',
+  // A native module (Rust, napi): shipped as a package beside the bundle by deploy/release.sh, not bundled.
+  external: ['impit'],
   // Some dependencies are CommonJS and call require() for Node built-ins.
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   logLevel: 'info',

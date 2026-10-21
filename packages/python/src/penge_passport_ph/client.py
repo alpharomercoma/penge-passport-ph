@@ -52,7 +52,8 @@ from .session import SESSION_IDLE_S, SESSION_MAX_AGE_S, TOKEN_TRUSTED_S, CookieJ
 
 T = TypeVar("T")
 
-DEFAULT_BASE_URL = "https://passport.gov.ph"
+#: The bare passport.gov.ph only redirects here, to the home page (since Oct 2026).
+DEFAULT_BASE_URL = "https://www.passport.gov.ph"
 
 #: Endpoints, as named in the site's own scripts.
 ENDPOINTS = {
@@ -570,6 +571,15 @@ class PengePassportPH:
             self._jar.store([v for k, v in res.headers if k.lower() == "set-cookie"])
             if not 200 <= res.status < 300:
                 report(Outcome(ok=False, retry_after=parse_retry_after(res.header("retry-after"))))
+                # Cloudflare's challenge page, shown to clients it takes for bots:
+                # not the site being down.
+                if res.header("cf-mitigated") == "challenge":
+                    raise UpstreamError(
+                        f"{method} {path} was stopped by Cloudflare's bot check"
+                        f" (HTTP {res.status})",
+                        res.status,
+                        url,
+                    )
                 note = " (a redirect, which is not followed)" if 300 <= res.status < 400 else ""
                 raise UpstreamError(
                     f"{method} {path} returned HTTP {res.status}{note}", res.status, url

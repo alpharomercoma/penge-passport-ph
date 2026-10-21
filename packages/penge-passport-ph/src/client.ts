@@ -38,7 +38,8 @@ import type {
 } from './types.js';
 import { HOMEPAGE, NAME, VERSION } from './meta.js';
 
-export const DEFAULT_BASE_URL = 'https://passport.gov.ph';
+/** The bare passport.gov.ph only redirects here, to the home page (since Oct 2026). */
+export const DEFAULT_BASE_URL = 'https://www.passport.gov.ph';
 
 /** Endpoints, as named in the site's own scripts. */
 export const ENDPOINTS = Object.freeze({
@@ -482,6 +483,14 @@ export class PengePassportPH {
 
       if (!res.ok) {
         report({ ok: false, retryAfterMs: parseRetryAfter(res.headers.get('retry-after')) });
+        // Cloudflare's challenge page, shown to clients it takes for bots: not the site being down.
+        if (res.headers.get('cf-mitigated') === 'challenge') {
+          throw new UpstreamError(
+            `${method} ${path} was stopped by Cloudflare's bot check (HTTP ${res.status})`,
+            res.status,
+            url,
+          );
+        }
         const note = res.status >= 300 && res.status < 400 ? ' (a redirect, which is not followed)' : '';
         throw new UpstreamError(`${method} ${path} returned HTTP ${res.status}${note}`, res.status, url);
       }

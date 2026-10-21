@@ -30,7 +30,7 @@ def env(key: str) -> str | None:
 
 RESULTS = Path(env("RESULTS_DIR") or "canary-results")
 SITE_ID = int(env("SITE_ID") or EXPECTED["canarySiteId"])
-BASE_URL = env("BASE_URL") or "https://passport.gov.ph"
+BASE_URL = env("BASE_URL") or "https://www.passport.gov.ph"
 REPO = os.environ.get("GITHUB_REPOSITORY")
 CONTACT = f"canary; {os.environ.get('GITHUB_SERVER_URL')}/{REPO}" if REPO else "canary"
 ICON = {"pass": "✅", "fail": "❌", "warn": "⚠️", "skip": "⏭️"}

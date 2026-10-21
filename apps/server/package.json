@@ -18,6 +18,7 @@
     "@redis/client": "^6.2.1",
     "aws4fetch": "^1.0.20",
     "hono": "^4.13.9",
+    "impit": "0.14.6",
     "nodemailer": "^10.0.10",
     "penge-passport-ph": "*",
     "web-push": "^3.6.7"

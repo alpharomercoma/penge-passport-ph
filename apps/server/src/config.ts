@@ -1,6 +1,7 @@
 // Everything the server reads from its environment (/etc/penge/server.env on
 // the VPS), checked once at start-up so a bad value fails loudly, not later.
 import { isPushMode, normalizeEmail, type PushMode } from '@penge/contracts';
+import { UPSTREAM_BROWSERS, type UpstreamBrowser, type UpstreamConfig } from './upstream.ts';
 
 export type MailMode = 'live' | 'dry-run' | 'off';
 
@@ -44,6 +45,8 @@ export interface Config {
   push: PushConfig;
   /** The notification alerts' limits as set (null: unset), resolved against maxmemory at start (devices/capacity.ts). */
   devices: { alertLimit: number | null; recordLimit: number | null };
+  /** How passport.gov.ph is reached (upstream.ts): a browser-like client, through a proxy. */
+  upstream: UpstreamConfig;
 }
 
 export class ConfigError extends Error {
@@ -159,8 +162,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Six units an alert: five for it and the end record it may leave, one for its last operation (kept a day after it ends).
   if (alertLimit !== null && recordLimit !== null && recordLimit < alertLimit * 6) throw new ConfigError('DEVICE_RECORD_LIMIT must hold 6 units for every alert DEVICE_ALERT_LIMIT allows');
 
+  // passport.gov.ph through a browser-like client and a proxy (upstream.ts). The proxy URL carries credentials:
+  // no message here repeats it.
+  for (const name of ['UPSTREAM_BROWSER', 'UPSTREAM_PROXY_URL']) {
+    if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
+  }
+  const browserRaw = env.UPSTREAM_BROWSER?.trim() || null;
+  if (browserRaw !== null && !(UPSTREAM_BROWSERS as readonly string[]).includes(browserRaw)) {
+    throw new ConfigError(`UPSTREAM_BROWSER must be one of ${UPSTREAM_BROWSERS.join(', ')}`);
+  }
+  const proxyUrl = env.UPSTREAM_PROXY_URL?.trim() || null;
+  if (proxyUrl !== null) {
+    if (browserRaw === null) throw new ConfigError('UPSTREAM_PROXY_URL needs UPSTREAM_BROWSER: without it the proxy is challenged too');
+    let url: URL | null = null;
+    try {
+      url = new URL(proxyUrl);
+    } catch {
+      // reported below, without the value
+    }
+    if (!url || !['http:', 'https:', 'socks5:'].includes(url.protocol) || !url.hostname || (url.pathname !== '' && url.pathname !== '/') || url.search || url.hash) {
+      throw new ConfigError('UPSTREAM_PROXY_URL must be http://, https:// or socks5://, with a host and nothing after it but an optional /');
+    }
+  }
+  const upstream: UpstreamConfig = { browser: browserRaw as UpstreamBrowser | null, proxyUrl };
+
   return {
     redisUrl,
+    upstream,
     r2:
       r2Set.length === 0
         ? null

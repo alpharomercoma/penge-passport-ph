@@ -13,11 +13,15 @@ import { createMailer } from './mailer.ts';
 import { r2Sink } from './r2.ts';
 import { noteLost } from './record.ts';
 import { createStats } from './stats.ts';
+import { createUpstreamFetch, describeUpstream } from './upstream.ts';
 
 const config = loadConfig();
 const r2 = requireR2(config);
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
 const mailer = createMailer(config, log);
+// passport.gov.ph through a browser-like client and a proxy when server.env says so (upstream.ts).
+const upstreamFetch = await createUpstreamFetch(config.upstream);
+log.info('upstream', { via: describeUpstream(config.upstream) });
 // Scans have their own budget, apart from what visitors ask for (budget.ts).
 // One is ~45 requests at the package's default pace, 3 s apart.
 const upstream = new PengePassportPH({
@@ -25,6 +29,7 @@ const upstream = new PengePassportPH({
   maxRequestsPerHour: SCAN_REQUESTS_PER_HOUR,
   maxWaitMs: 120_000,
   ...(config.publicBaseUrl ? { contact: config.publicBaseUrl } : {}),
+  ...(upstreamFetch ? { fetch: upstreamFetch } : {}),
 });
 // Posts abroad: their own budget and limiter, so they can never slow the scans at home.
 const abroad = new PengePassportPH({
@@ -32,6 +37,7 @@ const abroad = new PengePassportPH({
   maxRequestsPerHour: ABROAD_REQUESTS_PER_HOUR,
   maxWaitMs: 60_000,
   ...(config.publicBaseUrl ? { contact: config.publicBaseUrl } : {}),
+  ...(upstreamFetch ? { fetch: upstreamFetch } : {}),
 });
 
 try {
