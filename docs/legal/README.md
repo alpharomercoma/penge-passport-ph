@@ -242,12 +242,12 @@ We don't assume its servers are old or weak. What the record shows:
 
 | | Setting |
 |---|---|
-| Scans | Every 5 minutes, about 45 requests each, taking about 2.5 minutes |
-| Scans' budget | At most 720 requests in any rolling hour, on their own rate limiter (a full hour of scans needs 696 at most) |
-| Posts abroad | About 130 embassies, consulates and outreach missions, each checked about hourly (every 6 hours while it publishes none and nobody follows it), 12 per run; at most 300 requests in any rolling hour on a third rate limiter (276 at most for the scheduled runs; roughly 156 usually) |
+| Scans | Every 10 minutes (every 5 until 24 October 2026), about 45 requests each, taking about 2.5 minutes |
+| Scans' budget | At most 720 requests in any rolling hour, on their own rate limiter (a full hour of scans needs 348 at most since 24 October 2026; 696 before) |
+| Posts abroad | About 130 embassies, consulates and outreach missions, each checked about hourly (every 6 hours while it publishes none and nobody follows it), 24 per run; at most 300 requests in any rolling hour on a third rate limiter (210 at most for the scheduled runs; roughly 150 usually) |
 | Visitors' lookups | At most 1,000 requests in any rolling hour, on a separate rate limiter; each answer shared for 3 minutes |
 | Spacing | At least 3 seconds between requests on each limiter |
-| Worst case | 2,020 requests an hour if all three budgets were ever used up (one every 1.8 s on average); the scans at home are about 540, and the posts abroad roughly 156 more |
+| Worst case | 2,020 requests an hour if all three budgets were ever used up (one every 1.8 s on average); the scans at home are about 270, and the posts abroad roughly 150 more |
 | Errors | Backoff doubling from 5 s to 10 minutes; the site's `Retry-After` honoured up to an hour. After 5 failures in a row, or a single `Retry-After` longer than an hour, the limiter stops for 15 minutes, or for as long as `Retry-After` asks, up to an hour |
 | When the site struggles | After a scan with 3 or more offices still failing, or a paused limiter, scans rest 10 minutes (the next two runs are skipped); a run still going when the next is due is skipped |
 | Hard ceiling | The library refuses more than 1,200 requests an hour on any one limiter |
@@ -257,7 +257,8 @@ We don't assume its servers are old or weak. What the record shows:
 hour in total to 5-minute scans with 720 an hour for them, and added the posts abroad. On 28 September
 the maintainer set the scans at home back to every 15 minutes. On 30 September, with people now relying on
 the alerts, the maintainer moved the scans at home back to every 5 minutes and 720 an hour, with the posts
-abroad still checked about hourly: the settings above.
+abroad still checked about hourly. On 24 October, with the site behind Cloudflare's bot check, the maintainer
+moved the scans at home to every 10 minutes, halving the requests: the settings above.
 - **The case for.** Openings are short-lived: of the openings our scans saw on 26–27 September, 60% were
   gone by the next scan 15 minutes later. Scanning more often catches more of them, sooner, and people
   want to hear first, above all about earlier dates and newly released slots.

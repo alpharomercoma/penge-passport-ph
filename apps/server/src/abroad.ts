@@ -19,8 +19,8 @@ export interface AbroadUpstream {
   availability(query: { siteId: number; applicants: number }): Promise<Availability>;
 }
 
-/** Posts checked in one run. 12 runs an hour x 12 covers every post about hourly. */
-export const ABROAD_POSTS_PER_RUN = 12;
+/** Posts checked in one run. 6 runs an hour x 24 covers every post about hourly (12 x 12 while runs were 5 minutes apart). */
+export const ABROAD_POSTS_PER_RUN = 24;
 /** Steps of the weekly reading of the list (one region or one country each) in one run. */
 export const CATALOG_STEPS_PER_RUN = 6;
 /**
@@ -36,15 +36,15 @@ export const QUIET_EVERY_MINUTES = 6 * 60;
 export const CATALOG_MAX_AGE_MS = 7 * 24 * 3600_000;
 /**
  * Posts abroad (and their group lookups) are left for the next run once a run
- * is this old, counted from its start. Runs start 5 minutes apart and the scan
- * at home takes 2.5 to 3.7 of them: this leaves the dozen posts their 3 seconds
- * each even after the slowest scan, unless its emails took long too or the
+ * is this old, counted from its start. Runs start 10 minutes apart (5 until 24
+ * October 2026, with 4.5 minutes here) and the scan at home takes 2.5 to 3.7 of them: this leaves the two dozen posts
+ * their 3 seconds each even after the slowest scan, unless its emails took long too or the
  * weekly reading of the list of posts takes its steps first, and time for the R2
  * records (stored last) before the next run is due (a run still going then makes systemd skip
  * the next one). A run that checks fewer leaves the rest, most overdue first, to
  * the next.
  */
-export const ABROAD_DEADLINE_MS = 4.5 * 60_000;
+export const ABROAD_DEADLINE_MS = 9 * 60_000;
 /** A sweep of every post by hand has this long: the scheduled runs wait for it. */
 export const ABROAD_SWEEP_DEADLINE_MS = 12 * 60_000;
 /** The Philippines is region 1, country 1 on passport.gov.ph: its offices are the main scan. */

@@ -26,12 +26,12 @@ const KEEP_SECONDS = 3600;
 
 /**
  * How recent an office's scan must be to answer for one person without asking
- * the DFA again. Scans start every 5 minutes and reach an office anywhere from
+ * the DFA again. Scans start every 10 minutes and reach an office anywhere from
  * a few seconds to about 4 minutes in, so while they keep up an office's scan is
  * never older than this: its dates are shown with their age, and the DFA is
  * asked only for the hours of the day tapped.
  */
-export const SCAN_RECENT_SECONDS = 9 * 60;
+export const SCAN_RECENT_SECONDS = 14 * 60;
 
 /** A DFA session is opened ahead of a tap once the current one would lapse within this. */
 export const WARM_WITHIN_MS = 2 * 60_000;

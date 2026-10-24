@@ -5,7 +5,7 @@
 // everything, so a day can be rebuilt from its own folder (rebuild()).
 //
 // Two streams: `scans`, every office in the Philippines each run, where an
-// office missing from the list has been removed; and `scans-abroad`, a dozen
+// office missing from the list has been removed; and `scans-abroad`, two dozen
 // posts a run, where a post not checked this run is simply unchanged.
 //
 // What was last recorded is kept in Redis (recordHead, recordSites). Redis moves
@@ -143,7 +143,7 @@ export interface RecordDeps {
 /**
  * What a run can say about the sites it did not see. `complete`: it observed
  * every site of the stream, so one it did not see is gone. Otherwise (the posts
- * abroad, a dozen a run) one it did not see is unchanged, unless `known`, the
+ * abroad, two dozen a run) one it did not see is unchanged, unless `known`, the
  * full list of the stream's sites, no longer has it.
  */
 export interface Coverage {

@@ -1,6 +1,9 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigError, loadConfig } from '../src/config.ts';
-import { createUpstreamFetch, describeUpstream } from '../src/upstream.ts';
+import { createUpstreamFetch, describeUpstream, fileKeeper, KEEP_MS, type Kept } from '../src/upstream.ts';
 import { validEnv } from './helpers.ts';
 
 const PROXY = 'http://user-1:s3cr%3At@proxy.example:8080';
@@ -97,12 +100,13 @@ describe('createUpstreamFetch', () => {
   it('makes one impit client that never follows redirects, and passes each request through as the client made it', async () => {
     const impit = fakeImpit(async () => new Response('ok', { headers: { 'set-cookie': 'a=1' } }));
     const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: impit.load }))!;
-    expect(impit.made).toEqual([{ browser: 'firefox144', proxyUrl: PROXY, followRedirects: false, timeout: 60_000 }]);
     const signal = new AbortController().signal;
     const headers = new Headers({ 'User-Agent': 'penge-passport-ph/x', Cookie: 'c=1' });
     const body = new URLSearchParams({ regionId: '1' });
     const res = await fetch(new URL('https://www.passport.gov.ph/sites'), { method: 'POST', headers, body, signal, redirect: 'manual' });
     expect(await res.text()).toBe('ok');
+    // Made at the first request, not before.
+    expect(impit.made).toEqual([{ browser: 'firefox144', proxyUrl: PROXY, followRedirects: false, timeout: 60_000 }]);
     expect(res.headers.getSetCookie()).toEqual(['a=1']);
     expect(impit.calls).toEqual([['https://www.passport.gov.ph/sites', { method: 'POST', headers, body, signal, redirect: 'manual' }]]);
   });
@@ -563,3 +567,131 @@ describe('several profiles', () => {
     expect(t.calls.map((c) => c.browser)).toEqual(['firefox128', 'chrome151', 'chrome151']);
   });
 });
+
+describe('keeping the exit and profile across runs', () => {
+  const list = ['firefox128', 'chrome151'] as const;
+  function keeper(initial: Kept | null) {
+    const writes: Kept[] = [];
+    let stored = initial;
+    return {
+      writes,
+      keep: {
+        read: () => stored,
+        write: (k: Kept) => {
+          writes.push(k);
+          stored = k;
+        },
+      },
+    };
+  }
+  const start = async (t: ReturnType<typeof exits>, keep: ReturnType<typeof keeper>['keep'], clock: number, starts: unknown[] = []) =>
+    (await createUpstreamFetch(
+      { browsers: [...list], proxyUrl: ROTATING, rotations: 3 },
+      { load: t.load, pickSession: t.pickSession, pickProfile: () => 0, spacingMs: 0, now: () => clock, keep, onStart: (i) => starts.push(i) },
+    ))!;
+
+  it('a run within the hour keeps what the run before used, and writes nothing', async () => {
+    const t = exits(async () => new Response('ok'));
+    const k = keeper({ session: 4242, browser: 'chrome151', since: 1_000_000 });
+    const starts: unknown[] = [];
+    await (await start(t, k.keep, 1_000_000 + KEEP_MS - 1, starts))(URL_, {});
+    expect(t.made).toEqual(['http://acct42-4242:s3cr%3At@proxy.example:8080']);
+    expect(k.writes).toEqual([]);
+    expect(starts).toEqual([{ browser: 'chrome151', kept: true }]);
+  });
+
+  it('after an hour, or with a profile no longer listed, starts afresh and says so', async () => {
+    for (const kept of [
+      { session: 4242, browser: 'chrome151', since: 1_000_000 - KEEP_MS },
+      { session: 4242, browser: 'firefox133', since: 1_000_000 },
+      { session: -1, browser: 'chrome151', since: 1_000_000 },
+      { session: 4242, browser: 'chrome151', since: 2_000_000 },
+    ]) {
+      const t = exits(async () => new Response('ok'));
+      const k = keeper(kept);
+      const starts: unknown[] = [];
+      await (await start(t, k.keep, 1_000_000, starts))(URL_, {});
+      expect(t.made).toEqual(['http://acct42-7:s3cr%3At@proxy.example:8080']);
+      expect(k.writes).toEqual([{ session: 7, browser: 'firefox128', since: 1_000_000 }]);
+      expect(starts).toEqual([{ browser: 'firefox128', kept: false }]);
+    }
+  });
+
+  it('a move is written, so the next run starts where this one ended', async () => {
+    const t = exits(async (proxyUrl) => (exitOf(proxyUrl) === 4242 ? challenge() : new Response('ok')));
+    const k = keeper({ session: 4242, browser: 'firefox128', since: 1_000_000 });
+    await (await start(t, k.keep, 1_000_100))(URL_, {});
+    expect(k.writes).toEqual([{ session: 8, browser: 'chrome151', since: 1_000_100 }]);
+  });
+
+  it('touches nothing kept before the first request: a run that loses the checker lock never asks', async () => {
+    const t = exits(async () => new Response('ok'));
+    const read = vi.fn(() => null);
+    const write = vi.fn();
+    await start(t, { read, write }, 1_000_000);
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(t.made).toEqual([]);
+  });
+
+  it('with a fixed proxy and several profiles, keeps the profile (there is no session number to keep)', async () => {
+    let stored: Kept | null = null;
+    const keep = { read: () => stored, write: (k: Kept) => void (stored = k) };
+    const made: string[] = [];
+    for (const pick of [1, 0]) {
+      const t = profilesStandIn(made);
+      const fetch = (await createUpstreamFetch(
+        { browsers: ['firefox128', 'chrome151'], proxyUrl: PROXY, rotations: 3 },
+        { load: t, pickProfile: () => pick, spacingMs: 0, now: () => 1_000_000, keep },
+      ))!;
+      await fetch(URL_, {});
+    }
+    expect(made).toEqual(['chrome151', 'chrome151']);
+  });
+
+  it('a keeper that fails to read or write never fails a request', async () => {
+    const t = exits(async () => new Response('ok'));
+    const broken = {
+      read: () => {
+        throw new Error('EACCES');
+      },
+      write: () => {
+        throw new Error('EROFS');
+      },
+    };
+    expect((await (await start(t, broken, 1_000_000))(URL_, {})).status).toBe(200);
+  });
+
+  it('one profile and a fixed proxy: nothing to keep, nothing read or written', async () => {
+    const t = exits(async () => new Response('ok'));
+    const read = vi.fn(() => null);
+    const write = vi.fn();
+    const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: t.load, keep: { read, write } }))!;
+    await fetch(URL_, {});
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('the file keeper writes and reads back, and treats a missing or broken file as nothing kept', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'keep-'));
+    const k = fileKeeper(join(dir, 'upstream-exit.json'));
+    expect(() => k.read()).toThrow();
+    k.write({ session: 12, browser: 'chrome151', since: 99 });
+    expect(k.read()).toEqual({ session: 12, browser: 'chrome151', since: 99 });
+    writeFileSync(join(dir, 'upstream-exit.json'), '{"session":"x"}');
+    expect(k.read()).toBeNull();
+  });
+});
+
+/** An impit stand-in that only records each instance's profile, and answers ok. */
+function profilesStandIn(made: string[]) {
+  class Impit {
+    constructor(options: { browser: string }) {
+      made.push(options.browser);
+    }
+    fetch() {
+      return Promise.resolve(new Response('ok'));
+    }
+  }
+  return async () => ({ Impit }) as never;
+}

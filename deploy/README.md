@@ -9,7 +9,7 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
  visitor ──HTTPS──▶   │ Caddy ──▶ /            static React build   (/opt/penge/current/web) │
                       │       └─▶ /api/*       penge-api.service    (127.0.0.1:8787)         │
                       │                                                                      │
- passport.gov.ph ◀──  │ penge-check.timer, every 5 min ─▶ penge-check.service (one scan)     │
+ passport.gov.ph ◀──  │ penge-check.timer, every 10 min ─▶ penge-check.service (one scan)    │
                       │                                                                      │
  inboxes ◀──SMTP───   │ Postfix (localhost only) ◀─ OpenDKIM signs every message             │
                       │                                                                      │
@@ -31,7 +31,7 @@ analysis; subscribers and live state are in Redis. Nothing here needs AWS, Googl
 
 ## What the checker does, and when it refuses to email
 
-Every 5 minutes (a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
+Every 10 minutes (every 5 until 24 October 2026; a scan is ~45 requests at the library's 3-second pace and takes about 2.5 minutes),
 `penge-check.service` asks every office for its calendar for one person, and looks up group sizes that
 subscribers asked for. Then, only if the scan passes its checks,
 it compares each office with its last good look and emails whoever was waiting for a date that just
@@ -51,7 +51,7 @@ guardrails:
 5. A date is announced at most once every 3 hours, however often it flickers (held slots are released
    after 30 minutes).
 6. Pace ([why, and what the reviews found](../docs/alert-timing.md)): at most one alert an hour per
-   person, or one per check (every 5 minutes) if they chose "as soon as a check finds dates". What
+   person, or one per check (every 10 minutes) if they chose "as soon as a check finds dates". What
    comes in between waits (`pp:held:*`, signed like the outbox) and joins
    their next email. The gap, the 3-hour life of a waiting date and the 3-hour announcement window are
    measured on the kernel's uptime clock (`apps/server/src/clock.ts`), so a wall-clock step (NTP, a
@@ -75,8 +75,8 @@ guardrails:
    part-way through may already have gone out, so it stays charged and is never sent twice.
 9. A Redis flag pauses all delivery at once (below).
 10. **The checker rests when the site struggles.** If, after the retries, 3 or more offices still
-    answer with errors, or the rate limiter had to pause, the next scans wait 10 minutes: the next two runs
-    are skipped, so the site is asked every 15 minutes instead of every 5. A run still going when the next is due is
+    answer with errors, or the rate limiter had to pause, the next scans wait 10 minutes: the next run
+    is skipped, so the site is asked every 20 minutes instead of every 10. A run still going when the next is due is
     skipped by systemd, so a slow site also slows the scans.
 
 Exit code 3 means the scan failed its checks and nothing was emailed; `systemctl --failed` shows it.
@@ -89,8 +89,8 @@ book on passport.gov.ph too, 133 in 67 countries in September 2026. They are not
 run. Each run, after the scan at home and its emails, checks the 12 most overdue on their own
 rate limiter: a post that publishes dates, or that someone follows, about once an hour; one that
 publishes none, every 6 hours. The list of posts is read again once a week, a few countries per run
-(all 18 of a run's requests the first time, so a new server lists them within about half an hour, checking none
-meanwhile). The posts, and their group lookups, stop once the run is 4.5 minutes old. That leaves the dozen
+(all 30 of a run's requests the first time, so a new server lists them within about half an hour, checking none
+meanwhile). The posts, and their group lookups, stop once the run is 9 minutes old. That leaves the two dozen
 their time even after the slowest scan at home (unless its emails took long too, or the weekly reading of the
 list takes its steps first), and the R2 records their time before the next run; posts left over go first in
 the next.
@@ -102,8 +102,8 @@ and each post that failed keeps what was known. What changed at them goes to R2 
 
 | | Rate limiter state | Most in any rolling hour | What fills it |
 |---|---|---|---|
-| Scans | `/var/lib/penge/limiter/scans` | 720 | 12 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 696 at most |
-| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 12 runs × (a session, 18 shared by 12 posts and 6 steps of reading the list, 4 group checks) = 276 at most, usually about 156; a sweep by hand (about 135) waits for room |
+| Scans | `/var/lib/penge/limiter/scans` | 720 | 6 scans × (43 offices, a session, the office list, 3 retries, 10 group checks) = 348 at most (696 at 12 an hour, until 24 October) |
+| Posts abroad | `/var/lib/penge/limiter/abroad` | 300 | 6 runs × (a session, 30 shared by 24 posts and 6 steps of reading the list, 4 group checks) = 210 at most, usually about 150; a sweep by hand (about 135) waits for room |
 | Visitors' lookups | `/var/lib/penge/limiter/lookups` | 1000 | Fresh dates, group dates, hours of a day, and the API's own sessions |
 
 All are enforced by the library over an exact rolling hour, each request at least 3 seconds after
@@ -118,9 +118,9 @@ All times are Manila time; the server's clock is UTC.
 
 | What | When | Notes |
 |---|---|---|
-| Every office's dates, for one person | A scan starts every 5 minutes, at :02, :07, :12 and so on, and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker skips a run after a scan the site struggled with |
+| Every office's dates, for one person | A scan starts every 10 minutes, at :02, :12, :22 and so on, and usually finishes in 2–3 minutes (median 2.5, slowest 3.7 in the first 52 scans; capped at 10) | Failed offices are tried once more (3 at most); after that, the website shows what was last known and when. The checker skips a run after a scan the site struggled with |
 | Group dates for subscribers | During each healthy scan, at offices with room for one person, at most 10 | |
-| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | Up to 12 posts each run, after the scan at home and its emails (fewer after a slow scan; the most overdue go first, so later runs catch up); alerts in the same run. The list of posts is read again weekly |
+| A post abroad's dates, for one person | About hourly; every 6 hours while it publishes none and nobody follows it | Up to 24 posts each run, after the scan at home and its emails (fewer after a slow scan; the most overdue go first, so later runs catch up); alerts in the same run. The list of posts is read again weekly |
 | An open page | Reads the latest scan every 60 s; the ages it shows count up every 30 s, even while the server cannot be reached | |
 | The site's copy on a phone (installed from the browser, or the [Android app](../docs/android.md)) | Each page load asks the server first, so a deploy shows on the next visit | The service worker (`apps/web/src/sw.js`) keeps the last deploy's page, code and icons to open offline; appointment data is never kept |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 9 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
@@ -196,8 +196,11 @@ UPSTREAM_PROXY_URL=http://<account>-{session}:<password>@p.webshare.io:80
 UPSTREAM_PROXY_ROTATIONS=3                       # optional: moves per request, and per 5 minutes (0-10, default 3)
 ```
 
-Each checker run then starts on its own random exit, shared by its scan and the posts abroad; the API keeps
-one until it fails. When an exit is refused (Cloudflare's challenge, or the exit cannot open a tunnel), the
+Each checker run then keeps the exit and profile the runs before it used, for up to an hour from when they
+were chosen, unless refused meanwhile (`/var/lib/penge/limiter/upstream-exit.json`; the journal says
+`"upstream: this run"` with `kept` true or false); its scan and posts abroad share them. The API keeps its own
+until refused. Until 24 October 13:30 PHT every run took a new exit and a random profile, and Cloudflare
+refused each profile in turn within the hour. When an exit is refused (Cloudflare's challenge, or the exit cannot open a tunnel), the
 request moves to a new exit and goes again, up to that many times, and no process moves more than that many
 times in any 5 minutes; it only goes again when the site never saw it. Cloudflare sometimes challenges every
 exit for a while (24 October, from ~02:00Z: 24 of 24); then a run fails after a few exits, as without rotation. After a timeout or a dropped connection the request fails as
@@ -254,8 +257,9 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
   challenged (21 October), so a test without it says nothing about the service.
 - **Traffic** (measured on the wire, 24 October): a run is ~81 KB for the Philippine offices (the session page is
-  ~35 KB of it) and ~44 KB for its posts abroad, so ~1.2 GB a month at one run every 5 minutes, with visitors'
-  lookups (~0.6 KB each). A move costs a new TLS handshake (~5 KB). Keep the plan above 1.5 GB a month, and
+  ~35 KB of it) and ~44 KB for its posts abroad, so ~0.6 GB a month at one run every 10 minutes (~1.2 GB at
+  every 5), with visitors' lookups (~0.6 KB each). A move costs a new TLS handshake (~5 KB). Keep the plan above
+  1 GB a month, and
   apart from any other use of the same account.
 - **Memory**: impit adds ~20 MB to each process; the units' limits were raised for it (`penge-api` 130M/180M,
   `penge-check` 160M/220M).
@@ -465,8 +469,8 @@ Postfix had its own log; they age out by 10 October.
 |---|---|---|---|
 | The push subscription (an address at the browser maker's push service, and keys), encrypted; the alert's offices, group size and pace, plain, next to a random id | `pp:dev:<id>`, `pp:dev:site`, indexes | Until turned off, gone, or 180 days after the last opening that reached us | Ended alerts are removed by later admissions or the next run |
 | An operation: while unfinished, the subscription, choices and a nonce, encrypted; then its result | `pp:dev:op:<credential hash>` | Unfinished: until acknowledged or expired (5 minutes) and ended by clean-up; the result: until the next operation, or 24 hours and then the next clean-up | Ended by the next admission for that credential, by admissions' clean-up of up to 20, or by the next run |
-| That an alert ended or its subscription was gone, with the date (and for gone, the subscription's fingerprint), under a hash of the device's credential | `pp:dev:ended` | 30 days, or until the device turns off; deleted by the next clean-up after that (normally within 5 minutes) | Deleted by the next clean-up or admission after the deadline; if both stop, when either resumes |
-| Queued, held and claimed work (offices and dates), plain | `pp:dev:queue`, `held`, `claim`, `fanout` | Sendable for 3 hours after the opening; deleted by the next clean-up after that (every run, normally every 5 minutes) | Until the next run |
+| That an alert ended or its subscription was gone, with the date (and for gone, the subscription's fingerprint), under a hash of the device's credential | `pp:dev:ended` | 30 days, or until the device turns off; deleted by the next clean-up after that (normally within 10 minutes) | Deleted by the next clean-up or admission after the deadline; if both stop, when either resumes |
+| Queued, held and claimed work (offices and dates), plain | `pp:dev:queue`, `held`, `claim`, `fanout` | Sendable for 3 hours after the opening; deleted by the next clean-up after that (every run, normally every 10 minutes) | Until the next run |
 | Pace stamp, today's count, tries | `pp:dev:last`, `today`, `tried` | With the alert; today's count 2 days | The same |
 | Rate-limit counters, keyed by keyed hashes of the IP address, the credential or the endpoint | Valkey | About 2 hours | The same |
 | Deleted data in the database's own files (email data too) | Valkey's append-only file **and** its snapshot (`dump.rdb`; production has `save 3600 1 300 100 60 10000`), two separate copies | Until **both** have been rewritten after the deletion: an append-only rewrite and a snapshot that each started after it completed; normally within the hour | Longer if either fails; the daily report shows each one's last success and status |
@@ -869,7 +873,7 @@ what it saw differs from the last record stored. A run that saw nothing new writ
   - the offices gone from the list (`removed`);
   - the run's own fields: health, problems, group lookups;
   - `after`, the key of the record it follows.
-- **The posts abroad** are stored the same way under `scans-abroad/v2/`. A run checks a dozen posts, so a
+- **The posts abroad** are stored the same way under `scans-abroad/v2/`. A run checks two dozen posts, so a
   post it didn't check is unchanged, not removed, unless the list of posts (once read in full) no longer
   has it. The day's first record carries every post as last seen.
 - **A site's `fetchedAt`** is when what it shows was fetched, which can be an earlier run's: a fetch that

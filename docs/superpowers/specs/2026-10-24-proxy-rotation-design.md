@@ -135,3 +135,17 @@ again), `firefox128` and four Chrome profiles passed. So:
   accepted with several profiles even without `{session}`.
 - Each move logs the profile now in use.
 
+## Addendum, 24 Oct 05:30Z: a calmer footprint
+
+Several profiles held for two runs; at 05:02Z all four were challenged on new exits, one after another. Each
+step that spread the same traffic over more addresses or fingerprints was refused sooner (days, then 90 minutes,
+then ~15). The owner chose a calmer footprint over further evasion:
+
+- A checker run keeps the exit and profile of the runs before (a file in the state directory) for up to an hour
+  from when they were chosen, moving only when refused. The API keeps its own until refused.
+- Checks every 10 minutes instead of 5 (timer `*:02/10`). Posts abroad stay about hourly: 24 a run instead of 12,
+  and they stop 9 minutes into a run instead of 4.5. A visitor's lookup trusts a scan up to 14 minutes old
+  instead of 9, so the API asks the DFA no more than before.
+- Not done yet: one DFA session per run instead of two (the scan and the posts abroad have separate clients and
+  budgets); measured first.
+

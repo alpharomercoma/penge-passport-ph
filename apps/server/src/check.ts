@@ -1,6 +1,7 @@
 // One checker run: `node dist/check.mjs`, started by a systemd timer.
 // Exit codes: 0 done (or another run was in progress), 1 crashed, 3 the scan
 // failed its health checks (nothing was emailed).
+import { join } from 'node:path';
 import { NAME, PengePassportPH, VERSION } from 'penge-passport-ph';
 import { ABROAD_REQUESTS_PER_HOUR, abroadStateDir, SCAN_REQUESTS_PER_HOUR, scanStateDir } from './budget.ts';
 import { runCheck } from './checker.ts';
@@ -13,14 +14,19 @@ import { createMailer } from './mailer.ts';
 import { r2Sink } from './r2.ts';
 import { noteLost } from './record.ts';
 import { createStats } from './stats.ts';
-import { createUpstreamFetch, describeUpstream } from './upstream.ts';
+import { createUpstreamFetch, describeUpstream, fileKeeper } from './upstream.ts';
 
 const config = loadConfig();
 const r2 = requireR2(config);
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
 const mailer = createMailer(config, log);
 // passport.gov.ph through a browser-like client and a proxy when server.env says so (upstream.ts).
-const upstreamFetch = await createUpstreamFetch(config.upstream, { onRotate: (info) => log.warn('upstream: new exit', info) });
+// Each run keeps the exit and profile the runs before used, for up to an hour while they are not refused (upstream.ts).
+const upstreamFetch = await createUpstreamFetch(config.upstream, {
+  onRotate: (info) => log.warn('upstream: new exit', info),
+  onStart: (info) => log.info('upstream: this run', info),
+  keep: fileKeeper(join(config.stateDir, 'upstream-exit.json')),
+});
 log.info('upstream', { via: describeUpstream(config.upstream) });
 // Scans have their own budget, apart from what visitors ask for (budget.ts).
 // One is ~45 requests at the package's default pace, 3 s apart.

@@ -6,6 +6,7 @@
 // With `{session}` in the proxy's user name, each process takes its own exit (a random session number), and moves
 // to another when one is refused (docs/superpowers/specs/2026-10-24-proxy-rotation-design.md).
 import { randomInt } from 'node:crypto';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import type { Browser } from 'impit';
 import { LIMITS } from 'penge-passport-ph';
 
@@ -66,9 +67,14 @@ const IMPIT_TIMEOUT_MS = 60_000;
 /**
  * A process takes at most `rotations` new exits in this long. When Cloudflare challenges everyone (24 of 24 exits
  * on 24 October, 02:08Z), more exits only spread one fingerprint across more addresses, which looks worse. One
- * checker period: a run tries at most rotations + 1 exits, and the API gets its moves back five minutes on.
+ * run: a run tries at most rotations + 1 exits, and the API gets its moves back five minutes on.
  */
 const ROTATION_WINDOW_MS = 5 * 60_000;
+/**
+ * How long a checker run keeps the exit and profile the runs before it used (when they were not refused): spreading one
+ * fingerprint over a new address every 5 minutes was followed by Cloudflare refusing it within the hour (24 Oct).
+ */
+export const KEEP_MS = 60 * 60_000;
 /** Session numbers Webshare took when this was written (any number tried, up to 200000). */
 const SESSION_MAX = 1_000_000;
 
@@ -86,6 +92,20 @@ export interface UpstreamOptions {
   spacingMs?: number;
   /** For tests: the clock the window of moves is kept by. */
   now?: () => number;
+  /**
+   * Where a one-shot process finds the exit and profile to keep, and leaves its own (check.ts: a file in the state
+   * directory). Kept for KEEP_MS from when they were chosen, unless refused meanwhile.
+   */
+  keep?: { read(): Kept | null; write(kept: Kept): void };
+  /** Told once, at start, which profile this process uses and whether it was kept from the runs before. */
+  onStart?: (info: { browser: UpstreamBrowser; kept: boolean }) => void;
+}
+
+/** The exit and profile in use, and since when (ms). Nothing secret: a session number and a profile's name. */
+export interface Kept {
+  session: number;
+  browser: string;
+  since: number;
 }
 
 export const rotatesExits = (proxyUrl: string | null) => proxyUrl?.includes(SESSION_PLACEHOLDER) ?? false;
@@ -167,6 +187,8 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
     onRotate,
     spacingMs = LIMITS.defaultMinIntervalMs,
     now = Date.now,
+    keep,
+    onStart,
   } = options;
   let mod: ImpitModule;
   try {
@@ -179,9 +201,9 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
   const rotating = rotatesExits(template);
   const rotations = canMove(config) ? config.rotations : 0;
 
-  let session = rotating ? pickSession() : 0;
+  let session = 0;
   /** Which of `browsers` this process uses now. */
-  let profile = browsers.length > 1 ? pickProfile(browsers.length) % browsers.length : 0;
+  let profile = 0;
   const proxyFor = (n: number) => (rotating ? template!.replace(SESSION_PLACEHOLDER, String(n)) : template);
   const make = (proxyUrl: string | null) =>
     new mod.Impit({
@@ -190,8 +212,35 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
       followRedirects: false,
       timeout: IMPIT_TIMEOUT_MS,
     });
-  let proxyUrl = proxyFor(session);
-  let impit = make(proxyUrl);
+  const keeping = keep !== undefined && canMove(config);
+  let proxyUrl: string | null = null;
+  let impit: InstanceType<ImpitModule['Impit']> | null = null;
+  /**
+   * The exit and profile are chosen at the first request, not here: a checker run makes its first request only
+   * once it holds the checker's lock (checker.ts), so a run that loses the lock never touches what is kept.
+   * Keep what the runs before used, while it lasts and still fits these settings; otherwise start afresh.
+   */
+  const start = () => {
+    session = rotating ? pickSession() : 0;
+    profile = browsers.length > 1 ? pickProfile(browsers.length) % browsers.length : 0;
+    let reused = false;
+    if (keeping) {
+      const kept = safely(() => keep.read());
+      const at = kept ? browsers.indexOf(kept.browser as UpstreamBrowser) : -1;
+      const age = kept ? now() - kept.since : -1;
+      const sessionOk = !rotating || (kept !== null && Number.isSafeInteger(kept.session) && kept.session > 0);
+      if (kept && at >= 0 && sessionOk && age >= 0 && age < KEEP_MS) {
+        if (rotating) session = kept.session;
+        profile = at;
+        reused = true;
+      } else {
+        safely(() => keep.write({ session, browser: browsers[profile]!, since: now() }));
+      }
+    }
+    proxyUrl = proxyFor(session);
+    onStart?.({ browser: browsers[profile]!, kept: reused });
+    return make(proxyUrl);
+  };
   /** Bumped on every move, so failures on an exit already left behind do not move again. */
   let generation = 0;
   /**
@@ -241,6 +290,7 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
     if (nextProfile) profile = (profile + 1) % browsers.length;
     generation++;
     impit = make(proxyUrl);
+    if (keeping) safely(() => keep.write({ session, browser: browsers[profile]!, since: now() }));
     onRotate?.({ reason, generation, browser: browsers[profile]! });
     return true;
   };
@@ -265,6 +315,7 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
     // when every exit is refused; they come back as the window passes, so a burst never strands the API.
     for (let attempt = 0; ; attempt++) {
       await takeSlot(init.signal);
+      impit ??= start();
       const from = generation;
       const via = proxyUrl;
       let res: Response;
@@ -351,6 +402,35 @@ function secretsOf(template: string | null): (text: string, via: string | null) 
       .sort((a, b) => b.length - a.length);
     return secrets.reduce((out, s) => out.split(s).join('<proxy>'), text);
   };
+}
+
+/**
+ * Keeps the exit and profile in a small JSON file (check.ts: the state directory), written whole through a rename so a
+ * run never reads half of one. A missing or unreadable file means nothing is kept.
+ */
+export function fileKeeper(path: string): NonNullable<UpstreamOptions['keep']> {
+  return {
+    read() {
+      const v = JSON.parse(readFileSync(path, 'utf8')) as Partial<Kept> | null;
+      return typeof v?.session === 'number' && typeof v.browser === 'string' && typeof v.since === 'number'
+        ? { session: v.session, browser: v.browser, since: v.since }
+        : null;
+    },
+    write(kept) {
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 });
+      renameSync(tmp, path);
+    },
+  };
+}
+
+/** A keeper that cannot read or write is no reason to fail a request: the process then simply does not keep. */
+function safely<T>(fn: () => T): T | null {
+  try {
+    return fn();
+  } catch {
+    return null;
+  }
 }
 
 /** Waits `ms`, or less if the signal aborts first (the request then fails on its own aborted signal). */

@@ -2,6 +2,7 @@ import type { Site } from 'penge-passport-ph';
 import { describe, expect, it } from 'vitest';
 import {
   ABROAD_DEADLINE_MS,
+  ABROAD_SWEEP_DEADLINE_MS,
   ABROAD_POSTS_PER_RUN,
   ABROAD_REQUESTS_PER_RUN,
   ACTIVE_EVERY_MINUTES,
@@ -397,10 +398,13 @@ describe('posts abroad', () => {
     const w = await world();
     w.abroad.posts.set(62, Array.from({ length: 2 * ABROAD_POSTS_PER_RUN + 6 }, (_, i) => post(500 + i, `PE Post ${i}`)));
     await w.run();
-    // Longer than a scheduled run allows the posts, in all.
+    // Longer than a scheduled run allows the posts, in all, and within what a sweep has.
+    const all = (await catalogPosts(w.kv)).length;
+    const each = ABROAD_SWEEP_DEADLINE_MS / (all + 4);
+    expect(all * each).toBeGreaterThan(ABROAD_DEADLINE_MS);
     const abroad = w.abroad.availability.bind(w.abroad);
     w.abroad.availability = async (q) => {
-      w.t.advance(ABROAD_DEADLINE_MS / (ABROAD_POSTS_PER_RUN + 6));
+      w.t.advance(each);
       return abroad(q);
     };
     const report = await runCheck({ ...w.deps, abroadSweep: true, runId: 'sweep' });

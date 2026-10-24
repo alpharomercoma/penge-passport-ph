@@ -121,13 +121,13 @@ const HELD_TTL_SECONDS = 7 * 24 * 3600;
 export const OUTBOX_MAX_AGE_MS = 3 * 3600_000;
 /**
  * The least time between two alerts to one person. "hourly" is a full hour:
- * checks start every 5 minutes, so the next email goes at the first check an
+ * checks start every 10 minutes, so the next email goes at the first check an
  * hour or more after the last one. "asap" is one email per check at most (a
  * check emails a person once, whether their dates came from the Philippines or
- * from the posts abroad later in it), with a 2-minute floor. Checks start 5
+ * from the posts abroad later in it), with a 2-minute floor. Checks start 10
  * minutes apart but email at different points in their run (a scan takes 2 to
- * 4 minutes), so two checks' emails can come less than 5 minutes apart: the
- * floor has to be below that, or "asap" would skip every other check.
+ * 4 minutes), so two checks' emails can come less than 10 minutes apart: the
+ * floor has to be well below that, or "asap" would skip checks.
  */
 // (PACE_SPACING_MS lives in pace.ts, which the notification scripts use too.)
 export { PACE_SPACING_MS } from './pace.ts';
@@ -163,8 +163,8 @@ export const RETRY_CAP = 3;
 /**
  * A scan that still has this many offices answering with errors (after the
  * retries), or that the rate limiter paused, makes the next scans wait
- * COOLDOWN_SECONDS: the next two runs are skipped, so a struggling site is
- * asked every 15 minutes, not every 5.
+ * COOLDOWN_SECONDS: the next run is skipped, so a struggling site is asked
+ * every 20 minutes, not every 10.
  */
 export const COOLDOWN_ERRORS = 3;
 export const COOLDOWN_SECONDS = 10 * 60;
@@ -179,10 +179,12 @@ export const MAX_SITES = 150;
 export const MIN_KEPT_FRACTION = 0.8;
 /**
  * How long a run may spend sending the spool, and how far into the run it may
- * still do so, or upload its own records (after that they go to the spool).
+ * still do so, or upload its own records (after that they go to the spool):
+ * until just before the next run is due (runs start 10 minutes apart; this was
+ * 4.75 minutes while they started 5 apart).
  */
 export const SPOOL_FLUSH_MS = 30_000;
-export const SPOOL_UNTIL_MS = 4.75 * 60_000;
+export const SPOOL_UNTIL_MS = 9.75 * 60_000;
 /** Offices not reached within this are recorded as skipped (the systemd timeout is 15 min). */
 export const SCAN_BUDGET_MS = 10 * 60_000;
 const MAX_MAIL_ATTEMPTS = 3;
@@ -739,7 +741,7 @@ async function abroadPass(
       await skipRecord(kv, 'scans-abroad', begun).catch((err: unknown) => log.warn('posts abroad: could not clear the run\'s mark', { runId, err: err as Error }));
       return;
     }
-    // A run checks a dozen posts: the others are unchanged, not gone, unless the
+    // A run checks two dozen posts: the others are unchanged, not gone, unless the
     // list of posts, once read in full, no longer has them (record.ts).
     try {
       // The list of posts says which are gone only once read in full, and not while it is
