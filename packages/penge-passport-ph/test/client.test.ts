@@ -188,6 +188,124 @@ describe('PengePassportPH', () => {
     expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(2);
   });
 
+  it('opens one new session when the server answers 500, and is answered', async () => {
+    let n = 0;
+    const site = fakeSite({
+      '/appointment/timeslot/available': () =>
+        ++n === 1 ? new Response('Server Error', { status: 500 }) : json(fixture('availability-site486.json')),
+    });
+    const c = client(site);
+    const a = await settle(c.availability({ siteId: 486 }));
+    expect(a.earliest).not.toBeNull();
+    expect(site.calls.map((x) => x.path)).toEqual([
+      '/appointment',
+      '/appointment/timeslot/available',
+      '/appointment',
+      '/appointment/timeslot/available',
+    ]);
+  });
+
+  it('when a new session gets 500 too, fails and says so, without a third session', async () => {
+    const site = fakeSite({ '/appointment/timeslot/available': () => new Response('Server Error', { status: 500 }) });
+    const c = client(site);
+    const err = (await settle(c.availability({ siteId: 486 })).catch((e: unknown) => e)) as UpstreamError;
+    expect(err).toBeInstanceOf(UpstreamError);
+    expect(err.status).toBe(500);
+    expect(err.message).toBe(
+      'POST /appointment/timeslot/available returned HTTP 500 (with a new session too); the site also answers 500 for an unknown siteId (486), see sites()',
+    );
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(2);
+  });
+
+  it('a site that answers 500 to everything costs one extra session, not one per request', async () => {
+    const site = fakeSite({ '/appointment/timeslot/available': () => new Response('Server Error', { status: 500 }) });
+    const c = client(site);
+    for (const siteId of [486, 487, 488]) {
+      await settle(c.availability({ siteId }), 60_000).catch(() => {});
+    }
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(2);
+    expect(site.calls.filter((x) => x.path === '/appointment/timeslot/available')).toHaveLength(4);
+  });
+
+  it('a session renewed after a 500 that is then answered may be renewed again later', async () => {
+    const answers = [500, 200, 500, 200];
+    const site = fakeSite({
+      '/appointment/timeslot/available': () =>
+        answers.shift() === 500 ? new Response('Server Error', { status: 500 }) : json(fixture('availability-site486.json')),
+    });
+    const c = client(site);
+    await settle(c.availability({ siteId: 486 }));
+    await settle(c.availability({ siteId: 487 }));
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(3);
+  });
+
+  it('callers queued on a session that got 500 never send its token: they wait for the new one', async () => {
+    let n = 0;
+    const site = fakeSite({
+      '/appointment/timeslot/available': () =>
+        ++n === 1 ? new Response('Server Error', { status: 500 }) : json(fixture('availability-site486.json')),
+    });
+    const c = client(site);
+    const all = await settle(Promise.all([486, 487, 488, 489].map((siteId) => c.availability({ siteId }))));
+    expect(all).toHaveLength(4);
+    expect(site.calls.map((x) => x.path)).toEqual([
+      '/appointment',
+      '/appointment/timeslot/available',
+      '/appointment',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot/available',
+      '/appointment/timeslot/available',
+    ]);
+    // Every request after the 500 carried the new session's token.
+    const tokens = site.calls.filter((x) => x.path === '/appointment/timeslot/available').map((x) => x.headers.get('__RequestVerificationToken'));
+    expect(tokens).toEqual(['T1', 'T2', 'T2', 'T2', 'T2']);
+  });
+
+  it('the mark of a session opened after a 500 stays with that session, not a later one', async () => {
+    const answers = [500, 200, 200, 500, 200];
+    const site = fakeSite({
+      '/appointment/timeslot/available': () =>
+        answers.shift() === 500 ? new Response('Server Error', { status: 500 }) : json(fixture('availability-site486.json')),
+    });
+    const c = client(site);
+    await settle(Promise.all([c.availability({ siteId: 486 }), c.availability({ siteId: 487 })]));
+    // Idle past the session's life: the next call opens an ordinary session, which may be renewed after a 500.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    const a = await settle(c.availability({ siteId: 488 }));
+    expect(a.earliest).not.toBeNull();
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(4);
+  });
+
+  it('any other answer counts: after a 503, the next 500 may open a new session again', async () => {
+    const answers = [500, 503, 500, 200];
+    const site = fakeSite({
+      '/appointment/timeslot/available': () => {
+        const status = answers.shift()!;
+        return status === 200 ? json(fixture('availability-site486.json')) : new Response('Error', { status });
+      },
+    });
+    const c = client(site);
+    await expect(settle(c.availability({ siteId: 486 }))).rejects.toMatchObject({ status: 503 });
+    const a = await settle(c.availability({ siteId: 487 }));
+    expect(a.earliest).not.toBeNull();
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(3);
+  });
+
+  it('a rejected token and then a 500 each get their own new session', async () => {
+    const answers: (string | 500)[] = ['', 500, 'ok'];
+    const site = fakeSite({
+      '/appointment/timeslot/available': () => {
+        const a = answers.shift();
+        if (a === 500) return new Response('Server Error', { status: 500 });
+        return a === '' ? new Response('') : json(fixture('availability-site486.json'));
+      },
+    });
+    const c = client(site);
+    expect((await settle(c.availability({ siteId: 486 }))).earliest).not.toBeNull();
+    expect(site.calls.filter((x) => x.path === '/appointment')).toHaveLength(3);
+  });
+
   it('fails loudly when the bootstrap page has no token', async () => {
     const site = fakeSite({ '/appointment': () => html('<h1>Under maintenance</h1>') });
     await expect(settle(client(site).availability({ siteId: 486 }))).rejects.toThrow(

@@ -14,6 +14,10 @@ All notable changes to PengePassportPH (`penge-passport-ph`) are recorded here. 
   by Cloudflare's bot check (HTTP 403)" instead of "… returned HTTP 403", so a refused client can be told
   from the site being down. It still counts as a failure and backs off the same way. The READMEs say what
   gets through: a browser-like `fetch` (or Python `transport`) from an address Cloudflare lets in.
+- A request the site answers with HTTP 500 is asked once more on a new session: since October 2026 the site
+  sometimes answers 500 to everything one session asks. A session opened because of a 500 is not renewed
+  again until it has been answered, so a site that is really down still fails as before, and then says
+  "(with a new session too)". Both editions.
 
 ## [0.2.0] - 2026-09-30
 

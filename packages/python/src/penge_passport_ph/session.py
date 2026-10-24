@@ -73,6 +73,9 @@ class Session:
     last_used_at: float
     #: When the token last proved good: when it was issued, or last got a non-empty answer.
     confirmed_at: float
+    #: Opened because the one before it got HTTP 500, and not answered since: a 500 now is
+    #: the site's, not the session's.
+    after_server_error: bool = False
 
     def is_fresh(self, now: float) -> bool:
         return (

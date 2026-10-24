@@ -110,6 +110,8 @@ type Form = Record<string, string | number>;
 
 /** Marker for the empty 200 the site sends for a rejected anti-forgery token. */
 const EMPTY = Symbol('empty body');
+/** A request whose session was replaced while it waited its turn: it never went out, and goes again. */
+const SUPERSEDED = Symbol('superseded session');
 
 /**
  * PengePassportPH: read-only client for passport.gov.ph appointment availability. Every
@@ -358,14 +360,48 @@ export class PengePassportPH {
     { emptyMeansStaleSession }: { emptyMeansStaleSession: boolean },
     parse: (text: string) => T,
   ): Promise<T> {
+    let superseded = 0;
+    // Each recovery has its own budget: one new session for a rejected token (attempt), one for a 500.
+    let renewedAfterServerError = false;
     for (let attempt = 0; ; attempt++) {
       const reused = isFresh(this.session);
       const session = await this.ensureSession(signal);
-      const result = await this.send('POST', path, { form, token: session.token, signal }, (text) =>
-        text.trim() === '' ? EMPTY : parse(text),
-      );
+      let result: T | typeof EMPTY | typeof SUPERSEDED;
+      try {
+        result = await this.send('POST', path, { form, token: session.token, session, signal }, (text) =>
+          text.trim() === '' ? EMPTY : parse(text),
+        );
+      } catch (err) {
+        if (!(err instanceof UpstreamError) || err.status !== 500) {
+          // Any other answer from the site counts as the session being answered.
+          if (err instanceof UpstreamError && err.status > 0) session.afterServerError = false;
+          throw err;
+        }
+        // The server sometimes answers 500 to everything one session asks while a new session is answered (seen
+        // since October 2026). One new session, then: one opened because of a 500 is not renewed for another
+        // until it has been answered, so a site that is really down still fails, and the breaker still trips.
+        // Only the caller whose session is still current opens it; one whose session was replaced meanwhile
+        // asks again on the new one.
+        if (!renewedAfterServerError && !session.afterServerError) {
+          renewedAfterServerError = true;
+          if (this.session === session) this.renewAfterServerError();
+          attempt--;
+          continue;
+        }
+        if (session.afterServerError) {
+          throw new UpstreamError(`${err.message} (with a new session too)`, err.status, err.url);
+        }
+        throw err;
+      }
+      if (result === SUPERSEDED) {
+        // It never went out. Bounded, in case sessions keep changing under it.
+        if (++superseded > 3) throw new SessionError(`${path}: the session kept changing before the request could go out`);
+        attempt--;
+        continue;
+      }
       const now = Date.now();
       session.lastUsedAt = now;
+      session.afterServerError = false;
       if (result !== EMPTY) {
         session.confirmedAt = now;
         return result;
@@ -398,7 +434,17 @@ export class PengePassportPH {
     return raceAbort(this.pendingSession, signal);
   }
 
-  private async bootstrap(): Promise<Session> {
+  /** Drops the current session and opens one marked as opened because of a 500 (postWithToken). */
+  private renewAfterServerError() {
+    this.invalidateSession();
+    this.pendingSession ??= this.bootstrap(true).finally(() => {
+      this.pendingSession = null;
+    });
+    // Its callers await it through ensureSession; nobody may be left to, and a failure must not go unhandled.
+    this.pendingSession.catch(() => {});
+  }
+
+  private async bootstrap(afterServerError = false): Promise<Session> {
     this.jar.clear();
     const page = await this.send(
       'GET',
@@ -415,7 +461,7 @@ export class PengePassportPH {
       },
     );
     const now = Date.now();
-    this.session = { ...page, createdAt: now, lastUsedAt: now, confirmedAt: now };
+    this.session = { ...page, createdAt: now, lastUsedAt: now, confirmedAt: now, afterServerError };
     return this.session;
   }
 
@@ -432,12 +478,15 @@ export class PengePassportPH {
   private send<T>(
     method: 'GET' | 'POST',
     path: string,
-    opts: { form?: Form; token?: string; signal?: AbortSignal | undefined; accept?: string },
+    opts: { form?: Form; token?: string; session?: Session; signal?: AbortSignal | undefined; accept?: string },
     parse: (text: string) => T,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const gateOpts = { ...this.limits, maxWaitMs: this.maxWaitMs, signal: opts.signal };
     return this.gate.run(gateOpts, async (report) => {
+      // Its session was replaced while it waited: sending the old token would only fail again (and, after a 500,
+      // add to the backoff that delays the new session). Nothing goes out and nothing is reported.
+      if (opts.session && opts.session !== this.session) return SUPERSEDED as T;
       const headers = new Headers({
         'User-Agent': this.userAgent,
         Accept: opts.accept ?? 'application/json, text/html;q=0.9, */*;q=0.1',

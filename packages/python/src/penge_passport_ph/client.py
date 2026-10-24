@@ -12,7 +12,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, timezone
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import urlsplit
 
 from . import _clock
@@ -167,6 +167,14 @@ class _Empty:
 
 
 _EMPTY = _Empty()
+
+
+class _Superseded:
+    """Marker for a request whose session was replaced while it waited its turn: it never went
+    out, and goes again."""
+
+
+_SUPERSEDED = _Superseded()
 
 
 def user_agent(contact: str | None = None) -> str:
@@ -462,18 +470,54 @@ class PengePassportPH:
         parse: Callable[[str], T],
     ) -> T:
         attempt = 0
+        superseded = 0
+        # Each recovery has its own budget: one new session for a rejected token (attempt), one
+        # for a 500.
+        renewed_after_server_error = False
         while True:
             reused = self._session is not None and self._session.is_fresh(_clock.now())
             session = self._ensure_session()
-            result = self._send(
-                "POST",
-                path,
-                lambda text: _EMPTY if text.strip() == "" else parse(text),
-                form=form,
-                token=session.token,
-            )
+            try:
+                result = self._send(
+                    "POST",
+                    path,
+                    lambda text: _EMPTY if text.strip() == "" else parse(text),
+                    form=form,
+                    token=session.token,
+                    session=session,
+                )
+            except UpstreamError as err:
+                if err.status != 500:
+                    # Any other answer from the site counts as the session being answered.
+                    if err.status > 0:
+                        session.after_server_error = False
+                    raise
+                # The server sometimes answers 500 to everything one session asks while a new
+                # session is answered (seen since October 2026). One new session, then: one opened
+                # because of a 500 is not renewed for another until it has been answered, so a site
+                # that is really down still fails, and the breaker still trips. Only the caller
+                # whose session is still current opens it; one whose session was replaced meanwhile
+                # asks again on the new one.
+                if not renewed_after_server_error and not session.after_server_error:
+                    renewed_after_server_error = True
+                    self._renew_after_server_error(session)
+                    continue
+                if session.after_server_error:
+                    raise UpstreamError(
+                        f"{err} (with a new session too)", err.status, err.url
+                    ) from err
+                raise
+            if isinstance(result, _Superseded):
+                # It never went out. Bounded, in case sessions keep changing under it.
+                superseded += 1
+                if superseded > 3:
+                    raise SessionError(
+                        f"{path}: the session kept changing before the request could go out"
+                    )
+                continue
             now = _clock.now()
             session.last_used_at = now
+            session.after_server_error = False
             if not isinstance(result, _Empty):
                 session.confirmed_at = now
                 return result
@@ -508,7 +552,16 @@ class PengePassportPH:
                 return self._session
             return self._bootstrap()
 
-    def _bootstrap(self) -> Session:
+    def _renew_after_server_error(self, failed: Session) -> None:
+        """Replaces ``failed`` with a session marked as opened because of a 500, unless another
+        caller has already replaced it."""
+        with self._session_lock:
+            if self._session is failed:
+                self._session = None
+                self._jar.clear()
+                self._bootstrap(after_server_error=True)
+
+    def _bootstrap(self, *, after_server_error: bool = False) -> Session:
         """A new session. Called with the session lock held."""
         self._jar.clear()
         path = ENDPOINTS["bootstrap"]
@@ -521,7 +574,15 @@ class PengePassportPH:
 
         page = self._send("GET", path, parse, accept="text/html")
         now = _clock.now()
-        self._session = Session(page.token, page.server_today, page.max_date, now, now, now)
+        self._session = Session(
+            page.token,
+            page.server_today,
+            page.max_date,
+            now,
+            now,
+            now,
+            after_server_error=after_server_error,
+        )
         return self._session
 
     def _invalidate_session(self) -> None:
@@ -537,6 +598,7 @@ class PengePassportPH:
         *,
         form: dict[str, str | int] | None = None,
         token: str | None = None,
+        session: Session | None = None,
         accept: str | None = None,
     ) -> T:
         """One request through the rate limiter. ``parse`` runs inside the gated
@@ -546,6 +608,11 @@ class PengePassportPH:
         opts = GateOptions(self._min_interval, self._max_per_hour, self._max_wait)
 
         def task(report: Report) -> T:
+            # Its session was replaced while it waited: sending the old token would only fail again
+            # (and, after a 500, add to the backoff that delays the new session). Nothing goes out
+            # and nothing is reported.
+            if session is not None and session is not self._session:
+                return cast(T, _SUPERSEDED)
             headers = {
                 "User-Agent": self._user_agent,
                 "Accept": accept or "application/json, text/html;q=0.9, */*;q=0.1",

@@ -12,8 +12,9 @@ from typing import Any
 import pytest
 
 from penge_passport_ph import VERSION, AvailabilityEvent, ErrorEvent, PengePassportPH
-from penge_passport_ph.client import HttpRequest, HttpResponse
+from penge_passport_ph.client import _SUPERSEDED, HttpRequest, HttpResponse
 from penge_passport_ph.errors import RateLimitError, SessionError, UpstreamError
+from penge_passport_ph.session import Session
 
 from .conftest import Call, FakeClock, FakeSite, fixture_text, html_response, json_response
 
@@ -117,6 +118,134 @@ def test_session_error_when_a_new_session_is_rejected_too(
         client.availability(486)
     assert site.paths().count("/appointment") == 2
     assert client.stats()["consecutive_failures"] == 1
+
+
+def test_opens_one_new_session_when_the_server_answers_500(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    answers = [500]
+
+    def available(call: Call) -> HttpResponse:
+        if answers and answers.pop() == 500:
+            return html_response("Server Error", 500)
+        return json_response(fixture_text("availability-site486.json"))
+
+    site = FakeSite(overrides={"/appointment/timeslot/available": available})
+    result = make_client(site).availability(486)
+    assert result.earliest == "2026-10-08"
+    assert site.paths() == [
+        "/appointment",
+        "/appointment/timeslot/available",
+        "/appointment",
+        "/appointment/timeslot/available",
+    ]
+
+
+def test_when_a_new_session_gets_500_too_it_fails_and_says_so(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    site = FakeSite(
+        overrides={"/appointment/timeslot/available": lambda c: html_response("Server Error", 500)}
+    )
+    with pytest.raises(UpstreamError) as raised:
+        make_client(site).availability(486)
+    assert raised.value.status == 500
+    assert "(with a new session too)" in str(raised.value)
+    assert "unknown site_id (486)" in str(raised.value)
+    assert site.paths().count("/appointment") == 2
+
+
+def test_a_site_answering_500_to_everything_costs_one_extra_session(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    site = FakeSite(
+        overrides={"/appointment/timeslot/available": lambda c: html_response("Server Error", 500)}
+    )
+    client = make_client(site)
+    for site_id in (486, 487, 488):
+        with pytest.raises(UpstreamError):
+            client.availability(site_id)
+    assert site.paths().count("/appointment") == 2
+    assert site.paths().count("/appointment/timeslot/available") == 4
+
+
+def test_a_renewed_session_that_is_answered_may_be_renewed_again(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    answers = [200, 500, 200, 500]
+
+    def available(call: Call) -> HttpResponse:
+        if answers.pop() == 500:
+            return html_response("Server Error", 500)
+        return json_response(fixture_text("availability-site486.json"))
+
+    site = FakeSite(overrides={"/appointment/timeslot/available": available})
+    client = make_client(site)
+    client.availability(486)
+    client.availability(487)
+    assert site.paths().count("/appointment") == 3
+
+
+def test_callers_queued_on_a_session_that_got_500_wait_for_the_new_one(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    answers = [500]
+
+    def available(call: Call) -> HttpResponse:
+        if answers and answers.pop() == 500:
+            return html_response("Server Error", 500)
+        return json_response(fixture_text("availability-site486.json"))
+
+    site = FakeSite(overrides={"/appointment/timeslot/available": available})
+    client = make_client(site)
+    client.availability(486)  # T1, answered after a 500 and a new session (T2)
+    session = client._session
+    assert session is not None
+    # A request that queued on the replaced session never sends its token.
+    stale = Session(session.token + "-old", None, None, session.created_at, session.last_used_at, 0)
+    result: object = client._send(
+        "POST", "/appointment/timeslot/available", lambda t: t, form={}, session=stale
+    )
+    assert result is _SUPERSEDED
+    assert site.paths().count("/appointment/timeslot/available") == 2
+
+
+def test_any_other_answer_counts_after_a_503_the_next_500_may_renew_again(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    answers = [200, 500, 503, 500]
+
+    def available(call: Call) -> HttpResponse:
+        status = answers.pop()
+        if status == 200:
+            return json_response(fixture_text("availability-site486.json"))
+        return html_response("Error", status)
+
+    site = FakeSite(overrides={"/appointment/timeslot/available": available})
+    client = make_client(site)
+    with pytest.raises(UpstreamError) as raised:
+        client.availability(486)
+    assert raised.value.status == 503
+    assert client.availability(487).earliest == "2026-10-08"
+    assert site.paths().count("/appointment") == 3
+
+
+def test_a_rejected_token_and_then_a_500_each_get_their_own_new_session(
+    make_client: MakeClient, clock: FakeClock
+) -> None:
+    answers: list[str | int] = ["ok", 500, ""]
+
+    def available(call: Call) -> HttpResponse:
+        answer = answers.pop()
+        if answer == 500:
+            return html_response("Server Error", 500)
+        if answer == "":
+            return html_response("")
+        return json_response(fixture_text("availability-site486.json"))
+
+    site = FakeSite(overrides={"/appointment/timeslot/available": available})
+    assert make_client(site).availability(486).earliest == "2026-10-08"
+    assert site.paths().count("/appointment") == 3
 
 
 def test_fails_loudly_when_the_bootstrap_page_has_no_token(

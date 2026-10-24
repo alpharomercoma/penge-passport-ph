@@ -214,7 +214,9 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   the plan's data is spent (Webshare: `X-Webshare-Reason: bandwidthlimit`; 23 October, shared with another
   scraper): top it up, nothing to change here; `failed: …` otherwise, the proxy or the site unreachable. To ask
   the proxy itself: `curl -i --proxy "$UPSTREAM_PROXY_URL" http://ipv4.webshare.io/` (with `{session}` replaced
-  by a number) shows its own status and the exit's address.
+  by a number) shows its own status and the exit's address. `returned HTTP 500` is DFA's own server: the client
+  asks once more on a new session first (since 24 October), so `HTTP 500 (with a new session too)` means a fresh
+  session failed as well.
 - **When every exit is challenged**, try other profiles: which ones pass changes. On 24 October `firefox144`
   (passing since the 21st) was challenged on every exit production tried from ~02:00Z (4 per run, and the API's);
   on one exit, `firefox144` and `firefox135` were challenged while `firefox133`, `firefox128`, `chrome142` and

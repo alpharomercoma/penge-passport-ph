@@ -63,6 +63,8 @@ export interface Session {
   lastUsedAt: number;
   /** When the token last proved good: when it was issued, or last got a non-empty answer. */
   confirmedAt: number;
+  /** Opened because the one before it got HTTP 500, and not answered since: a 500 now is the site's, not the session's. */
+  afterServerError?: boolean;
 }
 
 /** The site logs idle visitors out after 10 minutes; refresh a little before that. */
