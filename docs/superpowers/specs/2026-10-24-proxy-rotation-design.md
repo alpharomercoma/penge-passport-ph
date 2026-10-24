@@ -119,3 +119,19 @@ In `createUpstreamFetch`'s wrapper, shared by the scan, abroad and lookup client
   client then completes a session and an availability request, proving body and headers are resent intact.
 - Config: `{session}` only once and only in the user name; rotations bounded and needing `{session}`; messages
   never echo the value.
+
+## Addendum, 24 Oct 04:40Z: several profiles
+
+Rotation went live at 02:50Z and did what it was built for, but the failures that morning were the profile, not
+the exits: `firefox144` was challenged on every exit, and on one exit four other profiles passed. Production moved
+to `firefox133` at 03:02Z; by 04:32Z it was challenged on every exit tried, while on one exit `firefox144` (passing
+again), `firefox128` and four Chrome profiles passed. So:
+
+- `UPSTREAM_BROWSER` takes a comma-separated list. Each process starts on one at random (`pickProfile`).
+- A Cloudflare challenge moves to the next profile as well as a new exit; a refused tunnel, a timeout or a dropped
+  answer changes the exit only. With a fixed proxy and several profiles, a challenge still moves (and resends);
+  other failures have nowhere to go. One profile behaves as before.
+- `UPSTREAM_PROXY_ROTATIONS` bounds moves of either kind (per request, and per process per 5 minutes); it is
+  accepted with several profiles even without `{session}`.
+- Each move logs the profile now in use.
+

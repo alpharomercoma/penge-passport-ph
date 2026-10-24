@@ -9,13 +9,13 @@ const ROTATING = 'http://acct42-{session}:s3cr%3At@proxy.example:8080';
 
 describe('upstream settings', () => {
   it("unset, the server asks with Node's own fetch, as before", () => {
-    expect(loadConfig(validEnv).upstream).toEqual({ browser: null, proxyUrl: null, rotations: 0 });
+    expect(loadConfig(validEnv).upstream).toEqual({ browsers: [], proxyUrl: null, rotations: 0 });
   });
 
   it('reads a browser profile, and a proxy only with one', () => {
-    expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: 'firefox144' }).upstream).toEqual({ browser: 'firefox144', proxyUrl: null, rotations: 0 });
+    expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: 'firefox144' }).upstream).toEqual({ browsers: ['firefox144'], proxyUrl: null, rotations: 0 });
     expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: ' firefox144 ', UPSTREAM_PROXY_URL: ` ${PROXY} ` }).upstream).toEqual({
-      browser: 'firefox144',
+      browsers: ['firefox144'],
       proxyUrl: PROXY,
       rotations: 0,
     });
@@ -27,7 +27,7 @@ describe('upstream settings', () => {
   });
 
   it.each([
-    [{ UPSTREAM_BROWSER: 'netscape4' }, /UPSTREAM_BROWSER must be one of/],
+    [{ UPSTREAM_BROWSER: 'netscape4' }, /UPSTREAM_BROWSER must be one or more/],
     [{ UPSTREAM_BROWSER: '' }, /UPSTREAM_BROWSER is set but empty/],
     [{ UPSTREAM_BROWSER: 'firefox144', UPSTREAM_PROXY_URL: ' ' }, /UPSTREAM_PROXY_URL is set but empty/],
   ])('refuses %j', (patch, error) => {
@@ -61,13 +61,13 @@ describe('upstream settings', () => {
 
 describe('describeUpstream', () => {
   it('names the profile and the proxy host, never its credentials', () => {
-    expect(describeUpstream({ browser: null, proxyUrl: null, rotations: 0 })).toBe("Node's fetch, direct");
-    expect(describeUpstream({ browser: 'firefox144', proxyUrl: null, rotations: 0 })).toBe('impit firefox144, direct');
-    expect(describeUpstream({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 })).toBe('impit firefox144 through proxy.example:8080');
-    expect(describeUpstream({ browser: 'firefox144', proxyUrl: ROTATING, rotations: 3 })).toBe(
+    expect(describeUpstream({ browsers: [], proxyUrl: null, rotations: 0 })).toBe("Node's fetch, direct");
+    expect(describeUpstream({ browsers: ['firefox144'], proxyUrl: null, rotations: 0 })).toBe('impit firefox144, direct');
+    expect(describeUpstream({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 })).toBe('impit firefox144 through proxy.example:8080');
+    expect(describeUpstream({ browsers: ['firefox144'], proxyUrl: ROTATING, rotations: 3 })).toBe(
       'impit firefox144 through proxy.example:8080, a new exit each start (up to 3 more per request when refused)',
     );
-    expect(describeUpstream({ browser: 'firefox144', proxyUrl: ROTATING, rotations: 0 })).toBe('impit firefox144 through proxy.example:8080, a new exit each start');
+    expect(describeUpstream({ browsers: ['firefox144'], proxyUrl: ROTATING, rotations: 0 })).toBe('impit firefox144 through proxy.example:8080, a new exit each start');
   });
 });
 
@@ -90,13 +90,13 @@ function fakeImpit(answer: (url: string, init: Record<string, unknown>) => Promi
 describe('createUpstreamFetch', () => {
   it("returns nothing when no profile is set, so the client keeps Node's fetch, and never loads impit", async () => {
     const load = vi.fn();
-    expect(await createUpstreamFetch({ browser: null, proxyUrl: null, rotations: 0 }, { load })).toBeUndefined();
+    expect(await createUpstreamFetch({ browsers: [], proxyUrl: null, rotations: 0 }, { load })).toBeUndefined();
     expect(load).not.toHaveBeenCalled();
   });
 
   it('makes one impit client that never follows redirects, and passes each request through as the client made it', async () => {
     const impit = fakeImpit(async () => new Response('ok', { headers: { 'set-cookie': 'a=1' } }));
-    const fetch = (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 }, { load: impit.load }))!;
+    const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: impit.load }))!;
     expect(impit.made).toEqual([{ browser: 'firefox144', proxyUrl: PROXY, followRedirects: false, timeout: 60_000 }]);
     const signal = new AbortController().signal;
     const headers = new Headers({ 'User-Agent': 'penge-passport-ph/x', Cookie: 'c=1' });
@@ -115,7 +115,7 @@ describe('createUpstreamFetch', () => {
     const impit = fakeImpit(async () => {
       throw leaky;
     });
-    const fetch = (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 }, { load: impit.load }))!;
+    const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: impit.load }))!;
     const err = (await fetch('https://www.passport.gov.ph/appointment', {}).catch((e: unknown) => e)) as Error & { cause?: unknown };
     expect(err.name).toBe('ConnectError');
     expect(err.cause).toBeUndefined();
@@ -128,7 +128,7 @@ describe('createUpstreamFetch', () => {
       const impit = fakeImpit(async () => {
         throw new DOMException('The operation was aborted', name);
       });
-      const fetch = (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: null, rotations: 0 }, { load: impit.load }))!;
+      const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: null, rotations: 0 }, { load: impit.load }))!;
       await expect(fetch('https://www.passport.gov.ph/appointment', {})).rejects.toMatchObject({ name });
     }
   });
@@ -137,7 +137,7 @@ describe('createUpstreamFetch', () => {
     const load = async () => {
       throw new Error("impit couldn't load native bindings");
     };
-    await expect(createUpstreamFetch({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 }, { load })).rejects.toThrow(/impit could not be loaded: impit couldn't load native bindings/);
+    await expect(createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load })).rejects.toThrow(/impit could not be loaded: impit couldn't load native bindings/);
   });
 });
 
@@ -145,7 +145,7 @@ describe('rotating settings', () => {
   const rotating = { ...validEnv, UPSTREAM_BROWSER: 'firefox144', UPSTREAM_PROXY_URL: ROTATING };
 
   it('takes {session} in the user name, with 3 moves per request unless told otherwise', () => {
-    expect(loadConfig(rotating).upstream).toEqual({ browser: 'firefox144', proxyUrl: ROTATING, rotations: 3 });
+    expect(loadConfig(rotating).upstream).toEqual({ browsers: ['firefox144'], proxyUrl: ROTATING, rotations: 3 });
     expect(loadConfig({ ...rotating, UPSTREAM_PROXY_ROTATIONS: '0' }).upstream.rotations).toBe(0);
     expect(loadConfig({ ...rotating, UPSTREAM_PROXY_ROTATIONS: '10' }).upstream.rotations).toBe(10);
   });
@@ -203,7 +203,7 @@ async function rotatingFetch(
   extra: { onRotate?: (i: unknown) => void; spacingMs?: number; now?: () => number } = {},
 ) {
   return (await createUpstreamFetch(
-    { browser: 'firefox144', proxyUrl: ROTATING, rotations },
+    { browsers: ['firefox144'], proxyUrl: ROTATING, rotations },
     { load: t.load, pickSession: t.pickSession, spacingMs: 0, ...extra },
   ))!;
 }
@@ -228,7 +228,7 @@ describe('a new exit each start, and another when one is refused', () => {
     expect(t.calls.map((c) => exitOf(c.proxyUrl))).toEqual([7, 8]);
     expect(t.calls[1]!.init).toEqual(t.calls[0]!.init);
     expect(t.calls[1]!.init.body).toBe(body);
-    expect(rotated).toEqual([{ reason: "POST /appointment/timeslot/available: Cloudflare's bot check", generation: 1 }]);
+    expect(rotated).toEqual([{ reason: "POST /appointment/timeslot/available: Cloudflare's bot check", generation: 1, browser: 'firefox144' }]);
   });
 
   it('gives up after its n new exits and hands back the challenge; the process gets its moves back five minutes on', async () => {
@@ -415,7 +415,7 @@ describe('a new exit each start, and another when one is refused', () => {
 
   it('a fixed proxy is not held: its spacing is the limiter\'s alone', async () => {
     const t = exits(async () => new Response('ok'));
-    const fetch = (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 }, { load: t.load, spacingMs: 1000 }))!;
+    const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: t.load, spacingMs: 1000 }))!;
     const started = Date.now();
     await Promise.all([fetch(URL_, {}), fetch(URL_, {}), fetch(URL_, {})]);
     expect(Date.now() - started).toBeLessThan(200);
@@ -448,10 +448,118 @@ describe('a new exit each start, and another when one is refused', () => {
 
   it('a fixed proxy is used as before: one Impit, no resends, no moves', async () => {
     const t = exits(async () => challenge());
-    const fetch = (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: PROXY, rotations: 0 }, { load: t.load, pickSession: t.pickSession }))!;
+    const fetch = (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: PROXY, rotations: 0 }, { load: t.load, pickSession: t.pickSession }))!;
     expect((await fetch(URL_, {})).status).toBe(403);
     await fetch(URL_, {}).catch(() => {});
     expect(t.made).toEqual([PROXY]);
     expect(t.calls).toHaveLength(2);
+  });
+});
+
+describe('several profiles', () => {
+  it('takes a comma-separated list, and moves need only several profiles or {session}', () => {
+    const several = { ...validEnv, UPSTREAM_BROWSER: 'firefox128, chrome151', UPSTREAM_PROXY_URL: PROXY };
+    expect(loadConfig(several).upstream).toEqual({ browsers: ['firefox128', 'chrome151'], proxyUrl: PROXY, rotations: 3 });
+    expect(loadConfig({ ...several, UPSTREAM_PROXY_ROTATIONS: '1' }).upstream.rotations).toBe(1);
+    expect(loadConfig({ ...several, UPSTREAM_PROXY_URL: ROTATING }).upstream.browsers).toEqual(['firefox128', 'chrome151']);
+  });
+
+  it.each([
+    [{ UPSTREAM_BROWSER: 'firefox128,firefox128' }, /names a profile twice/],
+    [{ UPSTREAM_BROWSER: 'firefox128,netscape4' }, /must be one or more/],
+    [{ UPSTREAM_BROWSER: 'firefox128,' }, /must be one or more/],
+  ])('refuses %j', (patch, error) => {
+    expect(() => loadConfig({ ...validEnv, ...patch })).toThrow(error);
+  });
+
+  it('says so in the start-up line', () => {
+    expect(describeUpstream({ browsers: ['firefox128', 'chrome151'], proxyUrl: ROTATING, rotations: 3 })).toBe(
+      'impit firefox128/chrome151 (one at random each start, the next when challenged) through proxy.example:8080, a new exit each start (up to 3 more per request when refused)',
+    );
+    expect(describeUpstream({ browsers: ['firefox128', 'chrome151'], proxyUrl: PROXY, rotations: 3 })).toBe(
+      'impit firefox128/chrome151 (one at random each start, the next when challenged) through proxy.example:8080 (up to 3 more per request when challenged)',
+    );
+  });
+
+  /** Like exits(), but the stand-in also records each instance's profile. */
+  function profiles(answer: (browser: string, proxyUrl: string) => Promise<Response>) {
+    const made: { browser: string; proxyUrl: string }[] = [];
+    const calls: { browser: string; proxyUrl: string }[] = [];
+    class Impit {
+      readonly browser: string;
+      readonly proxyUrl: string;
+      constructor(options: { browser: string; proxyUrl?: string }) {
+        this.browser = options.browser;
+        this.proxyUrl = options.proxyUrl ?? '';
+        made.push({ browser: this.browser, proxyUrl: this.proxyUrl });
+      }
+      fetch() {
+        calls.push({ browser: this.browser, proxyUrl: this.proxyUrl });
+        return answer(this.browser, this.proxyUrl);
+      }
+    }
+    let n = 6;
+    return { made, calls, load: async () => ({ Impit }) as never, pickSession: () => ++n };
+  }
+
+  it('starts on the profile picked for it, and after a challenge moves to the next profile and a new exit', async () => {
+    const t = profiles(async (browser) => (browser === 'chrome151' ? new Response('ok') : challenge()));
+    const rotated: unknown[] = [];
+    const fetch = (await createUpstreamFetch(
+      { browsers: ['firefox144', 'firefox128', 'chrome151'], proxyUrl: ROTATING, rotations: 3 },
+      { load: t.load, pickSession: t.pickSession, pickProfile: () => 1, spacingMs: 0, onRotate: (i) => rotated.push(i) },
+    ))!;
+    expect((await fetch(URL_, {})).status).toBe(200);
+    expect(t.calls.map((c) => [c.browser, exitOf(c.proxyUrl)])).toEqual([
+      ['firefox128', 7],
+      ['chrome151', 8],
+    ]);
+    expect(rotated).toEqual([{ reason: "GET /appointment/timeslot/available: Cloudflare's bot check", generation: 1, browser: 'chrome151' }]);
+  });
+
+  it('goes round the list', async () => {
+    const t = profiles(async () => challenge());
+    const fetch = (await createUpstreamFetch(
+      { browsers: ['firefox128', 'chrome151'], proxyUrl: ROTATING, rotations: 3 },
+      { load: t.load, pickSession: t.pickSession, pickProfile: () => 1, spacingMs: 0 },
+    ))!;
+    expect((await fetch(URL_, {})).status).toBe(403);
+    expect(t.calls.map((c) => c.browser)).toEqual(['chrome151', 'firefox128', 'chrome151', 'firefox128']);
+  });
+
+  it('a tunnel the exit could not open changes the exit only: the profile was not the trouble', async () => {
+    const t = profiles(async (_browser, proxyUrl) => {
+      if (exitOf(proxyUrl) === 7) throw failure('ProxyTunnelError', 'Proxy rejected the CONNECT tunnel with status code 502.', 502);
+      return new Response('ok');
+    });
+    const fetch = (await createUpstreamFetch(
+      { browsers: ['firefox128', 'chrome151'], proxyUrl: ROTATING, rotations: 3 },
+      { load: t.load, pickSession: t.pickSession, pickProfile: () => 0, spacingMs: 0 },
+    ))!;
+    await fetch(URL_, {});
+    expect(t.calls.map((c) => [c.browser, exitOf(c.proxyUrl)])).toEqual([
+      ['firefox128', 7],
+      ['firefox128', 8],
+    ]);
+  });
+
+  it('with a fixed proxy, a challenge still moves to the next profile; a timeout has nowhere to go', async () => {
+    let timeouts = 1;
+    const t = profiles(async (browser) => {
+      if (browser === 'firefox128') return challenge();
+      if (timeouts-- > 0) throw failure('TimeoutError', 'no answer');
+      return new Response('ok');
+    });
+    const fetch = (await createUpstreamFetch(
+      { browsers: ['firefox128', 'chrome151'], proxyUrl: PROXY, rotations: 3 },
+      { load: t.load, pickProfile: () => 0, spacingMs: 0 },
+    ))!;
+    await expect(fetch(URL_, {})).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect((await fetch(URL_, {})).status).toBe(200);
+    expect(t.made).toEqual([
+      { browser: 'firefox128', proxyUrl: PROXY },
+      { browser: 'chrome151', proxyUrl: PROXY },
+    ]);
+    expect(t.calls.map((c) => c.browser)).toEqual(['firefox128', 'chrome151', 'chrome151']);
   });
 });

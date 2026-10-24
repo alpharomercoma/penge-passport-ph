@@ -118,7 +118,7 @@ afterAll(() => {
 const client = async (proxyUrl: string | null, opts: { timeoutMs?: number } = {}) =>
   new PengePassportPH({
     baseUrl: siteUrl,
-    fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl, rotations: 0 }))!,
+    fetch: (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl, rotations: 0 }))!,
     stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
     minIntervalMs: 2000,
     contact: 'https://example.org/app',
@@ -151,7 +151,7 @@ describe('impit under the real client', () => {
   it("ends a request at the client's deadline", async () => {
     const c = new PengePassportPH({
       baseUrl: siteUrl,
-      fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: null, rotations: 0 }))!,
+      fetch: (await createUpstreamFetch({ browsers: ['firefox144'], proxyUrl: null, rotations: 0 }))!,
       stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
       timeoutMs: 1000,
     });
@@ -238,7 +238,7 @@ describe('impit moving between exits under the real client', () => {
     const c = new PengePassportPH({
       baseUrl: siteUrl,
       fetch: (await createUpstreamFetch(
-        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { browsers: ['firefox144'], proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
         { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
       ))!,
       stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
@@ -248,7 +248,7 @@ describe('impit moving between exits under the real client', () => {
     expect(availability.earliest).toBe('2026-10-08');
     // The session page was challenged on exit 7 and fetched again on exit 8, where everything after went too.
     expect(exitsSeen).toEqual([7, 8, 8]);
-    expect(rotated).toEqual([{ reason: "GET /appointment: Cloudflare's bot check", generation: 1 }]);
+    expect(rotated).toEqual([{ reason: "GET /appointment: Cloudflare's bot check", generation: 1, browser: 'firefox144' }]);
     const post = seen.find((s) => s.path === '/appointment/timeslot/available')!;
     expect(post.headers['__requestverificationtoken']).toBe('T1');
     expect(post.headers.cookie).toContain('__RequestVerificationToken=cookie-T1');
@@ -264,7 +264,7 @@ describe('impit moving between exits under the real client', () => {
     const c = new PengePassportPH({
       baseUrl: siteUrl,
       fetch: (await createUpstreamFetch(
-        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { browsers: ['firefox144'], proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
         { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
       ))!,
       stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
@@ -289,7 +289,7 @@ describe('impit moving between exits under the real client', () => {
     const c = new PengePassportPH({
       baseUrl: siteUrl,
       fetch: (await createUpstreamFetch(
-        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { browsers: ['firefox144'], proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
         { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
       ))!,
       stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
@@ -297,8 +297,25 @@ describe('impit moving between exits under the real client', () => {
     });
     const err = (await c.sites().catch((e: unknown) => e)) as Error;
     expect(err).toMatchObject({ name: 'UpstreamError', status: 0 });
-    expect(rotated).toEqual([{ reason: expect.stringMatching(/^POST \/sites: \w+ \(reading the answer\)$/), generation: 1 }]);
+    expect(rotated).toEqual([{ reason: expect.stringMatching(/^POST \/sites: \w+ \(reading the answer\)$/), generation: 1, browser: 'firefox144' }]);
     expect((await c.sites()).length).toBeGreaterThan(10);
     expect(exitsSeen).toEqual([7, 8]);
+  }, 30_000);
+});
+
+describe('several profiles with the real binary', () => {
+  it("builds every profile in production's list and asks through it", async () => {
+    for (const first of [0, 1, 2, 3]) {
+      const c = new PengePassportPH({
+        baseUrl: siteUrl,
+        fetch: (await createUpstreamFetch(
+          { browsers: ['chrome151', 'firefox144', 'firefox128', 'chrome142'], proxyUrl: null, rotations: 3 },
+          { pickProfile: () => first },
+        ))!,
+        stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
+        minIntervalMs: 2000,
+      });
+      expect((await c.sites()).length).toBeGreaterThan(10);
+    }
   }, 30_000);
 });

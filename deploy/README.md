@@ -180,7 +180,7 @@ address, and Node's own `fetch` from any address. What gets through (measured 21
 proxy. The checker and the API both use it when `server.env` says so (`apps/server/src/upstream.ts`):
 
 ```sh
-UPSTREAM_BROWSER=firefox133                      # impit's profile: one Cloudflare lets through now (they change)
+UPSTREAM_BROWSER=chrome151,firefox144,firefox128,chrome142   # impit's profiles: one, or several (see below)
 UPSTREAM_PROXY_URL=http://<user>:<password>@<proxy-host>:<port>   # needs UPSTREAM_BROWSER
 ```
 
@@ -193,7 +193,7 @@ connection while it lasts, `<account>-rotate` a new one per request. Write `{ses
 
 ```sh
 UPSTREAM_PROXY_URL=http://<account>-{session}:<password>@p.webshare.io:80
-UPSTREAM_PROXY_ROTATIONS=3                       # optional: new exits per request, and per 5 minutes (0-10, default 3)
+UPSTREAM_PROXY_ROTATIONS=3                       # optional: moves per request, and per 5 minutes (0-10, default 3)
 ```
 
 Each checker run then starts on its own random exit, shared by its scan and the posts abroad; the API keeps
@@ -217,13 +217,15 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   by a number) shows its own status and the exit's address. `returned HTTP 500` is DFA's own server: the client
   asks once more on a new session first (since 24 October), so `HTTP 500 (with a new session too)` means a fresh
   session failed as well.
-- **When every exit is challenged**, try other profiles: which ones pass changes. On 24 October `firefox144`
-  (passing since the 21st) was challenged on every exit production tried from ~02:00Z (4 per run, and the API's);
-  on one exit, `firefox144` and `firefox135` were challenged while `firefox133`, `firefox128`, `chrome142` and
-  `chrome151` passed; production switched to `firefox133` and its next run got past Cloudflare, though `firefox133` was
-  challenged once on another exit soon after. On the 21st, Chrome profiles had been the ones challenged. Why is
-  not known. Test from one exit (the command below, holding `SESSION`), one request per profile, then set
-  `UPSTREAM_BROWSER` to one that passes and restart the API.
+- **When every exit is challenged**, it has so far been the profile. On 24 October `firefox144` (passing
+  since the 21st) was challenged on every exit production tried from ~02:00Z; on one exit `firefox133`,
+  `firefox128`, `chrome142` and `chrome151` passed, and production ran `firefox133` from 03:02Z. By 04:32Z
+  `firefox133` was challenged on every exit tried, while on one exit `firefox144`, `firefox128` and four Chrome
+  profiles passed. Why is not known. So `UPSTREAM_BROWSER` takes several profiles, comma-separated: each run
+  (and the API at start) takes one at random, and a request Cloudflare challenges moves to the next profile as
+  well as a new exit (a refused tunnel, a timeout or a dropped answer changes the exit only). Each move logs
+  `"upstream: new exit"` with the profile now in use. To check which profiles pass, test from one exit (the
+  command below, holding `SESSION`), one request per profile, and list those that pass.
 - **Changing either setting**: the checker reads them at every run; the API only at start, so
   `systemctl restart penge-api.service` after any change. To back out, remove all three (`UPSTREAM_BROWSER`,
   `UPSTREAM_PROXY_URL`, `UPSTREAM_PROXY_ROTATIONS`) and restart the API. To go back to one fixed exit, put a number
@@ -238,13 +240,17 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
     node --input-type=module -e "const { Impit } = await import(\"impit\");
       const session = process.env.SESSION || String(1 + Math.floor(Math.random() * 999999));
       const proxyUrl = process.env.UPSTREAM_PROXY_URL.replace(\"{session}\", session);
-      const r = await new Impit({ browser: process.env.UPSTREAM_BROWSER, proxyUrl })
-        .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
-      console.log(r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\")"'
+      for (const browser of process.env.UPSTREAM_BROWSER.split(\",\").map((b) => b.trim())) {
+        const r = await new Impit({ browser, proxyUrl })
+          .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
+        console.log(browser, r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\");
+        await new Promise((ok) => setTimeout(ok, 3000));
+      }"'
   ```
 
-  `200 not challenged` is good; `403 challenge` is refused (with `{session}` and no `SESSION`, by that one random
-  exit). Set variables on the commented line inside the quotes: before them, `server.env` would overwrite them.
+  It asks once per listed profile, 3 s apart, all from one exit. `200 not challenged` is good; `403 challenge` is
+  refused (by that exit; without `SESSION`, a random one). Set variables on the commented line inside the quotes:
+  before them, `server.env` would overwrite them.
   Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
   challenged (21 October), so a test without it says nothing about the service.
 - **Traffic** (measured on the wire, 24 October): a run is ~81 KB for the Philippine offices (the session page is

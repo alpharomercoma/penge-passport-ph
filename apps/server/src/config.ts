@@ -1,7 +1,7 @@
 // Everything the server reads from its environment (/etc/penge/server.env on
 // the VPS), checked once at start-up so a bad value fails loudly, not later.
 import { isPushMode, normalizeEmail, type PushMode } from '@penge/contracts';
-import { rotatesExits, SESSION_PLACEHOLDER, UPSTREAM_BROWSERS, type UpstreamBrowser, type UpstreamConfig } from './upstream.ts';
+import { canMove, rotatesExits, SESSION_PLACEHOLDER, UPSTREAM_BROWSERS, type UpstreamBrowser, type UpstreamConfig } from './upstream.ts';
 
 export type MailMode = 'live' | 'dry-run' | 'off';
 
@@ -167,13 +167,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   for (const name of ['UPSTREAM_BROWSER', 'UPSTREAM_PROXY_URL', 'UPSTREAM_PROXY_ROTATIONS']) {
     if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
   }
-  const browserRaw = env.UPSTREAM_BROWSER?.trim() || null;
-  if (browserRaw !== null && !(UPSTREAM_BROWSERS as readonly string[]).includes(browserRaw)) {
-    throw new ConfigError(`UPSTREAM_BROWSER must be one of ${UPSTREAM_BROWSERS.join(', ')}`);
+  // One profile, or several separated by commas.
+  const browsers = (env.UPSTREAM_BROWSER?.split(',') ?? []).map((b) => b.trim());
+  if (env.UPSTREAM_BROWSER?.trim() && browsers.some((b) => !(UPSTREAM_BROWSERS as readonly string[]).includes(b))) {
+    throw new ConfigError(`UPSTREAM_BROWSER must be one or more (comma-separated) of ${UPSTREAM_BROWSERS.join(', ')}`);
   }
+  if (new Set(browsers).size !== browsers.length) throw new ConfigError('UPSTREAM_BROWSER names a profile twice');
+  const browserList = (env.UPSTREAM_BROWSER?.trim() ? browsers : []) as UpstreamBrowser[];
   const proxyUrl = env.UPSTREAM_PROXY_URL?.trim() || null;
   if (proxyUrl !== null) {
-    if (browserRaw === null) throw new ConfigError('UPSTREAM_PROXY_URL needs UPSTREAM_BROWSER: without it the proxy is challenged too');
+    if (browserList.length === 0) throw new ConfigError('UPSTREAM_PROXY_URL needs UPSTREAM_BROWSER: without it the proxy is challenged too');
     if (rotatesExits(proxyUrl)) {
       // Once, and in the user name: the part before the first : of what comes before the @.
       const user = /^[a-z][a-z0-9+.-]*:\/\/([^@/?#]*)@/i.exec(proxyUrl)?.[1]?.split(':')[0] ?? '';
@@ -191,13 +194,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new ConfigError('UPSTREAM_PROXY_URL must be http://, https:// or socks5://, with a host and nothing after it but an optional /');
     }
   }
-  if (env.UPSTREAM_PROXY_ROTATIONS !== undefined && !rotatesExits(proxyUrl)) {
-    throw new ConfigError(`UPSTREAM_PROXY_ROTATIONS needs ${SESSION_PLACEHOLDER} in UPSTREAM_PROXY_URL's user name: a fixed proxy has no other exit`);
+  const movable = canMove({ browsers: browserList, proxyUrl });
+  if (env.UPSTREAM_PROXY_ROTATIONS !== undefined && !movable) {
+    throw new ConfigError(
+      `UPSTREAM_PROXY_ROTATIONS needs ${SESSION_PLACEHOLDER} in UPSTREAM_PROXY_URL's user name, or several UPSTREAM_BROWSER profiles: otherwise there is nothing to move to`,
+    );
   }
   const upstream: UpstreamConfig = {
-    browser: browserRaw as UpstreamBrowser | null,
+    browsers: browserList,
     proxyUrl,
-    rotations: rotatesExits(proxyUrl) ? int('UPSTREAM_PROXY_ROTATIONS', 3, 0, 10) : 0,
+    rotations: movable ? int('UPSTREAM_PROXY_ROTATIONS', 3, 0, 10) : 0,
   };
 
   return {

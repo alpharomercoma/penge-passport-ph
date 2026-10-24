@@ -11,8 +11,9 @@ import { LIMITS } from 'penge-passport-ph';
 
 /**
  * impit's browser profiles. Which ones Cloudflare lets through changes: on 21 Oct 2026 firefox144 passed and the
- * Chrome ones were challenged; on 24 Oct firefox144 was challenged on every exit tried, and on one exit firefox135
- * was too while firefox133, firefox128, chrome142 and chrome151 passed (deploy/README.md, "Reaching passport.gov.ph").
+ * Chrome ones were challenged; on 24 Oct firefox144 was challenged on every exit tried, then firefox133 after
+ * production had used it for 90 minutes, while others passed on the same exit. Hence several profiles in
+ * UPSTREAM_BROWSER (deploy/README.md, "Reaching passport.gov.ph").
  */
 export const UPSTREAM_BROWSERS = [
   'chrome',
@@ -46,11 +47,17 @@ export type UpstreamBrowser = (typeof UPSTREAM_BROWSERS)[number];
 export const SESSION_PLACEHOLDER = '{session}';
 
 export interface UpstreamConfig {
-  /** UPSTREAM_BROWSER: null keeps Node's fetch. */
-  browser: UpstreamBrowser | null;
+  /**
+   * UPSTREAM_BROWSER, one profile or several (comma-separated): empty keeps Node's fetch. With several, each process
+   * starts on one at random and moves to the next when Cloudflare challenges it.
+   */
+  browsers: readonly UpstreamBrowser[];
   /** UPSTREAM_PROXY_URL, credentials included: never log it. Only with a browser profile. */
   proxyUrl: string | null;
-  /** UPSTREAM_PROXY_ROTATIONS: new exits one request may take, each with a resend, when refused. 0 without `{session}`. */
+  /**
+   * UPSTREAM_PROXY_ROTATIONS: moves (a new exit, and with several profiles the next one) a request may take, each with
+   * a resend, when refused. 0 when there is nothing to move to: one profile and no `{session}`.
+   */
   rotations: number;
 }
 
@@ -71,8 +78,10 @@ export interface UpstreamOptions {
   load?: () => Promise<ImpitModule>;
   /** A session number for a new exit: random, unless a test says otherwise. */
   pickSession?: () => number;
-  /** Told of every move to a new exit; `reason` never holds the proxy's URL. */
-  onRotate?: (info: { reason: string; generation: number }) => void;
+  /** Of several profiles, the one a process starts on: random, unless a test says otherwise. */
+  pickProfile?: (count: number) => number;
+  /** Told of every move; `reason` never holds the proxy's URL. `browser` is the profile from now on. */
+  onRotate?: (info: { reason: string; generation: number; browser: UpstreamBrowser }) => void;
   /** The clients' interval between requests (the library's default): what a resend must leave before the next. */
   spacingMs?: number;
   /** For tests: the clock the window of moves is kept by. */
@@ -81,12 +90,24 @@ export interface UpstreamOptions {
 
 export const rotatesExits = (proxyUrl: string | null) => proxyUrl?.includes(SESSION_PLACEHOLDER) ?? false;
 
-/** For the start-up log line: the profile and the proxy's host, never its credentials. */
+/** Whether a refused request has anywhere to move: a new exit (`{session}`), or another profile. */
+export const canMove = (config: Pick<UpstreamConfig, 'browsers' | 'proxyUrl'>) =>
+  rotatesExits(config.proxyUrl) || config.browsers.length > 1;
+
+/** For the start-up log line: the profiles and the proxy's host, never its credentials. */
 export function describeUpstream(config: UpstreamConfig): string {
-  if (!config.browser) return "Node's fetch, direct";
-  if (!config.proxyUrl) return `impit ${config.browser}, direct`;
-  const via = `impit ${config.browser} through ${new URL(config.proxyUrl.replace(SESSION_PLACEHOLDER, '1')).host}`;
-  if (!rotatesExits(config.proxyUrl)) return via;
+  if (config.browsers.length === 0) return "Node's fetch, direct";
+  const profiles =
+    config.browsers.length > 1
+      ? `${config.browsers.join('/')} (one at random each start, the next when challenged)`
+      : config.browsers[0]!;
+  const via = config.proxyUrl
+    ? `impit ${profiles} through ${new URL(config.proxyUrl.replace(SESSION_PLACEHOLDER, '1')).host}`
+    : `impit ${profiles}, direct`;
+  if (!canMove(config)) return via;
+  if (!rotatesExits(config.proxyUrl)) {
+    return config.rotations > 0 ? `${via} (up to ${config.rotations} more per request when challenged)` : via;
+  }
   return config.rotations > 0
     ? `${via}, a new exit each start (up to ${config.rotations} more per request when refused)`
     : `${via}, a new exit each start`;
@@ -138,10 +159,11 @@ function nameOf(err: unknown): string {
  * penge-activate rolls it back), not quietly at the first request.
  */
 export async function createUpstreamFetch(config: UpstreamConfig, options: UpstreamOptions = {}): Promise<typeof fetch | undefined> {
-  if (!config.browser) return undefined;
+  if (config.browsers.length === 0) return undefined;
   const {
     load = () => import('impit'),
     pickSession = () => randomInt(1, SESSION_MAX),
+    pickProfile = (count: number) => randomInt(0, count),
     onRotate,
     spacingMs = LIMITS.defaultMinIntervalMs,
     now = Date.now,
@@ -152,15 +174,22 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
   } catch (err) {
     throw new Error(`impit could not be loaded: ${(err as Error).message.trim().split('\n')[0]}`);
   }
-  const browser = config.browser;
+  const browsers = config.browsers;
   const template = config.proxyUrl;
   const rotating = rotatesExits(template);
-  const rotations = rotating ? config.rotations : 0;
+  const rotations = canMove(config) ? config.rotations : 0;
 
   let session = rotating ? pickSession() : 0;
+  /** Which of `browsers` this process uses now. */
+  let profile = browsers.length > 1 ? pickProfile(browsers.length) % browsers.length : 0;
   const proxyFor = (n: number) => (rotating ? template!.replace(SESSION_PLACEHOLDER, String(n)) : template);
   const make = (proxyUrl: string | null) =>
-    new mod.Impit({ browser, ...(proxyUrl ? { proxyUrl } : {}), followRedirects: false, timeout: IMPIT_TIMEOUT_MS });
+    new mod.Impit({
+      browser: browsers[profile]!,
+      ...(proxyUrl ? { proxyUrl } : {}),
+      followRedirects: false,
+      timeout: IMPIT_TIMEOUT_MS,
+    });
   let proxyUrl = proxyFor(session);
   let impit = make(proxyUrl);
   /** Bumped on every move, so failures on an exit already left behind do not move again. */
@@ -191,22 +220,28 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
   const moves: number[] = [];
 
   /**
-   * Moves to a new exit, unless the exit `from` is already behind us. False when moving is off (fixed, or 0), or
-   * when this process has used its moves for now.
+   * Moves on, unless the exit and profile `from` are already behind us: to a new exit (with `{session}`), and after
+   * Cloudflare's challenge also to the next profile (with several). False when there is nothing to move to for this
+   * kind of failure, when moving is off (0), or when this process has used its moves for now.
    */
-  const rotate = (from: number, reason: string): boolean => {
+  const rotate = (from: number, reason: string, kind: 'challenge' | 'exit'): boolean => {
     if (rotations === 0) return false;
+    const nextProfile = kind === 'challenge' && browsers.length > 1;
+    if (!rotating && !nextProfile) return false;
     if (from !== generation) return true;
     while (moves.length > 0 && now() - moves[0]! >= ROTATION_WINDOW_MS) moves.shift();
     if (moves.length >= rotations) return false;
     moves.push(now());
-    let next = pickSession();
-    for (let i = 0; next === session && i < 5; i++) next = pickSession();
+    if (rotating) {
+      let next = pickSession();
+      for (let i = 0; next === session && i < 5; i++) next = pickSession();
+      session = next;
+      proxyUrl = proxyFor(session);
+    }
+    if (nextProfile) profile = (profile + 1) % browsers.length;
     generation++;
-    session = next;
-    proxyUrl = proxyFor(session);
     impit = make(proxyUrl);
-    onRotate?.({ reason, generation });
+    onRotate?.({ reason, generation, browser: browsers[profile]! });
     return true;
   };
 
@@ -237,12 +272,12 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
         res = (await impit.fetch(url, request)) as unknown as Response;
       } catch (err) {
         const verdict = judge(err);
-        const moved = verdict !== 'none' && rotate(from, why(err));
+        const moved = verdict !== 'none' && rotate(from, why(err), 'exit');
         if (moved && verdict === 'resend' && attempt < rotations && !init.signal?.aborted) continue;
         throw cleaned(err, (text) => scrub(text, via));
       }
       if (res.headers.get('cf-mitigated') === 'challenge') {
-        if (attempt < rotations && !init.signal?.aborted && rotate(from, `${what}: Cloudflare's bot check`)) {
+        if (attempt < rotations && !init.signal?.aborted && rotate(from, `${what}: Cloudflare's bot check`, 'challenge')) {
           await res.body?.cancel().catch(() => {});
           continue;
         }
@@ -258,7 +293,7 @@ export async function createUpstreamFetch(config: UpstreamConfig, options: Upstr
           } catch (err) {
             // Whatever impit says (often a plain Error: "Error reading response stream: …"), the exit failed to
             // deliver the answer: the next request goes elsewhere. Only the caller's own abort is not the exit's doing.
-            if (nameOf(err) !== 'AbortError') rotate(from, `${why(err)} (reading the answer)`);
+            if (nameOf(err) !== 'AbortError') rotate(from, `${why(err)} (reading the answer)`, 'exit');
             throw cleaned(err, (t) => scrub(t, via));
           }
         },
