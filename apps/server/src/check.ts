@@ -20,7 +20,7 @@ const r2 = requireR2(config);
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
 const mailer = createMailer(config, log);
 // passport.gov.ph through a browser-like client and a proxy when server.env says so (upstream.ts).
-const upstreamFetch = await createUpstreamFetch(config.upstream);
+const upstreamFetch = await createUpstreamFetch(config.upstream, { onRotate: (info) => log.warn('upstream: new exit', info) });
 log.info('upstream', { via: describeUpstream(config.upstream) });
 // Scans have their own budget, apart from what visitors ask for (budget.ts).
 // One is ~45 requests at the package's default pace, 3 s apart.

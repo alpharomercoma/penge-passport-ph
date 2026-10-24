@@ -118,7 +118,7 @@ afterAll(() => {
 const client = async (proxyUrl: string | null, opts: { timeoutMs?: number } = {}) =>
   new PengePassportPH({
     baseUrl: siteUrl,
-    fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl }))!,
+    fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl, rotations: 0 }))!,
     stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
     minIntervalMs: 2000,
     contact: 'https://example.org/app',
@@ -151,7 +151,7 @@ describe('impit under the real client', () => {
   it("ends a request at the client's deadline", async () => {
     const c = new PengePassportPH({
       baseUrl: siteUrl,
-      fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: null }))!,
+      fetch: (await createUpstreamFetch({ browser: 'firefox144', proxyUrl: null, rotations: 0 }))!,
       stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
       timeoutMs: 1000,
     });
@@ -180,5 +180,125 @@ describe('impit under the real client', () => {
     expect(err).toMatchObject({ name: 'UpstreamError', status: 407, message: 'POST /sites returned HTTP 407' });
     expect(err.message).not.toContain('wrong-pass');
     expect(err.message).not.toContain('user-1');
+  }, 30_000);
+});
+
+describe('impit moving between exits under the real client', () => {
+  /** A Webshare-like gateway: the session number in the user name picks the exit, and each exit behaves its own way. */
+  let gateway: Server;
+  let gatewayPort: number;
+  const exitsSeen: number[] = [];
+  const behaviour = new Map<number, 'challenge' | 'drop' | 'cut'>();
+
+  beforeAll(async () => {
+    gateway = createServer((req, res) => {
+      const auth = Buffer.from((req.headers['proxy-authorization'] ?? '').replace(/^Basic /, ''), 'base64').toString();
+      const session = Number(/^acct42-(\d+):s3cr:t$/.exec(auth)?.[1]);
+      if (!session) {
+        res.writeHead(407, { 'proxy-authenticate': 'Basic realm="test"' });
+        return res.end();
+      }
+      exitsSeen.push(session);
+      if (behaviour.get(session) === 'challenge') {
+        res.writeHead(403, { 'cf-mitigated': 'challenge', 'content-type': 'text/html' });
+        return res.end('<html>Just a moment...</html>');
+      }
+      if (behaviour.get(session) === 'drop') return req.socket.destroy();
+      if (behaviour.get(session) === 'cut') {
+        // The headers and a little of the body, then the connection goes.
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': '5000' });
+        res.write('{"Sites":[');
+        setTimeout(() => req.socket.destroy(), 50);
+        return;
+      }
+      const target = new URL(req.url!);
+      const headers = { ...req.headers };
+      delete headers['proxy-authorization'];
+      const up = httpRequest({ host: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers }, (upRes) => {
+        res.writeHead(upRes.statusCode!, upRes.headers);
+        upRes.pipe(res);
+      });
+      req.pipe(up);
+    });
+    gatewayPort = await listen(gateway);
+  });
+
+  afterAll(() => {
+    gateway.closeAllConnections();
+    gateway.close();
+  });
+
+  it('a challenged exit is left for another, and the session, form and token go through intact', async () => {
+    exitsSeen.length = 0;
+    seen.length = 0;
+    behaviour.clear();
+    behaviour.set(7, 'challenge');
+    let n = 6;
+    const rotated: unknown[] = [];
+    const c = new PengePassportPH({
+      baseUrl: siteUrl,
+      fetch: (await createUpstreamFetch(
+        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
+      ))!,
+      stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
+      minIntervalMs: 2000,
+    });
+    const availability = await c.availability({ siteId: 486 });
+    expect(availability.earliest).toBe('2026-10-08');
+    // The session page was challenged on exit 7 and fetched again on exit 8, where everything after went too.
+    expect(exitsSeen).toEqual([7, 8, 8]);
+    expect(rotated).toEqual([{ reason: "GET /appointment: Cloudflare's bot check", generation: 1 }]);
+    const post = seen.find((s) => s.path === '/appointment/timeslot/available')!;
+    expect(post.headers['__requestverificationtoken']).toBe('T1');
+    expect(post.headers.cookie).toContain('__RequestVerificationToken=cookie-T1');
+    expect(Object.fromEntries(new URLSearchParams(post.body))).toMatchObject({ siteId: '486', requestedSlots: '1' });
+  }, 30_000);
+
+  it('an exit that drops the connection fails that request, and the next one leaves it', async () => {
+    exitsSeen.length = 0;
+    behaviour.clear();
+    behaviour.set(7, 'drop');
+    let n = 6;
+    const rotated: { reason: string }[] = [];
+    const c = new PengePassportPH({
+      baseUrl: siteUrl,
+      fetch: (await createUpstreamFetch(
+        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
+      ))!,
+      stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
+      minIntervalMs: 2000,
+    });
+    const err = (await c.sites().catch((e: unknown) => e)) as Error;
+    expect(err).toMatchObject({ name: 'UpstreamError', status: 0 });
+    expect(err.message).not.toContain('s3cr');
+    expect(err.message).not.toContain('acct42');
+    expect(rotated).toHaveLength(1);
+    expect((await c.sites()).length).toBeGreaterThan(10);
+    // POST /sites needs no session: once on exit 7, which dropped it, and not again; then on exit 8.
+    expect(exitsSeen).toEqual([7, 8]);
+  }, 30_000);
+
+  it('an exit that cuts an answer off mid-body fails that request, and the next one leaves it', async () => {
+    exitsSeen.length = 0;
+    behaviour.clear();
+    behaviour.set(7, 'cut');
+    let n = 6;
+    const rotated: { reason: string }[] = [];
+    const c = new PengePassportPH({
+      baseUrl: siteUrl,
+      fetch: (await createUpstreamFetch(
+        { browser: 'firefox144', proxyUrl: `http://acct42-{session}:s3cr%3At@127.0.0.1:${gatewayPort}`, rotations: 3 },
+        { pickSession: () => ++n, onRotate: (i) => rotated.push(i) },
+      ))!,
+      stateDir: mkdtempSync(join(tmpdir(), 'pps-impit-')),
+      minIntervalMs: 2000,
+    });
+    const err = (await c.sites().catch((e: unknown) => e)) as Error;
+    expect(err).toMatchObject({ name: 'UpstreamError', status: 0 });
+    expect(rotated).toEqual([{ reason: expect.stringMatching(/^POST \/sites: \w+ \(reading the answer\)$/), generation: 1 }]);
+    expect((await c.sites()).length).toBeGreaterThan(10);
+    expect(exitsSeen).toEqual([7, 8]);
   }, 30_000);
 });

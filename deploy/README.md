@@ -186,29 +186,58 @@ UPSTREAM_PROXY_URL=http://<user>:<password>@<proxy-host>:<port>   # needs UPSTRE
 
 Unset, both use Node's `fetch`, as before. The proxy URL carries its credentials: no log line, error, stored
 scan or email repeats it (each process logs `"upstream","via":"impit firefox144 through <proxy-host>"` at start).
+
+**A new exit for each run** (since 24 October; `docs/superpowers/specs/2026-10-24-proxy-rotation-design.md`).
+Webshare's rotating residential pool picks the exit by the user name: `<account>-<number>` keeps one home
+connection while it lasts, `<account>-rotate` a new one per request. Write `{session}` where the number goes:
+
+```sh
+UPSTREAM_PROXY_URL=http://<account>-{session}:<password>@p.webshare.io:80
+UPSTREAM_PROXY_ROTATIONS=3                       # optional: new exits per request, and per 5 minutes (0-10, default 3)
+```
+
+Each checker run then starts on its own random exit, shared by its scan and the posts abroad; the API keeps
+one until it fails. When an exit is refused (Cloudflare's challenge, or the exit cannot open a tunnel), the
+request moves to a new exit and goes again, up to that many times, and no process moves more than that many
+times in any 5 minutes; it only goes again when the site never saw it. Cloudflare sometimes challenges every
+exit for a while (24 October, from ~02:00Z: 24 of 24); then a run fails after a few exits, as without rotation. After a timeout or a dropped connection the request fails as
+before (the site may have seen it) and the next one leaves that exit; so does an answer cut off mid-body. While
+moving is on, the wrapper also keeps every request at least 3 s after the one before, resends included. Each move logs a warning,
+`"upstream: new exit"` with the reason. On 24 October, 12 of 15 random exits passed and 3 were challenged on
+their first request. A session survives a move: its cookies and token work from any exit.
 The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (`release.sh`).
 
 - **When it stops working**, runs fail as when the site is down (breaker, the site's notice). The cause is in
   the journal: `was stopped by Cloudflare's bot check (HTTP 403)` means the profile or the proxy's address is
-  refused now (try another profile, or another proxy address); `failed: Proxy authentication required.` means
-  the credentials; `failed: …` otherwise, the proxy or the site unreachable.
+  refused now (with `{session}`: that every exit it tried was; try another profile); `failed: Proxy
+  authentication required.` means the credentials; `status code 402. (the proxy's allowance is used up)` means
+  the plan's data is spent (Webshare: `X-Webshare-Reason: bandwidthlimit`; 23 October, shared with another
+  scraper): top it up, nothing to change here; `failed: …` otherwise, the proxy or the site unreachable. To ask
+  the proxy itself: `curl -i --proxy "$UPSTREAM_PROXY_URL" http://ipv4.webshare.io/` (with `{session}` replaced
+  by a number) shows its own status and the exit's address.
 - **Changing either setting**: the checker reads them at every run; the API only at start, so
-  `systemctl restart penge-api.service` after any change. To back out, remove both and restart the API.
+  `systemctl restart penge-api.service` after any change. To back out, remove all three (`UPSTREAM_BROWSER`,
+  `UPSTREAM_PROXY_URL`, `UPSTREAM_PROXY_ROTATIONS`) and restart the API. To go back to one fixed exit, put a number
+  in place of `{session}` and remove `UPSTREAM_PROXY_ROTATIONS`: it is refused without `{session}`.
 - **Trying a profile or a proxy before switching**, without touching the running service:
 
   ```sh
   sudo -u penge sh -c 'set -a; . /etc/penge/server.env; cd /opt/penge/current/server &&
     node --input-type=module -e "const { Impit } = await import(\"impit\");
-      const r = await new Impit({ browser: process.env.UPSTREAM_BROWSER, proxyUrl: process.env.UPSTREAM_PROXY_URL })
+      const proxyUrl = process.env.UPSTREAM_PROXY_URL.replace(\"{session}\", String(1 + Math.floor(Math.random() * 999999)));
+      const r = await new Impit({ browser: process.env.UPSTREAM_BROWSER, proxyUrl })
         .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
       console.log(r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\")"'
   ```
 
-  `200 not challenged` is good; `403 challenge` is refused. Override either variable on the `sh -c` line to try another.
+  `200 not challenged` is good; `403 challenge` is refused (with `{session}`, by that one random exit: run it a few
+  times). Override either variable on the `sh -c` line to try another.
   Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
   challenged (21 October), so a test without it says nothing about the service.
-- **Traffic**: a full scan of the Philippine offices is ~46 requests and ~160 KB (uncompressed), so ~1.4 GB a month
-  at one scan every 5 minutes, plus the hourly posts abroad and visitors' lookups. Keep the proxy plan above that.
+- **Traffic** (measured on the wire, 24 October): a run is ~81 KB for the Philippine offices (the session page is
+  ~35 KB of it) and ~44 KB for its posts abroad, so ~1.2 GB a month at one run every 5 minutes, with visitors'
+  lookups (~0.6 KB each). A move costs a new TLS handshake (~5 KB). Keep the plan above 1.5 GB a month, and
+  apart from any other use of the same account.
 - **Memory**: impit adds ~20 MB to each process; the units' limits were raised for it (`penge-api` 130M/180M,
   `penge-check` 160M/220M).
 

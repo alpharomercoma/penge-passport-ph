@@ -1,7 +1,7 @@
 // Everything the server reads from its environment (/etc/penge/server.env on
 // the VPS), checked once at start-up so a bad value fails loudly, not later.
 import { isPushMode, normalizeEmail, type PushMode } from '@penge/contracts';
-import { UPSTREAM_BROWSERS, type UpstreamBrowser, type UpstreamConfig } from './upstream.ts';
+import { rotatesExits, SESSION_PLACEHOLDER, UPSTREAM_BROWSERS, type UpstreamBrowser, type UpstreamConfig } from './upstream.ts';
 
 export type MailMode = 'live' | 'dry-run' | 'off';
 
@@ -164,7 +164,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   // passport.gov.ph through a browser-like client and a proxy (upstream.ts). The proxy URL carries credentials:
   // no message here repeats it.
-  for (const name of ['UPSTREAM_BROWSER', 'UPSTREAM_PROXY_URL']) {
+  for (const name of ['UPSTREAM_BROWSER', 'UPSTREAM_PROXY_URL', 'UPSTREAM_PROXY_ROTATIONS']) {
     if (env[name] !== undefined && env[name]!.trim() === '') throw new ConfigError(`${name} is set but empty`);
   }
   const browserRaw = env.UPSTREAM_BROWSER?.trim() || null;
@@ -174,9 +174,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const proxyUrl = env.UPSTREAM_PROXY_URL?.trim() || null;
   if (proxyUrl !== null) {
     if (browserRaw === null) throw new ConfigError('UPSTREAM_PROXY_URL needs UPSTREAM_BROWSER: without it the proxy is challenged too');
+    if (rotatesExits(proxyUrl)) {
+      // Once, and in the user name: the part before the first : of what comes before the @.
+      const user = /^[a-z][a-z0-9+.-]*:\/\/([^@/?#]*)@/i.exec(proxyUrl)?.[1]?.split(':')[0] ?? '';
+      if (proxyUrl.split(SESSION_PLACEHOLDER).length !== 2 || !user.includes(SESSION_PLACEHOLDER)) {
+        throw new ConfigError(`UPSTREAM_PROXY_URL may hold ${SESSION_PLACEHOLDER} only once, in its user name`);
+      }
+    }
     let url: URL | null = null;
     try {
-      url = new URL(proxyUrl);
+      url = new URL(proxyUrl.replace(SESSION_PLACEHOLDER, '1'));
     } catch {
       // reported below, without the value
     }
@@ -184,7 +191,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new ConfigError('UPSTREAM_PROXY_URL must be http://, https:// or socks5://, with a host and nothing after it but an optional /');
     }
   }
-  const upstream: UpstreamConfig = { browser: browserRaw as UpstreamBrowser | null, proxyUrl };
+  if (env.UPSTREAM_PROXY_ROTATIONS !== undefined && !rotatesExits(proxyUrl)) {
+    throw new ConfigError(`UPSTREAM_PROXY_ROTATIONS needs ${SESSION_PLACEHOLDER} in UPSTREAM_PROXY_URL's user name: a fixed proxy has no other exit`);
+  }
+  const upstream: UpstreamConfig = {
+    browser: browserRaw as UpstreamBrowser | null,
+    proxyUrl,
+    rotations: rotatesExits(proxyUrl) ? int('UPSTREAM_PROXY_ROTATIONS', 3, 0, 10) : 0,
+  };
 
   return {
     redisUrl,

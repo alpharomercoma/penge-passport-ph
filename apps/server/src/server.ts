@@ -16,7 +16,7 @@ const config = loadConfig();
 const kv = await connectRedis(config.redisUrl, (err) => log.error('redis', { err }));
 const mailer = createMailer(config, log);
 // Loaded before listening: a release whose impit cannot load never becomes ready (upstream.ts).
-const upstreamFetch = await createUpstreamFetch(config.upstream);
+const upstreamFetch = await createUpstreamFetch(config.upstream, { onRotate: (info) => log.warn('upstream: new exit', info) });
 log.info('upstream', { via: describeUpstream(config.upstream) });
 // What visitors ask for has its own budget, apart from the scans (budget.ts);
 // a visitor never waits more than 15 s in its queue.
