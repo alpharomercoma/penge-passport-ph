@@ -9,7 +9,11 @@ import { randomInt } from 'node:crypto';
 import type { Browser } from 'impit';
 import { LIMITS } from 'penge-passport-ph';
 
-/** impit's browser profiles. `firefox144` is the one Cloudflare let through when this was written. */
+/**
+ * impit's browser profiles. Which ones Cloudflare lets through changes: on 21 Oct 2026 firefox144 passed and the
+ * Chrome ones were challenged; on 24 Oct firefox144 was challenged on every exit tried, and on one exit firefox135
+ * was too while firefox133, firefox128, chrome142 and chrome151 passed (deploy/README.md, "Reaching passport.gov.ph").
+ */
 export const UPSTREAM_BROWSERS = [
   'chrome',
   'chrome100',

@@ -180,12 +180,12 @@ address, and Node's own `fetch` from any address. What gets through (measured 21
 proxy. The checker and the API both use it when `server.env` says so (`apps/server/src/upstream.ts`):
 
 ```sh
-UPSTREAM_BROWSER=firefox144                      # impit's profile; its Chrome ones and plain `firefox` are challenged
+UPSTREAM_BROWSER=firefox133                      # impit's profile: one Cloudflare lets through now (they change)
 UPSTREAM_PROXY_URL=http://<user>:<password>@<proxy-host>:<port>   # needs UPSTREAM_BROWSER
 ```
 
 Unset, both use Node's `fetch`, as before. The proxy URL carries its credentials: no log line, error, stored
-scan or email repeats it (each process logs `"upstream","via":"impit firefox144 through <proxy-host>"` at start).
+scan or email repeats it (each process logs `"upstream","via":"impit <profile> through <proxy-host>"` at start).
 
 **A new exit for each run** (since 24 October; `docs/superpowers/specs/2026-10-24-proxy-rotation-design.md`).
 Webshare's rotating residential pool picks the exit by the user name: `<account>-<number>` keeps one home
@@ -215,6 +215,13 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   scraper): top it up, nothing to change here; `failed: …` otherwise, the proxy or the site unreachable. To ask
   the proxy itself: `curl -i --proxy "$UPSTREAM_PROXY_URL" http://ipv4.webshare.io/` (with `{session}` replaced
   by a number) shows its own status and the exit's address.
+- **When every exit is challenged**, try other profiles: which ones pass changes. On 24 October `firefox144`
+  (passing since the 21st) was challenged on every exit production tried from ~02:00Z (4 per run, and the API's);
+  on one exit, `firefox144` and `firefox135` were challenged while `firefox133`, `firefox128`, `chrome142` and
+  `chrome151` passed; production switched to `firefox133` and its next run got past Cloudflare, though `firefox133` was
+  challenged once on another exit soon after. On the 21st, Chrome profiles had been the ones challenged. Why is
+  not known. Test from one exit (the command below, holding `SESSION`), one request per profile, then set
+  `UPSTREAM_BROWSER` to one that passes and restart the API.
 - **Changing either setting**: the checker reads them at every run; the API only at start, so
   `systemctl restart penge-api.service` after any change. To back out, remove all three (`UPSTREAM_BROWSER`,
   `UPSTREAM_PROXY_URL`, `UPSTREAM_PROXY_ROTATIONS`) and restart the API. To go back to one fixed exit, put a number
@@ -222,16 +229,20 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
 - **Trying a profile or a proxy before switching**, without touching the running service:
 
   ```sh
-  sudo -u penge sh -c 'set -a; . /etc/penge/server.env; cd /opt/penge/current/server &&
+  sudo -u penge sh -c 'set -a; . /etc/penge/server.env
+    # To try another profile, proxy or exit, set it here, after server.env (one line, e.g.):
+    # UPSTREAM_BROWSER=firefox128; SESSION=123456
+    cd /opt/penge/current/server &&
     node --input-type=module -e "const { Impit } = await import(\"impit\");
-      const proxyUrl = process.env.UPSTREAM_PROXY_URL.replace(\"{session}\", String(1 + Math.floor(Math.random() * 999999)));
+      const session = process.env.SESSION || String(1 + Math.floor(Math.random() * 999999));
+      const proxyUrl = process.env.UPSTREAM_PROXY_URL.replace(\"{session}\", session);
       const r = await new Impit({ browser: process.env.UPSTREAM_BROWSER, proxyUrl })
         .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
       console.log(r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\")"'
   ```
 
-  `200 not challenged` is good; `403 challenge` is refused (with `{session}`, by that one random exit: run it a few
-  times). Override either variable on the `sh -c` line to try another.
+  `200 not challenged` is good; `403 challenge` is refused (with `{session}` and no `SESSION`, by that one random
+  exit). Set variables on the commented line inside the quotes: before them, `server.env` would overwrite them.
   Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
   challenged (21 October), so a test without it says nothing about the service.
 - **Traffic** (measured on the wire, 24 October): a run is ~81 KB for the Philippine offices (the session page is
