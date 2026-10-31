@@ -186,6 +186,7 @@ describe('config', () => {
     const config = loadConfig(env);
     expect(config.mailMode).toBe('dry-run');
     expect(config.mailDailyLimit).toBe(2500);
+    expect(config.mailDailyLimitPerSubscriber).toBeNull();
     // A safety net above what either pace allows: 24 an hour apart, 288 one per check.
     expect(config.alertsPerSubscriberPerDay).toBe(288);
     expect(config.statsEmail).toBeNull();
@@ -200,9 +201,16 @@ describe('config', () => {
     [{ PUBLIC_BASE_URL: 'http://penge.example' }, /https/],
     [{ SMTP_PORT: '0' }, /SMTP_PORT/],
     [{ MAIL_DAILY_LIMIT: '1.5' }, /MAIL_DAILY_LIMIT/],
+    [{ MAIL_DAILY_LIMIT_PER_SUBSCRIBER: '0' }, /MAIL_DAILY_LIMIT_PER_SUBSCRIBER/],
+    [{ MAIL_DAILY_LIMIT_PER_SUBSCRIBER: '2.5' }, /MAIL_DAILY_LIMIT_PER_SUBSCRIBER/],
   ])('refuses %j', (patch, error) => {
     expect(() => loadConfig({ ...env, ...patch })).toThrow(error);
     expect(() => loadConfig({ ...env, ...patch })).toThrow(ConfigError);
+  });
+
+  it('reads a daily email limit per subscriber, and none when it is empty', () => {
+    expect(loadConfig({ ...env, MAIL_DAILY_LIMIT_PER_SUBSCRIBER: '12' }).mailDailyLimitPerSubscriber).toBe(12);
+    expect(loadConfig({ ...env, MAIL_DAILY_LIMIT_PER_SUBSCRIBER: ' ' }).mailDailyLimitPerSubscriber).toBeNull();
   });
 
   it('keeps push off unless every push setting is there', () => {

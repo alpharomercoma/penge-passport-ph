@@ -28,8 +28,10 @@ export interface Config {
   mailFrom: string | null;
   publicBaseUrl: string | null;
   mailMode: MailMode;
-  /** Stop sending for the day at this many emails (the domain's reputation is new). */
+  /** The most alert emails in a Manila day: the limit, or with a rate below, its ceiling. */
   mailDailyLimit: number;
+  /** When set, the day's limit is this many for each email subscriber, up to mailDailyLimit (mail-limit.ts). */
+  mailDailyLimitPerSubscriber: number | null;
   /**
    * Most alert emails one person gets in a day: a safety net that never binds
    * below their pace (one an hour, 24 a day; or one per check, 288 a day).
@@ -224,6 +226,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl,
     mailMode,
     mailDailyLimit: int('MAIL_DAILY_LIMIT', 2500, 0, 100_000),
+    mailDailyLimitPerSubscriber: env.MAIL_DAILY_LIMIT_PER_SUBSCRIBER?.trim() ? int('MAIL_DAILY_LIMIT_PER_SUBSCRIBER', 0, 1, 1000) : null,
     alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 288, 1, 1000),
     statsEmail,
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',

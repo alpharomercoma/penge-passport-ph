@@ -10,6 +10,7 @@ import { webPushTransport } from './devices/transport.ts';
 import { loadConfig, requireR2 } from './config.ts';
 import { connectRedis } from './kv.ts';
 import { log } from './log.ts';
+import { mailLimitNow } from './mail-limit.ts';
 import { createMailer } from './mailer.ts';
 import { r2Sink } from './r2.ts';
 import { noteLost } from './record.ts';
@@ -47,6 +48,8 @@ const abroad = new PengePassportPH({
 });
 
 try {
+  // With a rate per subscriber, the limit grows with them, up to MAIL_DAILY_LIMIT (mail-limit.ts).
+  const mailLimit = await mailLimitNow(kv, config, log);
   const report = await runCheck({
     kv,
     upstream,
@@ -59,7 +62,7 @@ try {
     keys: config.keys,
     log,
     publicBaseUrl: config.publicBaseUrl ?? 'http://localhost:8787',
-    mailDailyLimit: config.mailDailyLimit,
+    mailDailyLimit: mailLimit.limit,
     devices: { mode: config.push.mode, transport: config.push.vapid ? webPushTransport(config.push.vapid) : null },
     // The report's ceilings, as this run reads them (none if Valkey's memory cannot be read).
     ...(await deviceLimitsNow(kv, config.devices).then((l) => {
@@ -72,7 +75,7 @@ try {
     stats: createStats(kv, log),
     statsEmail: config.statsEmail,
   });
-  log.info('check finished', { ...report, mail: config.mailMode });
+  log.info('check finished', { ...report, mail: config.mailMode, mailLimit });
   process.exitCode = report.skipped || report.healthy ? 0 : 3;
 } catch (err) {
   log.error('check crashed', { err: err as Error });

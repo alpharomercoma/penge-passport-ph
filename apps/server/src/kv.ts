@@ -65,6 +65,7 @@ export interface Kv {
   decr(key: string): Promise<number>;
   hGetAll(key: string): Promise<Record<string, string>>;
   sMembers(key: string): Promise<string[]>;
+  sCard(key: string): Promise<number>;
   /** Every key matching a pattern of literal characters, * and ? (SCAN MATCH, COUNT 500), each once; any other glob is refused. */
   scan(pattern: string): Promise<string[]>;
   lPop(key: string): Promise<string | null>;
@@ -116,6 +117,7 @@ export async function connectRedis(url: string, onError: (err: Error) => void): 
     decr: (key) => client.decr(key),
     hGetAll: async (key) => ({ ...(await client.hGetAll(key)) }),
     sMembers: (key) => client.sMembers(key),
+    sCard: (key) => client.sCard(key),
     async scan(pattern) {
       plainGlob(pattern);
       const out: string[] = [];
@@ -385,6 +387,10 @@ export class MemoryKv implements Kv {
     if (!entry) return [];
     if (!(entry.value instanceof Set) || entry.value instanceof Hll) throw new Error(`WRONGTYPE ${key}`);
     return [...entry.value];
+  }
+
+  async sCard(key: string) {
+    return (await this.sMembers(key)).length;
   }
 
   async lPop(key: string) {

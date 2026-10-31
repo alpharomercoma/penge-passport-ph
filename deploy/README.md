@@ -65,7 +65,8 @@ guardrails:
    week can let Redis drop a held alert or an announcement mark early (never send one early). Records
    written before this (29 September 2026) kept wall-clock expiries of 2 to 4 hours until the first
    run after the upgrade rewrote them; old announcement marks ran out their 3 hours. Caps, as a safety net: `ALERTS_PER_SUBSCRIBER_PER_DAY` (288) a person per Manila day;
-   `MAIL_DAILY_LIMIT` (2,500) emails a day in total.
+   `MAIL_DAILY_LIMIT` emails a day in total (12 a subscriber up to 10,000; see [Raising the email
+   limit](#raising-the-email-limit)).
 7. Only dates verified open in the current trusted run are sent, with successful lookups for the office
    and the requested applicant count. Failed or skipped checks leave alerts waiting without spending
    an email allowance. One that closed while it waited keeps waiting, in case
@@ -125,7 +126,7 @@ All times are Manila time; the server's clock is UTC.
 | The site's copy on a phone (installed from the browser, or the [Android app](../docs/android.md)) | Each page load asks the server first, so a deploy shows on the next visit | The service worker (`apps/web/src/sw.js`) keeps the last deploy's page, code and icons to open offline; appointment data is never kept |
 | An office's dates for one person | When a visitor opens the office | From the office's scan while it is under 9 minutes old (the scans keep it so); only older than that is the DFA asked, so the hours a visitor taps next never wait behind it |
 | Group dates, hours of a day | When a visitor changes the group size or taps a day | Asked of the DFA, in one request: while a person has the site open, a DFA session is kept ready (at most one request every 7 minutes or so, none while nobody visits); shared for 3 minutes; an older answer (up to an hour) with its age when the DFA cannot be asked. An office page does not ask again by itself; the list behind it keeps reading the scans |
-| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 288 a person and 2,500 in total a day at most (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
+| Email alerts | In the run that found the date, or the first run after the person's pace allows | At most one an hour per person, or one per check if they chose it; 288 a person a day at most, and 12 a subscriber up to 10,000 in total (`ALERTS_PER_SUBSCRIBER_PER_DAY`, `MAIL_DAILY_LIMIT_PER_SUBSCRIBER`, `MAIL_DAILY_LIMIT`); a date at most once in 3 hours |
 | Debian and Caddy security updates | Daily | Restart at 04:30 only when an update needs it |
 | Node.js security releases | Weekly, Tuesday 04:10–04:40 | Signature-checked; runs at the next boot if the server was off |
 | HTTPS certificate | Caddy renews it before it expires | |
@@ -371,7 +372,7 @@ longer work. Two records stay, so nobody else can send as the old address: `peng
 A new domain on a new IP starts with no reputation, so the first messages often go to spam whatever the
 records say. Mark them "Not spam", and send little at first: `MAIL_DAILY_LIMIT` keeps volume low
 while reputation builds. It was 300 until 4 October 2026, when the site hit it at 22:00 Manila on 3 October
-with 34 subscribers; it is now 2,500 (see [Raising the limit](#raising-the-email-limit)). Google Postmaster Tools (postmaster.google.com, verify the subdomain with a TXT
+with 34 subscribers, then 2,500 until 31 October; it now grows with the subscribers (see [Raising the limit](#raising-the-email-limit)). Google Postmaster Tools (postmaster.google.com, verify the subdomain with a TXT
 record) shows how Gmail rates the domain once there is some volume.
 
 The test message, from the server:
@@ -838,27 +839,44 @@ The deploy day is split: its report says when notification counting began ("Coun
 
 ## Raising the email limit
 
-`MAIL_DAILY_LIMIT` is the most alerts the site sends in a Manila day (confirmation and deletion mail are not
+`MAIL_DAILY_LIMIT` caps the alerts the site sends in a Manila day (confirmation and deletion mail are not
 counted). When it is reached, email stops for the rest of that Manila day while push notifications go on;
 alerts that only email could carry wait uncharged, and the log says `daily email limit reached; email waits,
 push goes on`. The daily numbers show it as "Alerts sent: N of LIMIT" and "Delivery passes that hit the daily
 email limit". LIMIT is the highest limit in force when that day's alerts were
 charged (each run notes it, `pp:mail:limit:<day>`, kept 40 days), not the setting at the time of the report.
 
-It was 300 and ran out at 22:00 Manila on 3 October 2026 (34 subscribers, about 12 alerts an hour, 24 runs
-stopped). The next morning ran about 23 an hour with 43 subscribers (29 "asap", 14 "hourly"), or about 13
-alerts a subscriber a day. Sized on that rate:
+**It grows with the subscribers.** With `MAIL_DAILY_LIMIT_PER_SUBSCRIBER` set, each run counts the email
+subscribers (`SCARD pp:subs`: confirmed addresses only; notification alerts are not in it) and allows that
+many alerts for each, never more than `MAIL_DAILY_LIMIT`, which becomes the ceiling
+(`apps/server/src/mail-limit.ts`). "check finished" in the journal shows the run's `mailLimit` and the count
+it came from. If the count cannot be read, the run uses the ceiling. Without the rate, `MAIL_DAILY_LIMIT` is
+the limit, as before. Since 31 October 2026:
 
-| Subscribers | Alerts a day | With 2× room |
-| --- | --- | --- |
-| 43 | ~560 | ~1,100 |
-| 100 | ~1,300 | ~2,600 |
-| 190 | ~2,500 | ~5,000 |
+```sh
+MAIL_DAILY_LIMIT=10000
+MAIL_DAILY_LIMIT_PER_SUBSCRIBER=12
+```
 
-The limit is 2,500 since 4 October 2026: about 4.5× that day's demand. Raise it when "alerts sent" passes half
-of it (about 1,250 a day, near 100 subscribers) and watch Gmail placement and Google Postmaster as volume
-grows. Keep it under 5,000 a day unless you mean to be a Gmail bulk sender, which has its own rules. The
-checker reads `server.env` on every run, so changing `MAIL_DAILY_LIMIT` there needs no restart.
+How it was sized. A fixed limit of 300 ran out at 22:00 Manila on 3 October 2026 (34 subscribers); 2,500
+from 4 October ran out at 22:15 Manila on 30 October (about 390 subscribers, 10 delivery passes stopped).
+Subscribers receive about 6 to 7 alerts a day on average: 1,824 with ~302 on 23 October, 2,148 on 25
+October, 2,500 and more on 30 October. 12 each is about 1.8 times that. Volume grows by itself, so
+reputation is built gradually:
+
+| Email subscribers | Limit a day |
+| --- | --- |
+| 395 (31 October 2026) | 4,740 |
+| 500 | 6,000 |
+| 834 and more | 10,000, the ceiling |
+
+Past 5,000 messages a day to Gmail addresses, Gmail treats the domain as a bulk sender for good. Its rules
+are already met: SPF (`-all`) and DKIM for `penge.alphaexperiments.com`, DMARC (`p=none`, strict
+alignment), a matching reverse DNS, TLS, and one-click unsubscribe (`List-Unsubscribe-Post`). What remains is
+keeping user-reported spam under 0.3%: watch Google Postmaster Tools for the subdomain as volume grows,
+and lower the rate or the ceiling if it climbs. Raise the rate if "Delivery passes that hit the daily email
+limit" shows up on ordinary days; raise the ceiling once subscribers pass about 830. The checker reads
+`server.env` on every run, so either change needs no restart.
 
 ## Data in R2
 
