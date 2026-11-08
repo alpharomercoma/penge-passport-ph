@@ -84,9 +84,10 @@ postconf -e \
   "milter_default_action = tempfail" \
   "smtp_tls_security_level = may" \
   "smtp_tls_loglevel = 1" \
-  "maximal_queue_lifetime = 1d" \
-  "bounce_queue_lifetime = 1d" \
+  "maximal_queue_lifetime = 3h" \
+  "bounce_queue_lifetime = 3h" \
   "default_destination_concurrency_limit = 4" \
+  "smtp_destination_concurrency_limit = 1" \
   "smtpd_sender_restrictions = check_sender_access inline:{ alerts@$DOMAIN=OK }, reject" \
   "authorized_submit_users = root" \
   "smtpd_client_event_limit_exceptions =" \
@@ -95,6 +96,11 @@ postconf -e \
 # Local processes other than the app cannot use this server as a relay: SMTP
 # from any sender but alerts@ is refused, the sendmail command is root's only,
 # and even the app is capped at 150 messages a minute.
+# Mail still undelivered at a failed try after 3 hours in the queue is dropped
+# (tries are up to maximal_backoff_time, 67 minutes, apart): the app drops
+# alerts that old too, and a late one only says dates are open that have gone. One
+# connection per receiving domain is what Gmail asks of a sender it rate-limits
+# (421 4.7.28), and enough for this volume everywhere else.
 echo "$DOMAIN" >/etc/mailname
 
 # Delivery logs name recipients: keep them 3 days, in their own file, not the journal.

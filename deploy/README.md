@@ -343,12 +343,14 @@ The checker picks up the new release on its next run.
 
 ## Turning on email
 
-The server sends its own mail; nothing is paid for or rate-limited by a provider. Mail stays in dry-run
+The server sends its own mail, with no paid sending service; receiving providers can still rate-limit it
+(see [When Gmail rate-limits the domain](#when-gmail-rate-limits-the-domain)). Mail stays in dry-run
 (every message is built, none is sent) until all of this is done.
 
 **Mail for this deployment comes from `alerts@penge.alphaexperiments.com`**, a subdomain that is also the
 server's mail host name (HELO and reverse DNS). The apex `alphaexperiments.com` stays free for other mail,
-and the alerts' sending reputation can never affect it. DNS is on Vercel. The website is at
+and the alerts build a sending reputation of their own (Gmail rates the subdomain separately, though it can
+also look at the organisational domain). DNS is on Vercel. The website is at
 <https://alphaexperiments.com/pengepassportph/> (`/p3h` and `penge.alphaexperiments.com` redirect there;
 both set in `deploy/site.conf`).
 
@@ -391,9 +393,36 @@ the signature covers both List-Unsubscribe headers, which Gmail and Yahoo requir
 
 When a receiving server refuses an email while Postfix is delivering it (the usual case), the bounce lands
 in `/var/mail/root` (`less /var/mail/root`). Bounces a provider sends back later, by email, are lost: the
-subdomain receives no mail. Postfix gives up on a message after a day, since an older alert is useless.
-Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name recipients, so each is
-rotated daily and kept 3 days.
+subdomain receives no mail. Postfix gives up on a message at the first failed try after it has been 3 hours
+in its queue (a day until 8 November 2026); tries are up to 67 minutes apart (`maximal_backoff_time`), so a
+message can wait about 4 hours. An older alert is useless, and the app drops alerts 3 hours after the dates
+opened, counted from before the message reached Postfix. Postfix keeps one connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
+recipients, so each is rotated daily and kept 3 days.
+
+### When Gmail rate-limits the domain
+
+From early November 2026 Gmail answered `421-4.7.28 … unusual rate of mail originating from your SPF
+domain` (`grep 4.7.28 /var/log/postfix/mail.log`): it took about 2,000 to 2,400 of our messages a day,
+almost all of them in the hour after about 02:05 UTC (10 AM Manila), and deferred the rest, while other
+providers took mail at once. With a day's queue lifetime the backlog spent that allowance on alerts a
+median 9 hours old, and 1,937 (6 November) and 2,588 (7 November) expired unsent. The app counted all of them as sent: `alertsSent` and
+the daily report count mail handed to Postfix, not mail delivered. Signs to watch: `mailq | tail -1`
+growing, and Gmail lines with `status=deferred` far outnumbering `status=sent`.
+
+On 8 November 2026 the queue's alert emails older than 3 hours (1,532) were deleted with `postsuper -d`
+(picked by their `Feedback-ID: alert:pengepassportph` header), and the lifetime and connection settings
+above were applied by hand (`main.cf.bak-20261108T141804Z`). Google's advice for 4.7.28: stop sending for
+at least 10 minutes, restart on one connection, raise volume only slowly; never move to another domain or
+IP to get around it. Google Postmaster Tools shows the domain's reputation and spam rate.
+
+`pp:mail:paused` (below) only stops the app handing new mail to Postfix: Postfix keeps trying what it
+already holds, and the owner's daily report is sent regardless. To stop all outgoing mail, hold it in
+Postfix's queue (a hold longer than 3 hours drops what was held):
+
+```sh
+postconf -e "defer_transports = smtp" && postfix reload                  # hold
+postconf -e "defer_transports =" && postfix reload && postqueue -f       # resume
+```
 
 Optional: add `rua=mailto:<an inbox you read>` to the DMARC record to receive daily reports; once a week of
 them looks clean, tighten the record to `p=quarantine`.
@@ -419,8 +448,10 @@ systemd-run --wait --pipe -p User=penge -p EnvironmentFile=/etc/penge/server.env
   /usr/local/bin/node /opt/penge/current/server/check.mjs
 ```
 
-**Pause every email at once** (alerts and confirmation emails; checked before every message; the outbox
-keeps filling, and on resuming each date goes out if it is still open and under 3 hours old):
+**Pause the app's email** (alerts and confirmation emails; checked before every message; the outbox
+keeps filling, and on resuming each date goes out if it is still open and under 3 hours old). Postfix still
+delivers what it already holds, and the owner's daily report is not paused; to stop everything, see
+[When Gmail rate-limits the domain](#when-gmail-rate-limits-the-domain):
 
 ```sh
 apt install redis-tools                            # once, for redis-cli
@@ -451,7 +482,7 @@ are gone within 14 days."), checked on 27 September 2026:
 | Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day the checker deletes every copy older than that, even when that day's upload fails; later only while R2 cannot be reached or the server is down (it retries every run) |
 | API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
 | Confirmation and unsubscribe links | Random tokens, stored only as a hash | Nothing to encrypt | Not an address |
-| Postfix, while sending | The message, with its recipient, waits in the queue until delivered (at most a day; root and postfix only) | **No** | Within a day |
+| Postfix, while sending | The message, with its recipient, waits in the queue until delivered, or until a try fails after it has been 3 hours in the queue: then it is dropped and a bounce goes to root's mailbox. Tries are up to 67 minutes apart (root and postfix only) | **No** | Usually within 4 hours; longer only while the server is down |
 | Postfix's delivery log | One line per delivery, with the recipient (`/var/log/postfix/mail.log`, root only, rotated daily, 3 kept) | **No** | Within 4 days |
 | Root's mailbox | Bounces: the refused message and its recipient (`/var/mail/root`, 0600, rotated daily, 3 kept) | **No** | Within 4 days |
 | Server to the recipient's mail server | TLS when offered (`smtp_tls_security_level = may`), without checking the certificate. All 5 deliveries so far used TLS 1.3 | Usually | Not stored |
@@ -861,8 +892,10 @@ MAIL_DAILY_LIMIT_PER_SUBSCRIBER=12
 How it was sized. A fixed limit of 300 ran out at 22:00 Manila on 3 October 2026 (34 subscribers); 2,500
 from 4 October ran out at 22:15 Manila on 30 October (about 390 subscribers, 10 delivery passes stopped).
 Subscribers receive about 6 to 7 alerts a day on average: 1,824 with ~302 on 23 October, 2,148 on 25
-October, 2,500 and more on 30 October. 12 each is about 1.8 times that. Volume grows by itself, so
-reputation is built gradually:
+October, 2,500 and more on 30 October. 12 each is about 1.8 times that. That sizing assumed volume
+growing with subscribers would build reputation gradually; it did not: alerts went from 1,028 on 2
+November to 4,813 on 3 November, and Gmail was rate-limiting the domain by 4 November (see
+[When Gmail rate-limits the domain](#when-gmail-rate-limits-the-domain)):
 
 | Email subscribers | Limit a day |
 | --- | --- |
@@ -874,9 +907,11 @@ Past 5,000 messages a day to Gmail addresses, Gmail treats the domain as a bulk 
 are already met: SPF (`-all`) and DKIM for `penge.alphaexperiments.com`, DMARC (`p=none`, strict
 alignment), a matching reverse DNS, TLS, and one-click unsubscribe (`List-Unsubscribe-Post`). What remains is
 keeping user-reported spam under 0.3%: watch Google Postmaster Tools for the subdomain as volume grows,
-and lower the rate or the ceiling if it climbs. Raise the rate if "Delivery passes that hit the daily email
-limit" shows up on ordinary days; raise the ceiling once subscribers pass about 830. The checker reads
-`server.env` on every run, so either change needs no restart.
+and lower the rate or the ceiling if it climbs. The limit counts mail handed to Postfix, not mail delivered,
+so hitting it says nothing about whether receivers want more. Do not raise the rate or the ceiling while
+Gmail defers with 4.7.28 or the queue holds Gmail mail for long; raise volume only slowly, and only once
+Gmail takes mail through the day and Postmaster Tools looks healthy. The checker reads `server.env` on
+every run, so either change needs no restart.
 
 ## Data in R2
 
