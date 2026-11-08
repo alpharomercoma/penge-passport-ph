@@ -14,7 +14,7 @@ SR = 48000
 BPM = 128
 BEAT = 60 / BPM
 BAR = 4 * BEAT
-BARS = 25
+BARS = 27
 LENGTH = BARS * BAR + 2.2  # a tail after the last hit
 N = int(LENGTH * SR)
 rng = np.random.default_rng(20260928)
@@ -176,8 +176,8 @@ K, C = kick(), clap()
 DROP = 4           # brand reveal
 BREAK = (15, 17)   # email typing: half-time breakdown
 CHIME_BAR = 17     # the alert arrives
-END_HIT = 22       # call to action
-LAST = 24          # last groove bar
+END_HIT = 24       # call to action
+LAST = 26          # last groove bar
 
 for bar in range(BARS):
     chord = CHORDS[bar % 4]
@@ -229,7 +229,7 @@ for bar in range(BARS):
         for s in range(16):
             place(lead, start + s * BEAT / 4, pluck(tones[s % 4] + (12 if s % 8 == 7 else 0)), 0.35)
     # Whooshes into each scene cut.
-    if bar in (6, 9, 12, 15, 19, 21):
+    if bar in (6, 9, 12, 15, 20, 22):
         place(fx, start - 0.45, whoosh(0.5), 1.0)
 
 for bar in (DROP, CHIME_BAR, END_HIT):

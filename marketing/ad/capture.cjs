@@ -7,8 +7,8 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 
 const BASE = 'https://alphaexperiments.com/pengepassportph/';
-const OFFICE = 424; // Ilocos Norte
-const DAY = '20'; // the day tapped on its first calendar page (October)
+const OFFICE = 16; // Calasiao
+const DAY = '29'; // the day tapped on its first calendar page (October): three hours, one place each
 const POST = 36; // Dubai
 const EMAIL = 'juan@example.com';
 const OUT = process.env.OUT || __dirname + '/assets';

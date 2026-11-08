@@ -20,6 +20,6 @@ ffmpeg -hide_banner -loglevel error -y -framerate 120 -i frames/hi/f_%05d.jpg -i
   -c:v libx264 -preset slow -crf 16 -profile:v high -level 4.2 \
   -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
   -c:a aac -b:a 256k -ar 48000 -shortest -movflags +faststart out/pengepassportph-ad-16x9.mp4
-ffmpeg -hide_banner -loglevel error -y -ss 44.5 -i out/pengepassportph-ad-16x9.mp4 -frames:v 1 out/thumbnail.png
+ffmpeg -hide_banner -loglevel error -y -ss 50.5 -i out/pengepassportph-ad-16x9.mp4 -frames:v 1 out/thumbnail.png
 rm -rf frames/hi
 echo "built out/pengepassportph-ad-16x9.mp4"

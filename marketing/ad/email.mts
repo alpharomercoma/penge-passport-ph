@@ -6,7 +6,7 @@ import { alertEmail } from '../../apps/server/src/templates.ts';
 
 const mail = alertEmail({
   openings: [
-    { id: 424, name: 'Ilocos Norte (Robinsons Place, San Nicolas)', dates: ['2026-10-20', '2026-10-21', '2026-10-22'], checkedAt: '2026-10-13T04:02:00.000Z' },
+    { id: 16, name: 'Calasiao (Robinsons Calasiao, Pangasinan)', dates: ['2026-10-29', '2026-10-30'], checkedAt: '2026-10-13T04:02:00.000Z' },
     { id: 36, name: 'Dubai (Philippine Consulate General, United Arab Emirates)', dates: ['2026-10-21'], checkedAt: '2026-10-13T03:47:00.000Z' },
   ],
   applicants: 1,

@@ -91,7 +91,7 @@
 // ---------------------------------------------------------------------------
 // Time: 128 BPM, cuts on bar lines (music.py writes the same grid).
 const BEAT = 60 / 128, BAR = 4 * BEAT, bar = (n, beat = 0) => (n * 4 + beat) * BEAT;
-const LENGTH = 49.08;
+const LENGTH = 27 * 4 * (60 / 128) + 2.2; // 27 bars and the tail (music.py)
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const prog = (t, a, b) => clamp((t - a) / (b - a));
 const lerp = (a, b, x) => a + (b - a) * x;
@@ -297,7 +297,7 @@ scene(bar(6), bar(9), 'light', (r) => {
   const h = line(r, 'Every DFA office.', 'h1', 140, 250, 120);
   const h2 = line(r, 'One list.', 'h1', 140, 370, 120);
   const s1 = el('div', 'stat abs', r, '<b>0</b><span>offices, all in one place</span>');
-  const s2 = el('div', 'stat abs', r, '<b>5<small style="font-size:60px;letter-spacing:-0.02em"> min</small></b><span>between checks</span>');
+  const s2 = el('div', 'stat abs', r, '<b>10<small style="font-size:60px;letter-spacing:-0.02em"> min</small></b><span>between checks</span>');
   const chips = ['NCR', 'Luzon', 'Visayas', 'Mindanao'].map((w) => el('div', 'chip line abs', r, w));
   const ph = phone(r); screenImg(ph, 'ph-full');
   return { kick, h, h2, s1, s2, chips, ph };
@@ -404,7 +404,7 @@ scene(bar(12), bar(15), 'light', (r) => {
   const ph = phone(cam); screenImg(ph, 'office-cal-top'); screenImg(ph, 'office-hours-view');
   const cur = el('div', 'cursor abs', ph.p, CURSOR);
   const rip = el('div', 'ripple abs', ph.p);
-  const rings = BOX.hours.slice(0, 2).map(() => el('div', 'ring abs', ph.p));
+  const rings = BOX.hours.slice(0, 3).map(() => el('div', 'ring abs', ph.p));
   return { h, h2, s, cam, ph, cur, rip, rings };
 }, (t, c) => {
   const t0 = bar(12);
@@ -420,16 +420,16 @@ scene(bar(12), bar(15), 'light', (r) => {
   const sy = BOX.hoursScroll * E.inOutCubic(prog(t, bar(13) - 0.1, bar(13) + 0.45));
   showImg(c.ph, 'office-cal-top', sy, 1);
   showImg(c.ph, 'office-hours-view', sy - BOX.hoursScroll, 1);
-  // The tap on Tue 20 Oct.
+  // The tap on Thu 29 Oct.
   const tapT = bar(12, 2.5);
   const d = BOX.day, target = onScreen(d.x + d.w / 2, d.y + d.h / 2);
   const ca = E.outExpo(prog(t, t0 + 0.4, tapT));
   put(c.cur, { x: lerp(700, target.x - 8, ca), y: lerp(1100, target.y - 6, ca), o: t < bar(13) - 0.1 ? 1 : 0, s: 1 - 0.15 * Math.exp(-Math.max(0, t - tapT) * 12) * (t > tapT ? 1 : 0) });
   const rp = prog(t, tapT, tapT + 0.4);
   put(c.rip, { x: target.x, y: target.y, s: 0.3 + rp, o: t > tapT && t < bar(13) - 0.1 ? 1 - rp : 0 });
-  // Rings on the hours with room, on the beat.
-  BOX.hours.slice(0, 2).forEach((b, i) => {
-    const on = bar(13, 2 + i * 2);
+  // Rings on the hours with places, on the beat.
+  BOX.hours.slice(0, 3).forEach((b, i) => {
+    const on = bar(13, 2 + i * 1.5);
     const q = E.outBack(prog(t, on, on + 0.35));
     const ring = c.rings[i], pos = onScreen(b.x - 6, b.y - 6);
     ring.style.width = (b.w + 12) * PHONE_S + 'px'; ring.style.height = (b.h + 12) * PHONE_S + 'px';
@@ -445,7 +445,7 @@ const BELL = `<svg viewBox="0 0 24 24" width="34" height="34"><path d="M6 8a6 6 
 const SMALL_BELL = BELL.replace('width="34" height="34"', 'width="18" height="18"').replace('currentColor', '#fff');
 // What the app shows, word for word (apps/web/src/sw.js; apps/server/src/push/payload.ts).
 const heads = (title, body) => `<div class="top"><span class="icon">${SMALL_BELL}</span><span>PengePassportPH • now</span></div><div class="title">${title}</div><div class="body">${body}</div>`;
-scene(bar(15), bar(19), 'light', (r) => {
+scene(bar(15), bar(20), 'light', (r) => {
   const h = line(r, 'Pick your offices.', 'h1', 150, 300, 110, '', );
   const h2 = line(r, 'Tap Notifications.', 'h1', 150, 410, 110);
   const h3 = line(r, 'A date opens?', 'h1', 150, 300, 112);
@@ -460,28 +460,31 @@ scene(bar(15), bar(19), 'light', (r) => {
   const perm = el('div', 'perm abs', ph.p, `<div class="bell">${BELL}</div><p>Allow <b>PengePassportPH</b> to send you notifications?</p><div class="btn allow">Allow</div><div class="btn">Don’t allow</div>`);
   const cur = el('div', 'cursor abs', ph.p, CURSOR);
   const rip = el('div', 'ripple abs', ph.p);
-  const on = el('div', 'notif abs', ph.p, heads('Notifications are on', 'We’ll tell you when dates open at Ilocos Norte.'));
-  const alert = el('div', 'notif abs', ph.p, heads('Dates open at Ilocos Norte', 'Tue 20 Oct, Wed 21 Oct and Thu 22 Oct · for 1 person · Checked 12:02'));
+  const alert = el('div', 'notif abs', ph.p, heads('Dates open at Calasiao', 'Thu 29 Oct and Fri 30 Oct · for 1 person · Checked 12:02'));
   const mail = el('div', 'mail abs', r, `<div class="head"><div><b>PengePassportPH</b> &lt;alerts@penge.alphaexperiments.com&gt;</div><div>To: ${EMAIL}</div><div class="subj">${MAIL.subject}</div></div><div class="mbody" style="position:relative"><img src="assets/email-card.png"></div>`);
   const hl = MAIL_ROWS.map(() => el('div', 'abs', mail.querySelector('.mbody')));
   hl.forEach((x) => (x.style.cssText += 'border-radius:6px;background:rgba(10,122,67,0.18);'));
-  return { h, h2, h3, h4, h5, h6, s0, s, ph, scrim, perm, cur, rip, on, alert, mail, hl };
+  return { h, h2, h3, h4, h5, h6, s0, s, ph, scrim, perm, cur, rip, alert, mail, hl };
 }, (t, c) => {
   const t0 = bar(15);
-  // The beats: tap the switch, Allow, tap the button, "on"; the chime brings the alert; then email.
-  const tapSwitch = bar(15, 2), tapAllow = bar(15, 3.5), tapSend = bar(16, 1.5), onAt = bar(16, 2.5);
+  // The beats: tap the switch, Allow, tap the button; the chime brings the alert, held two bars; then email.
+  const tapSwitch = bar(15, 2), tapAllow = bar(15, 3.5), tapSend = bar(16, 1.5), emailAt = bar(18, 2);
   reveal(c.h, t, t0 + 0.05, 0.45, bar(17) - 0.35);
   reveal(c.h2, t, tapSwitch, 0.45, bar(17) - 0.35);
   reveal(c.s0, t, bar(16, 2), 0.45, bar(17) - 0.35);
-  reveal(c.h3, t, bar(17), 0.4, bar(18) - 0.35);
-  reveal(c.h4, t, bar(17, 1), 0.45, bar(18) - 0.35);
-  reveal(c.h5, t, bar(18), 0.4);
-  reveal(c.h6, t, bar(18, 1), 0.45);
-  reveal(c.s, t, bar(18, 2.5), 0.45);
+  reveal(c.h3, t, bar(17), 0.4, emailAt - 0.35);
+  reveal(c.h4, t, bar(17, 1), 0.45, emailAt - 0.35);
+  reveal(c.h5, t, emailAt, 0.4);
+  reveal(c.h6, t, emailAt + BEAT, 0.45);
+  reveal(c.s, t, emailAt + BEAT * 2.5, 0.45);
   // The phone; when email comes up it drops away and the email takes its place.
   const pin = E.outExpo(prog(t, t0, t0 + 0.7));
-  const away = E.inCubic(prog(t, bar(18) - 0.25, bar(18) + 0.2));
-  put(c.ph.p, { x: 1230 + (1 - pin) * 800, y: 70 + Math.sin(t * 1.3) * 6 + away * 500, ry: -4, s: 1 - away * 0.1, o: 1 - away });
+  const away = E.inCubic(prog(t, emailAt - 0.25, emailAt + 0.2));
+  // After the chime the camera pushes in on the notification (scaled about its own centre), so it reads, then
+  // eases back as the phone leaves.
+  const zoom = E.inOutCubic(prog(t, bar(17, 1), bar(17, 2.5))) * (1 - E.inOutCubic(prog(t, emailAt - 0.5, emailAt)));
+  c.ph.p.style.transformOrigin = `${14 + 12 + 198}px ${14 + 70 + 60}px`;
+  put(c.ph.p, { x: 1230 + (1 - pin) * 800 + zoom * 90, y: 70 + Math.sin(t * 1.3) * 6 * (1 - zoom) + away * 500 + zoom * 130, ry: -4 * (1 - zoom), s: (1 + 0.45 * zoom) * (1 - away * 0.1), o: 1 - away });
   // The form: off until Allow, then Notifications on (the real screens, captured from the live site).
   const switched = prog(t, tapAllow + 0.08, tapAllow + 0.2);
   showImg(c.ph, 'alert-sheet-empty', 0, 1);
@@ -505,25 +508,22 @@ scene(bar(15), bar(19), 'light', (r) => {
   put(c.cur, { x: cx - 8, y: cy - 6, o: t > t0 + 0.5 && t < tapSend + 0.5 ? 1 : 0, s: since > 0 ? 1 - 0.15 * Math.exp(-since * 12) : 1 });
   const rp = clamp(since / 0.4);
   put(c.rip, { x: cx, y: cy, s: 0.3 + rp, o: since > 0 && since < 0.4 && t < tapSend + 0.5 ? 1 - rp : 0 });
-  // "Notifications are on" drops in, then goes (the page says so itself).
-  const oIn = E.outBack(prog(t, onAt, onAt + 0.45)), oOut = E.inCubic(prog(t, bar(17) - 0.3, bar(17) - 0.05));
-  put(c.on, { x: 14 + 12, y: lerp(-220, 70, oIn) - oOut * 300, o: t > onAt && oOut < 1 ? 1 : 0 });
   // The chime: the alert itself.
   const aIn = E.outBack(prog(t, bar(17), bar(17) + 0.45));
   put(c.alert, { x: 14 + 12, y: lerp(-220, 70, aIn) + (t > bar(17) ? 4 * kickPulse(t, bar(17)) : 0), o: t > bar(17) ? 1 : 0 });
   // The email rises into the phone's place.
-  const mq = E.outExpo(prog(t, bar(18) - 0.05, bar(18) + 0.7));
+  const mq = E.outExpo(prog(t, emailAt - 0.05, emailAt + 0.7));
   put(c.mail, { x: 1085, y: lerp(1100, 150, mq) + Math.sin(t * 1.2) * 6, ry: -5, s: 1.02, o: mq > 0 ? 1 : 0 });
   // Its dates light up, one per half beat.
   c.hl.forEach((h, i) => {
-    const q = E.outCubic(prog(t, bar(18, 1 + i * 0.5), bar(18, 1 + i * 0.5) + 0.3));
+    const q = E.outCubic(prog(t, emailAt + BEAT * (1 + i * 0.5), emailAt + BEAT * (1 + i * 0.5) + 0.3));
     h.style.left = 40 * MAIL_K + 'px'; h.style.top = (MAIL_ROWS[i] - 1) * MAIL_K + 'px';
     h.style.height = 26 * MAIL_K + 'px'; h.style.width = q * 150 * MAIL_K + 'px';
   });
 });
 
 // 8. What it is, and what it is not.
-scene(bar(19), bar(21), 'dark', (r) => {
+scene(bar(20), bar(22), 'dark', (r) => {
   const items = [
     ['Read-only.', 'It only reads the public calendar.'],
     ['Never books.', 'It won’t hold or sell a slot.'],
@@ -533,7 +533,7 @@ scene(bar(19), bar(21), 'dark', (r) => {
   return { items };
 }, (t, c) => {
   c.items.forEach((l, i) => {
-    const on = bar(19, i * 2);
+    const on = bar(20, i * 2);
     const x = i % 2 ? 1060 : 230, y = i < 2 ? 260 : 610;
     l.a.m.style.left = x + 'px'; l.a.m.style.top = y + 'px';
     l.b.m.style.left = x + 4 + 'px'; l.b.m.style.top = y + 124 + 'px';
@@ -545,7 +545,7 @@ scene(bar(19), bar(21), 'dark', (r) => {
 });
 
 // 9. Open source.
-scene(bar(21), bar(22), 'dark', (r) => {
+scene(bar(22), bar(24), 'dark', (r) => {
   const h = line(r, 'Open source. Build on it.', 'h1', 0, 150, 96, 'color:#fff');
   h.m.style.width = '1920px'; h.s.style.textAlign = 'center';
   const term = el('div', 'term abs', r, '<div class="bar"><i></i><i></i><i></i></div><pre></pre>');
@@ -553,24 +553,25 @@ scene(bar(21), bar(22), 'dark', (r) => {
   s.m.style.width = '1920px'; s.s.style.textAlign = 'center';
   return { h, term, s };
 }, (t, c) => {
-  const t0 = bar(21);
+  const t0 = bar(22);
   reveal(c.h, t, t0, 0.4);
   reveal(c.s, t, t0 + BEAT * 2, 0.4);
   const q = E.outExpo(prog(t, t0 + 0.05, t0 + 0.5));
   put(c.term, { x: 410, y: 320 + (1 - q) * 60, o: q });
-  // The two installs, with the lines npm and pip really print.
+  // The two installs, typed at a readable pace, with the lines npm and pip really print; then a held beat.
   const cmd1 = 'npm i penge-passport-ph', cmd2 = 'pip install penge-passport-ph';
-  const n1 = Math.floor(clamp((t - t0 - 0.2) / 0.02, 0, cmd1.length));
-  const n2 = Math.floor(clamp((t - t0 - 0.95) / 0.02, 0, cmd2.length));
+  const CH = 0.035, a1 = t0 + 0.3, o1 = a1 + cmd1.length * CH + 0.25, a2 = o1 + 0.3, o2 = a2 + cmd2.length * CH + 0.25;
+  const n1 = Math.floor(clamp((t - a1) / CH, 0, cmd1.length));
+  const n2 = Math.floor(clamp((t - a2) / CH, 0, cmd2.length));
   let out = `<span class="p">$</span> ${cmd1.slice(0, n1)}`;
-  if (t > t0 + 0.75) out += `\n<span class="o">added 1 package, and audited 2 packages in 954ms</span>`;
-  if (t > t0 + 0.9) out += `\n<span class="p">$</span> ${cmd2.slice(0, n2)}`;
-  if (t > t0 + 1.62) out += `\n<span class="o">Successfully installed penge-passport-ph-0.2.0</span>`;
+  if (t > o1) out += `\n<span class="o">added 1 package, and audited 2 packages in 954ms</span>`;
+  if (t > a2) out += `\n<span class="p">$</span> ${cmd2.slice(0, n2)}`;
+  if (t > o2) out += `\n<span class="o">Successfully installed penge-passport-ph-0.2.0</span>`;
   c.term.querySelector('pre').innerHTML = out;
 });
 
 // 10. End card.
-scene(bar(22), LENGTH, 'white', (r) => {
+scene(bar(24), LENGTH, 'white', (r) => {
   const logo = el('div', 'abs', r);
   logo.style.cssText += 'left:150px;top:230px;width:170px;height:170px;';
   const word = line(r, 'PengePassport<span style="color:var(--ink-2)">PH</span>', 'h1', 150, 430, 130);
@@ -583,23 +584,23 @@ scene(bar(22), LENGTH, 'white', (r) => {
   const fine = el('div', 'fine abs', r, 'Unofficial. Not run by or affiliated with the Department of Foreign Affairs. Open source: github.com/alpharomercoma/penge-passport-ph<br>Google Play and the Google Play logo are trademarks of Google LLC.');
   return { logo, word, tag, url, qr, play, fine, r };
 }, (t, c) => {
-  const t0 = bar(22);
+  const t0 = bar(24);
   // A slow push-in holds the end card alive.
   put(c.r, { s: 1 + 0.035 * E.outCubic(prog(t, t0, LENGTH)) });
   const p = E.outBack(prog(t, t0, t0 + 0.5));
   const open = E.outElastic(prog(t, t0 + 0.2, t0 + 1.0));
-  const final = kickPulse(t, bar(25)) * (t > bar(25) ? 1 : 0);
-  c.logo.innerHTML = LOGO(170, Math.max(0, open) * (1 + 0.5 * Math.exp(-Math.max(0, t - bar(25)) * 5) * (t > bar(25) ? 1 : 0)));
+  const final = kickPulse(t, bar(27)) * (t > bar(27) ? 1 : 0);
+  c.logo.innerHTML = LOGO(170, Math.max(0, open) * (1 + 0.5 * Math.exp(-Math.max(0, t - bar(27)) * 5) * (t > bar(27) ? 1 : 0)));
   put(c.logo, { s: Math.max(0.001, p) * (1 + 0.04 * final) });
   reveal(c.word, t, t0 + 0.15, 0.5);
   reveal(c.tag, t, t0 + BEAT * 2, 0.5);
-  const u = E.outExpo(prog(t, bar(23), bar(23) + 0.6));
+  const u = E.outExpo(prog(t, bar(25), bar(25) + 0.6));
   put(c.url, { x: 150, y: 760 + (1 - u) * 50, o: u });
-  const q = E.outBack(prog(t, bar(23, 2), bar(23, 2) + 0.5));
+  const q = E.outBack(prog(t, bar(25, 2), bar(25, 2) + 0.5));
   put(c.qr, { x: 1410, y: 190 + (1 - q) * 60, s: Math.max(0.001, 0.9 + 0.1 * q), o: q > 0 ? 1 : 0 });
-  const g = E.outBack(prog(t, bar(24), bar(24) + 0.5));
+  const g = E.outBack(prog(t, bar(26), bar(26) + 0.5));
   put(c.play, { x: 1410, y: 640 + (1 - g) * 40, s: Math.max(0.001, 0.92 + 0.08 * g), o: g > 0 ? 1 : 0 });
-  const f = prog(t, bar(24, 2), bar(24, 2) + 0.6);
+  const f = prog(t, bar(26, 2), bar(26, 2) + 0.6);
   put(c.fine, { x: 150, y: 945, o: f });
 });
 
@@ -607,7 +608,7 @@ scene(bar(22), LENGTH, 'white', (r) => {
 // Cuts: two panels (green, then ink) sweep right to left, covering the old scene
 // exactly on the bar line and uncovering the new one, whose animation starts under them.
 const flash = el('div', 'flash'), black = el('div', 'black');
-const WIPES = [bar(6), bar(9), bar(12), bar(15), bar(19), bar(21)];
+const WIPES = [bar(6), bar(9), bar(12), bar(15), bar(20), bar(22)];
 const panels = [el('div', 'wipe'), el('div', 'wipe')];
 panels[0].style.background = 'var(--open)'; panels[1].style.background = 'var(--ink)';
 const HALF = 0.28;
@@ -634,7 +635,7 @@ window.renderAt = function (t) {
   // The silence before the drop, then a white flash on it.
   black.style.opacity = t > bar(4) - BEAT * 0.5 && t < bar(4) ? 1 : 0;
   const fl = t >= bar(4) ? Math.exp(-(t - bar(4)) * 7) : 0;
-  const fl2 = t >= bar(22) ? Math.exp(-(t - bar(22)) * 8) * 0.8 : 0;
+  const fl2 = t >= bar(24) ? Math.exp(-(t - bar(24)) * 8) * 0.8 : 0;
   flash.style.opacity = Math.max(fl, fl2);
 };
 

@@ -4,7 +4,8 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const fps = Number(process.argv[2] || 30), workers = Number(process.argv[4] || 6);
 const dir = require('path').resolve(__dirname, process.argv[3] || 'frames/draft');
-const LENGTH = 49.08, total = Math.ceil(LENGTH * fps);
+// The length the music was written to (music.py writes out/music.json before the render, in build.sh).
+const LENGTH = JSON.parse(fs.readFileSync(__dirname + '/out/music.json', 'utf8')).length, total = Math.ceil(LENGTH * fps);
 fs.mkdirSync(dir, { recursive: true });
 (async () => {
   const b = await chromium.launch();
