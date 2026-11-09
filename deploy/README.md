@@ -393,10 +393,12 @@ the signature covers both List-Unsubscribe headers, which Gmail and Yahoo requir
 
 When a receiving server refuses an email while Postfix is delivering it (the usual case), the bounce lands
 in `/var/mail/root` (`less /var/mail/root`). Bounces a provider sends back later, by email, are lost: the
-subdomain receives no mail. Postfix gives up on a message at the first failed try after it has been 3 hours
-in its queue (a day until 8 November 2026); tries are up to 67 minutes apart (`maximal_backoff_time`), so a
-message can wait about 4 hours. An older alert is useless, and the app drops alerts 3 hours after the dates
-opened, counted from before the message reached Postfix. Postfix keeps one connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
+subdomain receives no mail. Postfix gives up on a message at the first failed try after it has been 30
+minutes in its queue (a day until 8 November 2026, then 3 hours until 23:41 UTC that day). The gap between
+tries doubles from 5 minutes, so a message that keeps failing is usually dropped about 40 minutes after it
+was queued; the 5-minute queue scans and a busy queue can stretch that. This applies to every kind of
+mail, confirmations included. A later alert says dates are open that may have gone. Postfix keeps one
+connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
 recipients, so each is rotated daily and kept 3 days.
 
 ### When Gmail rate-limits the domain
@@ -411,13 +413,20 @@ growing, and Gmail lines with `status=deferred` far outnumbering `status=sent`.
 
 On 8 November 2026 the queue's alert emails older than 3 hours (1,532) were deleted with `postsuper -d`
 (picked by their `Feedback-ID: alert:pengepassportph` header), and the lifetime and connection settings
-above were applied by hand (`main.cf.bak-20261108T141804Z`). Google's advice for 4.7.28: stop sending for
+above were applied by hand (`main.cf.bak-20261108T141804Z`), with a 3-hour lifetime at first. That still let
+Gmail take alerts up to 4 hours after their check. Between 14:00 and 23:30 UTC, 1,453 alerts, 91 confirmations
+and 4 deletion emails to Gmail expired unsent (counted from the bounces in root's mailbox). At 23:41 UTC the
+lifetime went to 30 minutes (`main.cf.bak-20261108T234110Z`), the longest the owner wants an email alert to
+trail its check. The cost: while Gmail limits us, a confirmation sent to Gmail outside its window usually
+expires; one sent shortly before or during the window has a fair chance. Google's advice for 4.7.28: stop sending for
 at least 10 minutes, restart on one connection, raise volume only slowly; never move to another domain or
 IP to get around it. Google Postmaster Tools shows the domain's reputation and spam rate.
 
 `pp:mail:paused` (below) only stops the app handing new mail to Postfix: Postfix keeps trying what it
 already holds, and the owner's daily report is sent regardless. To stop all outgoing mail, hold it in
-Postfix's queue (a hold longer than 3 hours drops what was held):
+Postfix's queue. Held mail keeps ageing and may expire, but resuming (`postqueue -f`) can still deliver
+messages older than 30 minutes that have not expired yet; to drop stale alerts first, delete them (as on
+8 November, by their `Feedback-ID`):
 
 ```sh
 postconf -e "defer_transports = smtp" && postfix reload                  # hold
@@ -482,7 +491,7 @@ are gone within 14 days."), checked on 27 September 2026:
 | Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day the checker deletes every copy older than that, even when that day's upload fails; later only while R2 cannot be reached or the server is down (it retries every run) |
 | API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
 | Confirmation and unsubscribe links | Random tokens, stored only as a hash | Nothing to encrypt | Not an address |
-| Postfix, while sending | The message, with its recipient, waits in the queue until delivered, or until a try fails after it has been 3 hours in the queue: then it is dropped and a bounce goes to root's mailbox. Tries are up to 67 minutes apart (root and postfix only) | **No** | Usually within 4 hours; longer only while the server is down |
+| Postfix, while sending | The message, with its recipient, waits in the queue until delivered, or until a try fails after it has been 30 minutes in the queue: then it is dropped and a bounce goes to root's mailbox. The gap between tries doubles from 5 minutes (root and postfix only) | **No** | Usually within 45 minutes; longer while the queue is busy or the server is down |
 | Postfix's delivery log | One line per delivery, with the recipient (`/var/log/postfix/mail.log`, root only, rotated daily, 3 kept) | **No** | Within 4 days |
 | Root's mailbox | Bounces: the refused message and its recipient (`/var/mail/root`, 0600, rotated daily, 3 kept) | **No** | Within 4 days |
 | Server to the recipient's mail server | TLS when offered (`smtp_tls_security_level = may`), without checking the certificate. All 5 deliveries so far used TLS 1.3 | Usually | Not stored |

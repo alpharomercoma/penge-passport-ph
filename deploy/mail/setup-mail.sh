@@ -84,8 +84,8 @@ postconf -e \
   "milter_default_action = tempfail" \
   "smtp_tls_security_level = may" \
   "smtp_tls_loglevel = 1" \
-  "maximal_queue_lifetime = 3h" \
-  "bounce_queue_lifetime = 3h" \
+  "maximal_queue_lifetime = 30m" \
+  "bounce_queue_lifetime = 30m" \
   "default_destination_concurrency_limit = 4" \
   "smtp_destination_concurrency_limit = 1" \
   "smtpd_sender_restrictions = check_sender_access inline:{ alerts@$DOMAIN=OK }, reject" \
@@ -96,11 +96,13 @@ postconf -e \
 # Local processes other than the app cannot use this server as a relay: SMTP
 # from any sender but alerts@ is refused, the sendmail command is root's only,
 # and even the app is capped at 150 messages a minute.
-# Mail still undelivered at a failed try after 3 hours in the queue is dropped
-# (tries are up to maximal_backoff_time, 67 minutes, apart): the app drops
-# alerts that old too, and a late one only says dates are open that have gone. One
-# connection per receiving domain is what Gmail asks of a sender it rate-limits
-# (421 4.7.28), and enough for this volume everywhere else.
+# Mail still undelivered at a failed try after 30 minutes in the queue is dropped.
+# The gap between tries doubles from 5 minutes, so mail that keeps failing usually
+# goes about 40 minutes after it was queued (queue scans and a busy queue can
+# stretch that): a later alert says dates are open that may have gone. Postfix has one
+# lifetime for all mail, so confirmation and deletion emails get the same 30 minutes.
+# One connection per receiving domain is what Gmail asks of a sender it
+# rate-limits (421 4.7.28), and enough for this volume everywhere else.
 echo "$DOMAIN" >/etc/mailname
 
 # Delivery logs name recipients: keep them 3 days, in their own file, not the journal.
