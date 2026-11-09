@@ -393,12 +393,19 @@ the signature covers both List-Unsubscribe headers, which Gmail and Yahoo requir
 
 When a receiving server refuses an email while Postfix is delivering it (the usual case), the bounce lands
 in `/var/mail/root` (`less /var/mail/root`). Bounces a provider sends back later, by email, are lost: the
-subdomain receives no mail. Postfix gives up on a message at the first failed try after it has been 30
-minutes in its queue (a day until 8 November 2026, then 3 hours until 23:41 UTC that day). The gap between
-tries doubles from 5 minutes, so a message that keeps failing is usually dropped about 40 minutes after it
-was queued; the 5-minute queue scans and a busy queue can stretch that. This applies to every kind of
-mail, confirmations included. A later alert says dates are open that may have gone. Postfix keeps one
-connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
+subdomain receives no mail. Mail is deleted, without a bounce, once it has been queued 28 minutes:
+`penge-mail-expire.timer` runs every minute, and the same job runs before every start of Postfix, so a
+message not delivered by then goes about 28 to 29 minutes after it was queued, a minute short of the
+30-minute limit to allow for a slow run (`grep -c 'postsuper.*: removed' /var/log/postfix/mail.log`
+counts them). A delivery already under way when
+its message is deleted still finishes, normally within seconds. Postfix's own lifetime (30 minutes; a day
+until 8 November 2026, then 3 hours until 23:41 UTC that day) acts only at a failed try, and the gap between
+tries grows with the message's age (5 minutes to just over an hour), so before the job (10 November) a
+message refused before its 30 minutes could still go out at its next try: Gmail took 43 between 30 and 56
+minutes after they were queued on 9 November. If the job fails, that is again how stale mail goes. Queue
+IDs are long ones, which do not repeat while the clock runs forward, so deleting by ID does not hit a newer message. This applies to every
+kind of mail, confirmations included. A later alert says dates are open that may have gone. Postfix keeps
+one connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
 recipients, so each is rotated daily and kept 3 days.
 
 ### When Gmail rate-limits the domain
@@ -424,9 +431,9 @@ IP to get around it. Google Postmaster Tools shows the domain's reputation and s
 
 `pp:mail:paused` (below) only stops the app handing new mail to Postfix: Postfix keeps trying what it
 already holds, and the owner's daily report is sent regardless. To stop all outgoing mail, hold it in
-Postfix's queue. Held mail keeps ageing and may expire, but resuming (`postqueue -f`) can still deliver
-messages older than 30 minutes that have not expired yet; to drop stale alerts first, delete them (as on
-8 November, by their `Feedback-ID`):
+Postfix's queue. Held this way, mail keeps ageing and `penge-mail-expire` deletes it once it has been
+queued 28 minutes, like any other, so resuming (`postqueue -f`) sends only what was queued in about the
+last half hour. (Mail put on hold with `postsuper -h` is left alone.)
 
 ```sh
 postconf -e "defer_transports = smtp" && postfix reload                  # hold
@@ -491,7 +498,7 @@ are gone within 14 days."), checked on 27 September 2026:
 | Daily backups in R2 | The records exactly as stored | Yes | Within 14 days: each day the checker deletes every copy older than that, even when that day's upload fails; later only while R2 cannot be reached or the server is down (it retries every run) |
 | API and checker logs | No address: the code never logs one, and every line is scrubbed of anything shaped like one (tests check both) | Nothing to encrypt | Not stored |
 | Confirmation and unsubscribe links | Random tokens, stored only as a hash | Nothing to encrypt | Not an address |
-| Postfix, while sending | The message, with its recipient, waits in the queue until delivered, or until a try fails after it has been 30 minutes in the queue: then it is dropped and a bounce goes to root's mailbox. The gap between tries doubles from 5 minutes (root and postfix only) | **No** | Usually within 45 minutes; longer while the queue is busy or the server is down |
+| Postfix, while sending | The message, with its recipient, waits in the queue until delivered, or until it has been queued 28 minutes: then `penge-mail-expire` deletes it, within about a minute, with no bounce (a try that fails after 30 minutes also drops it, with a bounce to root's mailbox) (root and postfix only) | **No** | Within about 30 minutes; longer while the server is stopped (the job runs before Postfix starts) or if the job fails (then at the first failed try after 30 minutes). Mail put on hold by hand (`postsuper -h`) is never deleted by the job and stays until someone releases or deletes it |
 | Postfix's delivery log | One line per delivery, with the recipient (`/var/log/postfix/mail.log`, root only, rotated daily, 3 kept) | **No** | Within 4 days |
 | Root's mailbox | Bounces: the refused message and its recipient (`/var/mail/root`, 0600, rotated daily, 3 kept) | **No** | Within 4 days |
 | Server to the recipient's mail server | TLS when offered (`smtp_tls_security_level = may`), without checking the certificate. All 5 deliveries so far used TLS 1.3 | Usually | Not stored |

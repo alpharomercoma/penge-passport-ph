@@ -29,13 +29,14 @@ fi
 KEYDIR=/etc/opendkim/keys/$DOMAIN
 
 have_systemd() { [[ -d /run/systemd/system ]]; }
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 echo "== packages"
 export DEBIAN_FRONTEND=noninteractive
 debconf-set-selections <<<"postfix postfix/main_mailer_type select Internet Site"
 debconf-set-selections <<<"postfix postfix/mailname string $DOMAIN"
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends postfix opendkim opendkim-tools openssl ca-certificates >/dev/null
+apt-get install -y -qq --no-install-recommends postfix opendkim opendkim-tools openssl ca-certificates python3 >/dev/null
 
 echo "== DKIM key ($SELECTOR._domainkey.$DOMAIN)"
 install -d -o opendkim -g opendkim -m 0750 "$KEYDIR"
@@ -88,6 +89,7 @@ postconf -e \
   "bounce_queue_lifetime = 30m" \
   "default_destination_concurrency_limit = 4" \
   "smtp_destination_concurrency_limit = 1" \
+  "enable_long_queue_ids = yes" \
   "smtpd_sender_restrictions = check_sender_access inline:{ alerts@$DOMAIN=OK }, reject" \
   "authorized_submit_users = root" \
   "smtpd_client_event_limit_exceptions =" \
@@ -96,11 +98,14 @@ postconf -e \
 # Local processes other than the app cannot use this server as a relay: SMTP
 # from any sender but alerts@ is refused, the sendmail command is root's only,
 # and even the app is capped at 150 messages a minute.
-# Mail still undelivered at a failed try after 30 minutes in the queue is dropped.
-# The gap between tries doubles from 5 minutes, so mail that keeps failing usually
-# goes about 40 minutes after it was queued (queue scans and a busy queue can
-# stretch that): a later alert says dates are open that may have gone. Postfix has one
-# lifetime for all mail, so confirmation and deletion emails get the same 30 minutes.
+# Mail queued 28 minutes or more is deleted (penge-mail-expire, below): every
+# minute, and before Postfix starts. Postfix's own lifetime acts only at a failed
+# try, and the gap between tries grows with the message's age, so a message
+# refused early could otherwise go out much later; if the job fails, the lifetime
+# still drops mail at its next failed try. A later alert says dates are open that
+# may have gone. It applies to all mail, so confirmation and deletion emails get
+# the same 30 minutes. Long queue IDs do not repeat while the clock runs forward,
+# so the job deleting by ID does not hit a newer message.
 # One connection per receiving domain is what Gmail asks of a sender it
 # rate-limits (421 4.7.28), and enough for this volume everywhere else.
 echo "$DOMAIN" >/etc/mailname
@@ -140,9 +145,43 @@ postmap /etc/postfix/virtual
 postconf -e "virtual_alias_maps = hash:/etc/postfix/virtual"
 
 if have_systemd; then
+  # Every minute, and before every start of Postfix (at boot, or after it was
+  # stopped), so it cannot first deliver what went stale meanwhile. 1680 s is 28
+  # minutes: a message is deleted before it is 29 minutes old, which leaves the
+  # 30-minute limit a minute for a slow run. A failed run does not stop Postfix
+  # starting ("-"); "+" is as for `postfix check`. The timer starts only after
+  # Postfix has restarted with long queue IDs.
+  install -o root -g root -m 0755 "$HERE/expire-mail.sh" /usr/local/bin/penge-mail-expire
+  install -d -m 0755 /etc/systemd/system/postfix.service.d
+  cat >/etc/systemd/system/postfix.service.d/penge-mail-expire.conf <<'UNIT'
+[Service]
+ExecStartPre=-+/usr/local/bin/penge-mail-expire 1680
+UNIT
+  cat >/etc/systemd/system/penge-mail-expire.service <<'UNIT'
+[Unit]
+Description=Delete mail queued 28 minutes or more
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/penge-mail-expire 1680
+TimeoutStartSec=50s
+UNIT
+  cat >/etc/systemd/system/penge-mail-expire.timer <<'UNIT'
+[Unit]
+Description=Delete stale queued mail every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
   systemctl enable --now opendkim postfix >/dev/null 2>&1
   systemctl restart opendkim
   systemctl restart postfix
+  systemctl enable -q --now penge-mail-expire.timer
 else
   # Containers in tests: no systemd.
   install -d -o opendkim -g opendkim /run/opendkim
