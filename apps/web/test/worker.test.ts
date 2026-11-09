@@ -10,7 +10,7 @@ const SCOPE = 'https://penge.example/pengepassportph/';
 const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: `B${'A'.repeat(86)}`, auth: 'A'.repeat(22) } };
 
 /** The built worker in a fake `self`, with a fake server for /api/device-alerts. */
-function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; pages?: { url: string; controlled: boolean; visible?: boolean }[]; onShow?: (title: string) => Promise<void>; getNotificationsFails?: boolean; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void> } = {}) {
+function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; navigateHangs?: boolean; pages?: { url: string; controlled: boolean; visible?: boolean }[]; onShow?: (title: string) => Promise<void>; getNotificationsFails?: boolean; mineFingerprint?: string; beforeMine?: () => Promise<void>; readyFails?: number; onReady?: (n: number) => Promise<void>; noLocks?: boolean; beforeShow?: (title: string) => Promise<void>; getNotificationsHangs?: boolean } = {}) {
   const listeners: Record<string, ((e: any) => void)[]> = {};
   const shown: { title: string; body: string; tag?: string | undefined }[] = [];
   // What the device shows now: a notification replaces the one with its tag, as browsers do.
@@ -30,18 +30,21 @@ function worker(o: { answers?: Record<string, unknown>[]; showFails?: boolean; n
       scope: SCOPE,
       showNotification: vi.fn(async (title: string, opts: { body: string; tag?: string; data?: unknown }) => {
         if (o.showFails) throw new TypeError('no permission');
+        // A display still on its way: not yet listed by getNotifications.
+        await o.beforeShow?.(title);
         shown.push({ title, body: opts.body, tag: opts.tag });
         live.set(opts.tag ?? `untagged-${shown.length}`, { title, data: opts.data ?? null });
         await o.onShow?.(title);
       }),
       getNotifications: async (f?: { tag?: string }) => {
         if (o.getNotificationsFails) throw new TypeError('getNotifications failed');
+        if (o.getNotificationsHangs) return new Promise<never>(() => {});
         return [...live].filter(([tag]) => !f?.tag || tag === f.tag).map(([tag, n]) => ({ title: n.title, tag, data: n.data, close: () => (live.get(tag) === n && live.delete(tag), closed.push(n.title)) }));
       },
       pushManager: { getSubscription: async () => ({ toJSON: () => sub }) },
     },
     location: new URL(`${SCOPE}sw.js`),
-    navigator: { locks },
+    navigator: { locks: o.noLocks ? undefined : locks },
     indexedDB,
     crypto: webcrypto,
     addEventListener: (t: string, f: (e: any) => void) => (listeners[t] ??= []).push(f),
@@ -366,6 +369,185 @@ describe('the worker and the ready check', () => {
   it('still shows alert pushes as before', async () => {
     const w = worker();
     await w.fire('push', { data: { json: () => ({ v: 1, title: 'Dates open at Antipolo', body: 'Fri 9 Oct · for 1 person · Checked 10:42', tag: 'alert-x', url: { office: 486 } }) } });
-    expect(w.shown).toEqual([{ title: 'Dates open at Antipolo', body: 'Fri 9 Oct · for 1 person · Checked 10:42', tag: 'alert-x' }]);
+    expect(w.shown).toEqual([{ title: 'Dates open at Antipolo', body: 'Fri 9 Oct · for 1 person · Checked 10:42', tag: expect.stringMatching(/^alert-x~./) }]);
+  });
+});
+
+describe('one alert notification at a time', () => {
+  const alertPush = (tag: string, title: string) => ({ data: { json: () => ({ v: 1, title, body: 'Fri 9 Oct · for 1 person · Checked 10:42', tag, url: { office: 486, date: '2026-10-09', people: 1 } }) } });
+  // Each display's tag is the push's own plus a suffix of its own (~…): the push's part is what the tests compare.
+  const tags = async (w: ReturnType<typeof worker>) => (await w.self.registration.getNotifications()).map((n) => n.tag.replace(/~.*$/, ''));
+  const titles = async (w: ReturnType<typeof worker>) => (await w.self.registration.getNotifications()).map((n) => n.title);
+
+  it('closes the alert notifications shown before it, an older worker\'s too, as soon as it shows', async () => {
+    const w = worker();
+    // An older worker's alert: its data is the office alone, with no time it was shown.
+    await w.self.registration.showNotification('Dates open at Quezon City', { body: 'Checked 22:14', tag: 'alert-r1-a', data: { office: 1 } });
+    await w.fire('push', alertPush('alert-r2-a', 'Dates open at Antipolo'));
+    await w.fire('push', alertPush('alert-r3-a', 'Dates open at Manila'));
+    expect(w.shown.map((s) => s.title)).toEqual(['Dates open at Quezon City', 'Dates open at Antipolo', 'Dates open at Manila']);
+    expect(w.closed).toEqual(['Dates open at Quezon City', 'Dates open at Antipolo']);
+    expect(await tags(w)).toEqual(['alert-r3-a']);
+  });
+
+  it('keeps what a tap opens: the office, date and people', async () => {
+    const w = worker();
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    const [n] = await w.self.registration.getNotifications();
+    expect(n!.data).toEqual(expect.objectContaining({ office: 486, date: '2026-10-09', people: 1 }));
+  });
+
+  it('leaves one alert when two are handled at once and the first is slow to show', async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const w = worker({ beforeShow: (title) => (title === 'Dates open at Antipolo' ? slow : Promise.resolve()) });
+    const first = w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    const second = w.fire('push', alertPush('alert-r1-b', 'Dates open at Manila'));
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await Promise.all([first, second]);
+    expect(w.shown.map((s) => s.title)).toEqual(['Dates open at Antipolo', 'Dates open at Manila']);
+    expect(await tags(w)).toEqual(['alert-r1-b']);
+  });
+
+  it('closes alerts a restarted worker or a clock set back would number above its own', async () => {
+    const w = worker();
+    // Shown while the clock was an hour ahead (or by a worker that has since restarted).
+    await w.self.registration.showNotification('Dates open at Quezon City', { body: 'Checked 22:14', tag: 'alert-r0-a', data: { office: 1, shownAt: Date.now() + 3_600_000 } });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    expect(w.closed).toEqual(['Dates open at Quezon City']);
+    await w.fire('push', alertPush('alert-r2-a', 'Dates open at Manila'));
+    expect(w.closed).toEqual(['Dates open at Quezon City', 'Dates open at Antipolo']);
+    expect(await tags(w)).toEqual(['alert-r2-a']);
+  });
+
+  it('closes its own alert when another worker showed a newer one while it was showing', async () => {
+    let w!: ReturnType<typeof worker>;
+    w = worker({
+      beforeShow: async (title) => {
+        if (title !== 'Dates open at Antipolo') return;
+        await w.self.registration.showNotification('Dates open at Manila', { body: 'newer', tag: 'alert-r2-a', data: { office: 2, shownAt: Date.now() + 60_000 } });
+      },
+    });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    expect(w.closed).toEqual(['Dates open at Antipolo']);
+    expect(await tags(w)).toEqual(['alert-r2-a']);
+  });
+
+  it('never closes a newer alert shown under its own tag before its clean-up ran', async () => {
+    let w!: ReturnType<typeof worker>;
+    w = worker({
+      onShow: async (title) => {
+        if (title !== 'Dates open at Antipolo') return;
+        // Before this alert's clean-up: a newer alert, then a newer one again under this alert's tag (the same push
+        // delivered twice), which replaces it.
+        await w.self.registration.showNotification('Dates open at Manila', { body: 'newer', tag: 'alert-r2-a', data: { office: 2, shownAt: Date.now() + 60_000 } });
+        await w.self.registration.showNotification('Dates open at Cebu', { body: 'newest', tag: 'alert-r1-a', data: { office: 3, shownAt: Date.now() + 120_000 } });
+      },
+    });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    expect(w.closed).toEqual(['Dates open at Antipolo']);
+    expect(await titles(w)).toEqual(['Dates open at Manila', 'Dates open at Cebu']);
+  });
+
+  it('never lets a late display replace a newer alert of the same push (delivered twice)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let release!: () => void;
+      const late = new Promise<void>((r) => (release = r));
+      const w = worker({ beforeShow: (title) => (title === 'Dates open at Antipolo' ? late : Promise.resolve()) });
+      const first = w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+      await settled(w.fire('push', alertPush('alert-r2-a', 'Dates open at Manila')));
+      await settled(w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo (again)')));
+      release();
+      await settled(first);
+      expect(await titles(w)).toEqual(['Dates open at Antipolo (again)']);
+      expect(w.closed).toEqual(['Dates open at Manila', 'Dates open at Antipolo']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the next alert even when a display never finishes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const w = worker({ beforeShow: (title) => (title === 'Dates open at Antipolo' ? new Promise<void>(() => {}) : Promise.resolve()) });
+      void w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+      await settled(w.fire('push', alertPush('alert-r1-b', 'Dates open at Manila')));
+      expect(w.shown.map((s) => s.title)).toEqual(['Dates open at Manila']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes an alert whose display finished only after a newer one showed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let release!: () => void;
+      const late = new Promise<void>((r) => (release = r));
+      const w = worker({ beforeShow: (title) => (title === 'Dates open at Antipolo' ? late : Promise.resolve()) });
+      const first = w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+      await settled(w.fire('push', alertPush('alert-r1-b', 'Dates open at Manila')));
+      release();
+      await settled(first);
+      expect(w.closed).toEqual(['Dates open at Antipolo']);
+      expect(await tags(w)).toEqual(['alert-r1-b']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still shows alerts when the notifications list never answers', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const w = worker({ getNotificationsHangs: true });
+      await settled(w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo')));
+      await settled(w.fire('push', alertPush('alert-r1-b', 'Dates open at Manila')));
+      expect(w.shown.map((s) => s.title)).toEqual(['Dates open at Antipolo', 'Dates open at Manila']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the one before it even within the same millisecond', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-09T02:05:00Z') });
+    try {
+      const w = worker();
+      await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+      await w.fire('push', alertPush('alert-r1-b', 'Dates open at Manila'));
+      expect(w.closed).toEqual(['Dates open at Antipolo']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the setup notifications alone', async () => {
+    const w = worker();
+    await w.self.registration.showNotification('Notifications are on', { body: "We'll tell you when dates open at Antipolo.", tag: 'setup-op1', data: {} });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    expect(w.closed).toEqual([]);
+    expect(await tags(w)).toEqual(['setup-op1', 'alert-r1-a']);
+  });
+
+  it('treats an unreadable push as an alert: shown, and the alerts before it go', async () => {
+    const w = worker();
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    await w.fire('push', { data: { json: () => { throw new Error('bad'); } } });
+    expect(w.shown.at(-1)!.title).toBe('New dates are open');
+    expect(w.closed).toEqual(['Dates open at Antipolo']);
+  });
+
+  it('shows a setup push that reaches it (no Web Locks) under its own tag, closing nothing', async () => {
+    const w = worker({ noLocks: true });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    await w.fire('push', setupPush('op1'));
+    expect(w.shown.at(-1)).toEqual({ title: 'Turning on notifications', body: 'Antipolo', tag: 'setup-op1' });
+    expect(w.closed).toEqual([]);
+  });
+
+  it('still shows the alert when the notifications cannot be listed', async () => {
+    const w = worker({ getNotificationsFails: true });
+    await w.fire('push', alertPush('alert-r1-a', 'Dates open at Antipolo'));
+    expect(w.shown.map((s) => s.title)).toEqual(['Dates open at Antipolo']);
   });
 });

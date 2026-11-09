@@ -265,14 +265,80 @@ self.addEventListener('push', (event) => {
   }
   // Never silent: a push that shows nothing loses the permission in Chrome.
   const title = ok && typeof data.title === 'string' ? data.title : 'New dates are open';
+  const url = ok && data.url && typeof data.url === 'object' ? data.url : {};
   const options = {
     body: ok && typeof data.body === 'string' ? data.body : 'Open PengePassportPH to see them.',
-    data: ok && data.url && typeof data.url === 'object' ? data.url : null,
+    // What a tap opens (office, date, people); showAlert adds when it was shown.
+    data: { ...url },
+    // An unreadable push is an alert too. A setup push reaches here only where the browser lacks what setup needs, and
+    // keeps its own tag: it is shown, and closes nothing.
+    tag: ok && typeof data.tag === 'string' ? data.tag : `${ALERT_TAG}u${Date.now()}-${++unreadable}`,
     ...ICONS,
   };
-  if (ok && typeof data.tag === 'string') options.tag = data.tag;
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(options.tag.startsWith(ALERT_TAG) ? showAlert(title, options) : self.registration.showNotification(title, options));
 });
+
+// One alert notification at a time, normally. Each alert says when its dates were checked, and nothing tells the device
+// when they are gone, so a night's alerts left in the tray read as dates open 8–12 hours ago by morning. Each new one
+// is shown as a new notification, as before (the device's own settings still decide whether it sounds), then the alert
+// notifications shown before it are closed, an older worker's (no shownAt) too. Setup notifications are left alone.
+const ALERT_TAG = 'alert-';
+let unreadable = 0;
+// One alert at a time in this worker: the next waits until this one is shown and its clean-up done, or ALERT_WAIT_MS
+// at most, so a browser call that never settles holds up no later alert.
+const ALERT_WAIT_MS = 10_000;
+const LIST_WAIT_MS = 5_000;
+let alertsDone = Promise.resolve();
+let lastShownAt = 0;
+const alertAt = (n) => (typeof n.data?.shownAt === 'number' && Number.isFinite(n.data.shownAt) ? n.data.shownAt : 0);
+const isAlert = (n) => typeof n.tag === 'string' && n.tag.startsWith(ALERT_TAG);
+const suffix = () => self.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
+/** `p`, or a rejection once `ms` have passed without it settling (it may still settle later, unwatched). */
+const within = (p, ms) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out')), ms);
+    Promise.resolve(p).then(
+      (v) => (clearTimeout(timer), resolve(v)),
+      (e) => (clearTimeout(timer), reject(e)),
+    );
+  });
+
+function showAlert(title, options) {
+  const before = alertsDone;
+  const run = within(before, ALERT_WAIT_MS)
+    .catch(() => undefined)
+    .then(() => showAlertNow(title, options));
+  alertsDone = run.catch(() => undefined);
+  return run;
+}
+
+async function showAlertNow(title, options) {
+  // Numbered above every alert showing, so it is the newest whatever the clock did or whichever worker showed them
+  // (a restarted worker starts its count again). A list that fails leaves the clock and this worker's count.
+  let newest = 0;
+  try {
+    for (const n of await within(self.registration.getNotifications(), LIST_WAIT_MS)) if (isAlert(n)) newest = Math.max(newest, alertAt(n));
+  } catch {
+    // Numbered by the clock alone.
+  }
+  const shownAt = (lastShownAt = Math.max(Date.now(), lastShownAt + 1, newest + 1));
+  options.data.shownAt = shownAt;
+  // A tag of its own for each display (the push's, then ~ and a suffix): a display that finishes late never replaces
+  // a newer one, as it would under a shared tag (the same push delivered twice). The numbers alone decide which stays.
+  options.tag = `${options.tag}~${shownAt}-${suffix()}`;
+  await self.registration.showNotification(title, options);
+  // Then only the newest alert stays: those numbered below this one close, and so does this one if a newer one is
+  // already showing (its display finished late, or another worker showed one meanwhile).
+  // Best effort: a list or close that fails leaves them showing, and never takes back the one just shown on its own.
+  try {
+    const alerts = (await within(self.registration.getNotifications(), LIST_WAIT_MS)).filter(isAlert);
+    const mine = (n) => n.tag === options.tag;
+    const newer = alerts.some((n) => !mine(n) && alertAt(n) > shownAt);
+    for (const n of alerts) if (mine(n) ? newer : alertAt(n) < shownAt) n.close();
+  } catch {
+    // Left showing.
+  }
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

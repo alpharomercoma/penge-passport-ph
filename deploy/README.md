@@ -582,6 +582,15 @@ cannot show notifications. An alert lasts 180
 days after the last opening that reached us (each opening of the site renews it), until it is turned off,
 or until the push service says the subscription is gone.
 
+A device normally keeps one alert notification at a time: each new alert closes the alert notifications
+shown before it (the service worker does this, since the release of 9 November 2026), so a night's alerts no
+longer pile up in the tray, each still saying its dates were open when checked hours ago. It is best effort:
+if the browser cannot list or close notifications, the earlier ones stay. The one left still says when its
+dates were checked, and stays until the person dismisses it or the next alert arrives. A device gets this
+worker when the site or app is next opened with a connection; a push may also make the browser look for it,
+when the browser decides. The notifications already in the tray normally go with the first alert the new
+worker shows.
+
 Set in `/etc/penge/server.env`, then `systemctl restart penge-api` (a checker run reads it when it starts,
 so a run already going keeps its mode):
 

@@ -251,7 +251,7 @@ describe('service worker', () => {
   it('shows a notification for every push, even an unreadable one', async () => {
     const w = worker();
     await w.fire('push', { data: { json: () => ({ v: 1, title: 'Dates open at Antipolo', body: 'Fri 9 Oct · for 1 person', tag: 'alert-d1', url: { office: 486, date: '2026-10-09', people: 1 } }) } });
-    expect(w.self.registration.showNotification).toHaveBeenCalledWith('Dates open at Antipolo', expect.objectContaining({ body: 'Fri 9 Oct · for 1 person', tag: 'alert-d1' }));
+    expect(w.self.registration.showNotification).toHaveBeenCalledWith('Dates open at Antipolo', expect.objectContaining({ body: 'Fri 9 Oct · for 1 person', tag: expect.stringMatching(/^alert-d1~./) }));
     await w.fire('push', { data: { json: () => { throw new Error('bad'); } } });
     expect(w.self.registration.showNotification).toHaveBeenLastCalledWith('New dates are open', expect.objectContaining({ body: expect.any(String) }));
   });

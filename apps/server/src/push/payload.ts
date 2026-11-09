@@ -1,5 +1,7 @@
-// What a push alert says. One notification per decision, like one email, and
-// under 3 KB so every push service takes it (their limit is 4 KB).
+// What a push alert says. One push per decision, like one email, and under 3 KB
+// so every push service takes it (their limit is 4 KB). The device normally keeps
+// only the newest alert notification (apps/web/src/sw.js closes the ones before
+// it, best effort).
 import { formatDate, shortName } from '@penge/contracts';
 import type { Opening } from '../templates.ts';
 
