@@ -279,6 +279,119 @@ describe('checker', () => {
     expect(report.delivery).toMatchObject({ sent: 1, remaining: 0, held: 1, stoppedBy: 'daily limit' });
   });
 
+  it('holds alerts to Gmail past the Gmail limit, emails everyone else, and sends the rest as the day releases it', async () => {
+    const w = await world({ gmailDailyLimit: 4 });
+    w.t.advance(14 * 3600_000); // 16:00 UTC: 3 of the 4 may have gone by the next check, the 4th from 18:10
+    for (const n of [1, 2, 3, 4]) await w.subscribe(`g${n}@gmail.com`, [486]);
+    await w.subscribe('cy@example.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    const report = await w.run();
+    expect(report.delivery).toMatchObject({ sent: 4, held: 1, remaining: 0, stoppedBy: null });
+    const to = w.mailer.sent.map((m) => m.to);
+    expect(to.filter((a) => a.endsWith('@gmail.com'))).toHaveLength(3);
+    expect(to).toContain('cy@example.com');
+    // One person waits, counted once though the same check considered them twice.
+    expect(w.lines.filter((l) => l.includes('Gmail limit'))).toEqual([expect.stringContaining('"waiting":1')]);
+    for (let i = 0; i < 12; i++) expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 1 }); // to 18:10
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 0 }); // 18:20
+    expect(new Set(w.mailer.sent.map((m) => m.to)).size).toBe(5);
+  });
+
+  it('sends a waiting Gmail alert once Gmail\'s day turns over, its dates still open', async () => {
+    const w = await world({ gmailDailyLimit: 4 });
+    w.t.advance(23 * 3600_000 + 40 * 60_000); // 01:40 UTC, half an hour before Gmail's day ends
+    for (const n of [1, 2, 3, 4, 5, 6]) await w.subscribe(`g${n}@gmail.com`, [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 4, held: 2 }); // 01:50
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 2 }); // 02:00
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 1 }); // 02:10: a new day, 1 of 4 at once
+    expect(new Set(w.mailer.sent.map((m) => m.to)).size).toBe(5);
+  });
+
+  it('gives a freed place to the freshest waiting alert', async () => {
+    const w = await world({ gmailDailyLimit: 1 });
+    w.t.advance(14 * 3600_000);
+    await w.subscribe('older@gmail.com', [693]);
+    await w.subscribe('newer@gmail.com', [486]);
+    await w.run();
+    const day = '2026-09-27';
+    await w.kv.set(K.gmailSentToday(day), '1'); // the day's one place is taken
+    w.upstream.open.set('693', ['2026-10-05']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 1 });
+    w.upstream.open.set('486', ['2026-10-06']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, held: 2 });
+    await w.kv.set(K.gmailSentToday(day), '0'); // one place again
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, held: 1 });
+    expect(w.mailer.sent.map((m) => m.to)).toEqual(['newer@gmail.com']);
+  });
+
+  it('still gives it to the freshest when the wall clock was set back in between', async () => {
+    let up = 1_000_000;
+    const w = await world({ gmailDailyLimit: 1, uptime: () => ({ boot: 'boot-1', up }) });
+    const tick = async () => {
+      const r = await w.run();
+      up += 10 * 60_000;
+      return r;
+    };
+    w.t.advance(14 * 3600_000);
+    await w.subscribe('older@gmail.com', [693]);
+    await w.subscribe('newer@gmail.com', [486]);
+    await tick();
+    await w.kv.set(K.gmailSentToday('2026-09-27'), '1');
+    w.upstream.open.set('693', ['2026-10-05']);
+    expect((await tick()).delivery).toMatchObject({ sent: 0, held: 1 });
+    w.t.advance(-30 * 60_000); // the wall clock is corrected backwards: the next finding looks older by it
+    w.upstream.open.set('486', ['2026-10-06']);
+    expect((await tick()).delivery).toMatchObject({ sent: 0, held: 2 });
+    await w.kv.set(K.gmailSentToday('2026-09-27'), '0');
+    expect((await tick()).delivery).toMatchObject({ sent: 1, held: 1 });
+    expect(w.mailer.sent.map((m) => m.to)).toEqual(['newer@gmail.com']);
+  });
+
+  it('keeps the Gmail place of an alert that may or may not have gone out', async () => {
+    const w = await world({ gmailDailyLimit: 4 });
+    w.t.advance(20 * 3600_000);
+    await w.subscribe('g1@gmail.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    w.mailer.uncertainNext = 1;
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, failed: 1 });
+    expect(await w.kv.get(K.gmailSentToday('2026-09-27'))).toBe('1');
+  });
+
+  it('gives the Gmail allowance back when the mail server refuses the alert', async () => {
+    const w = await world({ gmailDailyLimit: 4 });
+    w.t.advance(20 * 3600_000);
+    await w.subscribe('g1@gmail.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    w.mailer.failNext = 1;
+    // Refused, then sent when the same check comes to what is waiting: charged once, not twice.
+    expect((await w.run()).delivery).toMatchObject({ sent: 1, failed: 1, held: 0 });
+    expect(await w.kv.get(K.gmailSentToday('2026-09-27'))).toBe('1');
+  });
+
+  it('does not charge the Gmail allowance for an alert the daily email limit stops', async () => {
+    const w = await world({ gmailDailyLimit: 4, mailDailyLimit: 0 });
+    w.t.advance(20 * 3600_000);
+    await w.subscribe('g1@gmail.com', [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 0, stoppedBy: 'daily limit' });
+    expect(await w.kv.get(K.gmailSentToday('2026-09-27'))).toBe('0');
+  });
+
+  it('counts nothing and holds nothing for Gmail without a Gmail limit', async () => {
+    const w = await world();
+    for (const n of [1, 2, 3, 4, 5]) await w.subscribe(`g${n}@gmail.com`, [486]);
+    await w.run();
+    w.upstream.open.set('486', ['2026-10-05']);
+    expect((await w.run()).delivery).toMatchObject({ sent: 5, held: 0 });
+    expect(await w.kv.get(K.gmailSentToday('2026-09-26'))).toBeNull();
+  });
+
   it('drops alerts that waited too long', async () => {
     const w = await world();
     await w.subscribe('ana@example.com', [486]);

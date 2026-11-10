@@ -48,6 +48,8 @@ export const K = {
   /** Set once the day's subscriber backup is in R2. */
   backupDone: (day: string) => `${P}backup:${day}`,
   mailSentToday: (day: string) => `${P}mail:sent:${day}`,
+  /** Alerts sent to Gmail addresses in one of Gmail's days (gmail-limit.ts). */
+  gmailSentToday: (gmailDay: string) => `${P}mail:gmail:${gmailDay}`,
   /** The site-wide daily limit the day's runs enforced, for the day's report. */
   mailLimit: (day: string) => `${P}mail:limit:${day}`,
   alertsToday: (subscriberId: string, day: string) => `${P}alerts:${subscriberId}:${day}`,

@@ -446,6 +446,43 @@ share of tries refused with 4.7.28, and per message handed over, how many were d
 deleted, or still queued. Reuse alone, or faster deliveries alone, is not success; more mail delivered in
 time without more refusals is. To undo: `postconf -e "smtp_tls_connection_reuse = no" && postfix reload`.
 
+**The cause, and the limit that answers it.** Gmail takes about the same number of our messages in each of
+its days, then refuses nearly every one until the day turns over, which it did a little after 02:00 UTC
+(10 AM Manila) on each day watched: 2,124, 2,282 and 2,343 on 6 to 8 November, all within the first hour
+because a backlog was waiting, and about 2,450 on 9 November, spread from 02:05 to about 18:30 UTC with
+almost no refusals, after which it refused nearly everything until the next morning. Google documents a
+quota per sending domain, not its size or when it resets: both are read from these four days, and are to be
+watched. The app was handing Postfix some 3,400 Gmail alerts a day (7,300 messages in all on 6 November),
+so every day ended in hours of refusals, each retried, which is the opposite of what Google asks of a
+limited sender.
+
+`GMAIL_DAILY_LIMIT` (`apps/server/src/gmail-limit.ts`; 2,200 on the server) keeps the app under that: the
+checker counts the alerts it sends to `gmail.com` and `googlemail.com` addresses in Gmail's day (from 02:10
+UTC) and stops at the limit. A quarter of the limit is available when the day starts and the rest is
+released evenly, so the last hours are not left with nothing. An alert that would pass it waits, uncharged,
+like one held for a person's pace: it goes at a later check if its dates are still open and under 3 hours
+old, new findings before waiting ones and the freshest waiting ones first. Other providers, confirmation
+emails and notifications are not limited by it. Two things follow from releasing it this way. Places not
+used in quiet hours stay available, so a busy check can send several hundred to Gmail at once (Postfix
+still delivers them one at a time). And a large batch found early in Gmail's day cannot all go: what the
+day has not yet released in its 3 hours is dropped, even if nothing else comes later. The log says
+`Gmail limit reached for now` with how many people waited, and `check finished` shows `gmailLimit`.
+
+Turning it on or changing it (the checker reads `/etc/penge/server.env` at every run; no restart): the
+count starts at zero, so when turned on part-way through Gmail's day, first set the count to what Gmail was
+already handed since 02:10 UTC, or turn it on just after 02:10 UTC:
+
+```sh
+day=$(date -u -d '-130 minutes' +%F)        # Gmail's day, named by the UTC date it began on
+redis-cli -u "$REDIS_URL" SET "pp:mail:gmail:$day" <alerts already sent to Gmail> EX 172800
+```
+
+Raise the limit slowly, and only while Gmail refuses nothing (`grep -c 4.7.28 /var/log/postfix/mail.log`)
+and the limit is being reached: Google's advice is to increase volume gradually, and a jump is what
+preceded this (alerts went from under 2,500 a day to 4,813 on 3 November). Lower it if refusals return
+before the day is out. Confirmation and deletion emails to Gmail come out of the same allowance at Gmail's
+end, which is why the limit sits a few hundred below what Gmail has taken.
+
 `pp:mail:paused` (below) only stops the app handing new mail to Postfix: Postfix keeps trying what it
 already holds, and the owner's daily report is sent regardless. To stop all outgoing mail, hold it in
 Postfix's queue. Held this way, mail keeps ageing and `penge-mail-expire` deletes it once it has been

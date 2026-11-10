@@ -71,11 +71,12 @@ try {
       return l ? { deviceLimits: l.limits } : {};
     })),
     alertsPerSubscriberPerDay: config.alertsPerSubscriberPerDay,
+    gmailDailyLimit: config.gmailDailyLimit,
     client: `${NAME}@${VERSION}`,
     stats: createStats(kv, log),
     statsEmail: config.statsEmail,
   });
-  log.info('check finished', { ...report, mail: config.mailMode, mailLimit });
+  log.info('check finished', { ...report, mail: config.mailMode, mailLimit, gmailLimit: config.gmailDailyLimit });
   process.exitCode = report.skipped || report.healthy ? 0 : 3;
 } catch (err) {
   log.error('check crashed', { err: err as Error });

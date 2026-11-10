@@ -37,6 +37,8 @@ export interface Config {
    * below their pace (one an hour, 24 a day; or one per check, 288 a day).
    */
   alertsPerSubscriberPerDay: number;
+  /** The most alerts a day to Gmail addresses (gmail-limit.ts); null: no such limit. */
+  gmailDailyLimit: number | null;
   /** Who gets the daily numbers by email (stats.ts); without it they only go to R2. */
   statsEmail: string | null;
   /** Where the rate limiter keeps its shared state. */
@@ -228,6 +230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     mailDailyLimit: int('MAIL_DAILY_LIMIT', 2500, 0, 100_000),
     mailDailyLimitPerSubscriber: env.MAIL_DAILY_LIMIT_PER_SUBSCRIBER?.trim() ? int('MAIL_DAILY_LIMIT_PER_SUBSCRIBER', 0, 1, 1000) : null,
     alertsPerSubscriberPerDay: int('ALERTS_PER_SUBSCRIBER_PER_DAY', 288, 1, 1000),
+    gmailDailyLimit: env.GMAIL_DAILY_LIMIT?.trim() ? int('GMAIL_DAILY_LIMIT', 0, 0, 100_000) : null,
     statsEmail,
     stateDir: env.STATE_DIR?.trim() || '/var/lib/penge/limiter',
     spoolDir: env.SPOOL_DIR?.trim() || '/var/lib/penge/spool',

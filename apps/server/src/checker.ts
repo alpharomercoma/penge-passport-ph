@@ -50,6 +50,7 @@ import type { Transport } from './devices/transport.ts';
 import { PACE_SPACING_MS } from './pace.ts';
 import { heldPairs } from './devices/scripts-delivery.ts';
 import { exportSubscribers } from './backup.ts';
+import { gmailAllowance, gmailDay, isGmail } from './gmail-limit.ts';
 import { K, manilaDay } from './keys.ts';
 import type { Kv, WriteOp } from './kv.ts';
 import type { Logger } from './log.ts';
@@ -88,6 +89,8 @@ export interface CheckDeps {
   log: Logger;
   publicBaseUrl: string;
   mailDailyLimit: number;
+  /** The most alerts a day to Gmail addresses (gmail-limit.ts); without it, no such limit. */
+  gmailDailyLimit?: number | null;
   alertsPerSubscriberPerDay: number;
   /** Recorded in each scan, e.g. "penge-passport-ph@0.1.0". */
   client: string;
@@ -965,7 +968,7 @@ export async function deliver(
 ): Promise<DeliveryReport> {
   const { kv, log } = deps;
   const report: DeliveryReport = { sent: 0, dryRun: 0, skipped: 0, failed: 0, dropped: 0, held: 0, remaining: 0, stoppedBy: null };
-  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans), limitNoted: new Set<string>() };
+  const run = { failuresInARow: 0, emailed, checks: deliveryChecks(scans), limitNoted: new Set<string>(), gmailWaiting: new Set<string>() };
   // Checked before every email, so a pause takes effect mid-run.
   const paused = async () => {
     if (!(await kv.get(K.mailPaused))) return false;
@@ -989,10 +992,25 @@ export async function deliver(
   }
   // People whose alerts waited for their pace, and may now be due.
   if (!report.stoppedBy) {
+    // Freshest first: when an allowance (Gmail's, the day's) lets only some through, the newest
+    // findings get it, not whoever Redis lists first. Age is measured as everywhere else (clock.ts),
+    // so a wall-clock step does not reorder them; one whose age cannot be known counts as new, as it
+    // does for the 3 hours. Ties go by id, which is random per person. Each is read once, here.
+    const at = (deps.stampNow ?? (() => stampAt(now(), deps.uptime)))();
+    const waiting: { id: string; raw: string | null; job: AlertJob | null; age: number }[] = [];
     for (const id of await kv.sMembers(K.heldSubscribers)) {
       if (await paused()) break;
       const raw = await kv.get(K.held(id));
       const job = raw === null ? null : openJob(raw, deps.keys.token);
+      // Each date's own stamp, as consider() reads it; an older record has only when it was queued.
+      const dated = job ? Object.values(job.dateAt ?? {}).map((w) => parseStamp(w)).filter((w): w is Stamp => w !== null) : [];
+      const stamps = job && dated.length === 0 ? [job.queuedAt ?? { wall: job.createdAt }] : dated;
+      const ages = stamps.map((w) => elapsed(w, at) ?? 0);
+      waiting.push({ id, raw, job, age: ages.length > 0 ? Math.min(...ages) : 0 });
+    }
+    waiting.sort((x, y) => x.age - y.age || (x.id < y.id ? -1 : 1));
+    for (const { id, raw, job } of report.stoppedBy ? [] : waiting) {
+      if (await paused()) break;
       if (!job || job.subscriberId !== id) {
         if (raw !== null) {
           report.dropped++;
@@ -1004,6 +1022,7 @@ export async function deliver(
       if ((await consider(deps, job, true, now, report, run)) === 'stop') break;
     }
   }
+  if (run.gmailWaiting.size > 0) log.warn('Gmail limit reached for now; alerts to Gmail wait', { waiting: run.gmailWaiting.size, limit: deps.gmailDailyLimit });
   report.held = (await kv.sMembers(K.heldSubscribers)).length;
   report.remaining = await kv.lLen(K.outbox);
   return report;
@@ -1044,7 +1063,7 @@ async function consider(
   fromHeld: boolean,
   now: () => number,
   report: DeliveryReport,
-  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck>; limitNoted: Set<string> },
+  run: { failuresInARow: number; emailed: Set<string>; checks: ReadonlyMap<number, DeliveryCheck>; limitNoted: Set<string>; gmailWaiting: Set<string> },
 ): Promise<'next' | 'stop'> {
   const { kv, log, mailer } = deps;
   const id = job.subscriberId;
@@ -1172,10 +1191,23 @@ async function consider(
     await clearHeld(kv, id);
     return 'next';
   }
+  // Gmail takes only so many a day (gmail-limit.ts): past that, an alert to a Gmail address waits
+  // uncharged, as for a person's pace, and goes at a later check if its dates are still open then.
+  // Everyone else is emailed as usual.
+  const gmailNow = now(); // read once: the day and its allowance must be the same moment's
+  const gmailKey =
+    typeof deps.gmailDailyLimit === 'number' && isGmail(emailOf(sub, deps.keys)) ? K.gmailSentToday(gmailDay(gmailNow)) : null;
+  const ungmail: WriteOp[] = gmailKey ? [{ op: 'decr', key: gmailKey }] : [];
+  if (gmailKey && (await kv.incr(gmailKey, COUNTER_TTL_SECONDS)) > gmailAllowance(deps.gmailDailyLimit!, gmailNow)) {
+    await kv.write([...ungmail, ...holdOps(jobOf(wanted))]);
+    run.gmailWaiting.add(id);
+    return 'next';
+  }
+  run.gmailWaiting.delete(id);
   await noteMailLimit(deps, run.limitNoted, day);
   if ((await kv.incr(K.mailSentToday(day), COUNTER_TTL_SECONDS)) > deps.mailDailyLimit) {
     // It all waits uncharged, closed dates too: the allowance is only spent on a send.
-    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, ...holdOps(jobOf(wanted))]);
+    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, ...ungmail, ...holdOps(jobOf(wanted))]);
     report.stoppedBy = 'daily limit';
     deps.stats?.count('mailLimitHits', 1, day);
     log.warn('daily email limit reached; the outbox waits', { limit: deps.mailDailyLimit });
@@ -1185,7 +1217,7 @@ async function consider(
   // Unsubscribed a moment ago? Then nothing goes out, and nothing is kept.
   // (Checked right before the claim; the two are not one atomic step.)
   if (!(await loadEmail(kv, id))) {
-    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, { op: 'decr', key: K.alertsToday(id, day) }, ...holdOps(null)]);
+    await kv.write([{ op: 'decr', key: K.mailSentToday(day) }, { op: 'decr', key: K.alertsToday(id, day) }, ...ungmail, ...holdOps(null)]);
     report.skipped++;
     return 'next';
   }
@@ -1228,6 +1260,7 @@ async function consider(
       await kv.write([
         { op: 'decr', key: K.mailSentToday(day) },
         { op: 'decr', key: K.alertsToday(id, day) },
+        ...ungmail,
         lastValue === null
           ? { op: 'del', key: K.lastAlert(id) }
           : { op: 'set', key: K.lastAlert(id), value: lastValue },
