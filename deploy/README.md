@@ -404,8 +404,11 @@ tries grows with the message's age (5 minutes to just over an hour), so before t
 message refused before its 30 minutes could still go out at its next try: Gmail took 43 between 30 and 56
 minutes after they were queued on 9 November. If the job fails, that is again how stale mail goes. Queue
 IDs are long ones, which do not repeat while the clock runs forward, so deleting by ID does not hit a newer message. This applies to every
-kind of mail, confirmations included. A later alert says dates are open that may have gone. Postfix keeps
-one connection per receiving domain. Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
+kind of mail, confirmations included. A later alert says dates are open that may have gone. Postfix makes
+one delivery at a time to each receiving domain, and while a connection is cached (2 seconds idle, 5
+minutes in all) it carries the next message to that domain, encrypted ones included
+(`smtp_tls_connection_reuse`, through the `tlsproxy` service; TLS is used whenever the receiver offers
+it). Postfix's delivery log (`/var/log/postfix/mail.log`) and root's mailbox name
 recipients, so each is rotated daily and kept 3 days.
 
 ### When Gmail rate-limits the domain
@@ -428,6 +431,20 @@ trail its check. The cost: while Gmail limits us, a confirmation sent to Gmail o
 expires; one sent shortly before or during the window has a fair chance. Google's advice for 4.7.28: stop sending for
 at least 10 minutes, restart on one connection, raise volume only slowly; never move to another domain or
 IP to get around it. Google Postmaster Tools shows the domain's reputation and spam rate.
+
+In the 24 hours to 9 November 22:57 UTC, Gmail's mail delivered at the first try (2,426 of 2,510) waited in
+line a median 2 minutes (90% within 7) before its try began; other providers' went within seconds. In front of
+the one Gmail delivery at a time, every try opened a new connection (0 of 2,510 reused one): about 2.3 s for
+each accepted message, 1.3 s of it opening the connection, and 3.8 s for each refused one, 47% of tries. Each
+run hands over its alerts at once, about 100 for Gmail, and retries share the same line. From 9 November 2026
+at 23:57 UTC connections are reused, still one delivery at a time (a trial). After a 421, Gmail closes the
+connection, and Postfix checks a cached connection before using it, so reuse helps only between refusals;
+faster bursts may also draw more refusals. Judge it on matching hours and similar volumes, bearing in mind
+that deletion at 28 minutes began the evening before: reuse (`conn_use=` on Gmail lines, read with the TLS
+lines), the `delays=` b and c parts of first-try deliveries (waiting in line, opening a connection), the
+share of tries refused with 4.7.28, and per message handed over, how many were delivered within 28 minutes,
+deleted, or still queued. Reuse alone, or faster deliveries alone, is not success; more mail delivered in
+time without more refusals is. To undo: `postconf -e "smtp_tls_connection_reuse = no" && postfix reload`.
 
 `pp:mail:paused` (below) only stops the app handing new mail to Postfix: Postfix keeps trying what it
 already holds, and the owner's daily report is sent regardless. To stop all outgoing mail, hold it in

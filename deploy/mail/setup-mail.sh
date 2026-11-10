@@ -85,6 +85,7 @@ postconf -e \
   "milter_default_action = tempfail" \
   "smtp_tls_security_level = may" \
   "smtp_tls_loglevel = 1" \
+  "smtp_tls_connection_reuse = yes" \
   "maximal_queue_lifetime = 30m" \
   "bounce_queue_lifetime = 30m" \
   "default_destination_concurrency_limit = 4" \
@@ -108,6 +109,13 @@ postconf -e \
 # so the job deleting by ID does not hit a newer message.
 # One connection per receiving domain is what Gmail asks of a sender it
 # rate-limits (421 4.7.28), and enough for this volume everywhere else.
+# A cached connection carries the next message to the same domain instead of a
+# new one being opened for each: without smtp_tls_connection_reuse, encrypted
+# connections are never reused, and Gmail mail spent about 1.3 s of every 2.3 s
+# opening one (measured 9 November 2026), so a run's burst waited minutes in line.
+# tlsproxy holds the encrypted sessions for reuse. After a refusal (421) Gmail
+# closes the connection, so the next message needs a new one.
+postconf -Me "tlsproxy/unix = tlsproxy unix - - y - 0 tlsproxy"
 echo "$DOMAIN" >/etc/mailname
 
 # Delivery logs name recipients: keep them 3 days, in their own file, not the journal.
