@@ -181,7 +181,7 @@ address, and Node's own `fetch` from any address. What gets through (measured 21
 proxy. The checker and the API both use it when `server.env` says so (`apps/server/src/upstream.ts`):
 
 ```sh
-UPSTREAM_BROWSER=chrome151,firefox144,firefox128,chrome142   # impit's profiles: one, or several (see below)
+UPSTREAM_BROWSER=firefox158   # impit's profiles: one, or several (see below)
 UPSTREAM_PROXY_URL=http://<user>:<password>@<proxy-host>:<port>   # needs UPSTREAM_BROWSER
 ```
 
@@ -228,8 +228,20 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   profiles passed. Why is not known. So `UPSTREAM_BROWSER` takes several profiles, comma-separated: each run
   (and the API at start) takes one at random, and a request Cloudflare challenges moves to the next profile as
   well as a new exit (a refused tunnel, a timeout or a dropped answer changes the exit only). Each move logs
-  `"upstream: new exit"` with the profile now in use. To check which profiles pass, test from one exit (the
-  command below, holding `SESSION`), one request per profile, and list those that pass.
+  `"upstream: new exit"` with the profile now in use: the one moved **to**, so the profile that was challenged
+  is the one before it in the list. To check which profiles pass, test from one exit (the command below,
+  holding `SESSION`), each profile on the requests a run makes, and list only those that pass all of them.
+  On 11 November 2026, from about 12:00Z, half the runs failed: `firefox144` (which had ended 299 of the 337
+  healthy runs since the 9th) and the Chrome profiles were challenged on the session page, on every exit
+  tried, while `firefox128` passed that page but was challenged on its POSTs, as it had been since at least
+  the 9th (27 POST challenges and one healthy run ending on it in those days). Of impit's profiles only
+  `firefox158`, new in impit 0.14.8, passed both the office list and the session page (5 of 5 exits outside
+  Manila), and the offices' dates as well on the 4 exits where those were asked. Production moved to impit
+  0.14.9 and `UPSTREAM_BROWSER=firefox158` on 11 November. Two lessons: a test of the session page alone says nothing
+  about the POSTs (listing `firefox128` alone, which passed that page, failed four runs out of four), and when
+  the current profiles stop passing, look for a newer one in a newer impit. Exits that reached Cloudflare
+  through its Manila site (`cf-ray` ending `-MNL`) were challenged whatever the profile (3 of 3 that day);
+  the request then moves to another exit as usual.
 - **Changing either setting**: the checker reads them at every run; the API only at start, so
   `systemctl restart penge-api.service` after any change. To back out, remove all three (`UPSTREAM_BROWSER`,
   `UPSTREAM_PROXY_URL`, `UPSTREAM_PROXY_ROTATIONS`) and restart the API. To go back to one fixed exit, put a number
@@ -239,24 +251,38 @@ The release ships impit and its linux-x64-gnu binary in `server/node_modules/` (
   ```sh
   sudo -u penge sh -c 'set -a; . /etc/penge/server.env
     # To try another profile, proxy or exit, set it here, after server.env (one line, e.g.):
-    # UPSTREAM_BROWSER=firefox128; SESSION=123456
+    # UPSTREAM_BROWSER=firefox158,firefox144; SESSION=123456
     cd /opt/penge/current/server &&
     node --input-type=module -e "const { Impit } = await import(\"impit\");
       const session = process.env.SESSION || String(1 + Math.floor(Math.random() * 999999));
       const proxyUrl = process.env.UPSTREAM_PROXY_URL.replace(\"{session}\", session);
+      const say = (r) => r.status + \" \" + (r.headers.get(\"cf-mitigated\") ?? \"ok\");
+      const wait = () => new Promise((ok) => setTimeout(ok, 3000));
       for (const browser of process.env.UPSTREAM_BROWSER.split(\",\").map((b) => b.trim())) {
-        const r = await new Impit({ browser, proxyUrl })
-          .fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
-        console.log(browser, r.status, r.headers.get(\"cf-mitigated\") ?? \"not challenged\");
-        await new Promise((ok) => setTimeout(ok, 3000));
+        const impit = new Impit({ browser, proxyUrl, followRedirects: false, timeout: 20000 });
+        const post = await impit.fetch(\"https://www.passport.gov.ph/sites\", { method: \"POST\",
+          headers: { Accept: \"application/json, text/html;q=0.9, */*;q=0.1\", \"X-Requested-With\": \"XMLHttpRequest\",
+            \"Content-Type\": \"application/x-www-form-urlencoded; charset=UTF-8\" },
+          body: new URLSearchParams({ regionId: \"1\", countryId: \"1\" }) });
+        await post.text(); await wait();
+        const page = await impit.fetch(\"https://www.passport.gov.ph/appointment\", { headers: { Accept: \"text/html\" } });
+        await page.text(); await wait();
+        console.log(browser, \"| POST /sites\", say(post), \"| GET /appointment\", say(page), \"|\", page.headers.get(\"cf-ray\"));
       }"'
   ```
 
-  It asks once per listed profile, 3 s apart, all from one exit. `200 not challenged` is good; `403 challenge` is
-  refused (by that exit; without `SESSION`, a random one). Set variables on the commented line inside the quotes:
-  before them, `server.env` would overwrite them.
-  Keep the `Accept` header, as the library sends it: with impit's own Firefox headers alone the same request is
-  challenged (21 October), so a test without it says nothing about the service.
+  It asks twice per listed profile, 3 s apart, all from one exit: the office list (a POST, as every office's
+  dates are) and the session page. `200 ok` on both is good; `403 challenge` on either is refused (by that
+  exit; without `SESSION`, a random one), and a profile refused on either cannot complete a run. Passing both
+  is a screen, not proof: the offices' dates are POSTs with the page's token and cookies, which this does not
+  send, so judge a profile by whole runs in the journal. An exit where every profile is refused says nothing
+  about the profiles: try another. Set variables on the commented line
+  inside the quotes: before them, `server.env` would overwrite them.
+  Keep the `Accept` headers, as the library sends them: with impit's own Firefox headers alone the session page
+  is challenged (21 October), so a test without them says nothing about the service. (The library's own
+  `User-Agent` made no difference in 6 paired tests on 11 November.) To try a profile from a newer impit than
+  the release ships, unpack `impit` and `impit-linux-x64-gnu` of that version from the npm registry into a
+  temporary directory and import it from there.
 - **Traffic** (measured on the wire, 24 October): a run is ~81 KB for the Philippine offices (the session page is
   ~35 KB of it) and ~44 KB for its posts abroad, so ~0.6 GB a month at one run every 10 minutes (~1.2 GB at
   every 5), with visitors' lookups (~0.6 KB each). A move costs a new TLS handshake (~5 KB). Keep the plan above

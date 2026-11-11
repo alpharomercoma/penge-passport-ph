@@ -17,6 +17,8 @@ describe('upstream settings', () => {
 
   it('reads a browser profile, and a proxy only with one', () => {
     expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: 'firefox144' }).upstream).toEqual({ browsers: ['firefox144'], proxyUrl: null, rotations: 0 });
+    // The profile that passed on 11 November 2026, when the others stopped: new in impit 0.14.8.
+    expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: 'firefox158' }).upstream.browsers).toEqual(['firefox158']);
     expect(loadConfig({ ...validEnv, UPSTREAM_BROWSER: ' firefox144 ', UPSTREAM_PROXY_URL: ` ${PROXY} ` }).upstream).toEqual({
       browsers: ['firefox144'],
       proxyUrl: PROXY,

@@ -14,7 +14,8 @@ import { LIMITS } from 'penge-passport-ph';
  * impit's browser profiles. Which ones Cloudflare lets through changes: on 21 Oct 2026 firefox144 passed and the
  * Chrome ones were challenged; on 24 Oct firefox144 was challenged on every exit tried, then firefox133 after
  * production had used it for 90 minutes, while others passed on the same exit. Hence several profiles in
- * UPSTREAM_BROWSER (deploy/README.md, "Reaching passport.gov.ph").
+ * UPSTREAM_BROWSER (deploy/README.md, "Reaching passport.gov.ph"). On 11 Nov firefox144 and the Chrome ones were
+ * challenged on the session page and firefox128 on every POST; only firefox158 (impit 0.14.8 on) passed a whole run.
  */
 export const UPSTREAM_BROWSERS = [
   'chrome',
@@ -35,6 +36,7 @@ export const UPSTREAM_BROWSERS = [
   'firefox133',
   'firefox135',
   'firefox144',
+  'firefox158',
   'okhttp',
   'okhttp3',
   'okhttp4',
